@@ -7,9 +7,10 @@ AI-driven proactive media curation for the Arr stack.
 Vanguarr is a Dockerized FastAPI service that:
 
 - pulls Jellyfin playback history for each user
-- compresses that history into a persistent LLM-generated V3 persona block
+- builds a persistent V3 viewing profile from grouped watch behavior, genre overlap, format bias, and recent momentum
+- optionally asks the LLM for a few adjacent discovery lanes instead of delegating the whole profile
 - pulls trending and recommendation candidates from Overseerr or Jellyseerr
-- fuzzes each payload against the persona plus global exclusions
+- fuzzes each payload against the viewing profile plus global exclusions
 - requests only the media that penetrates user interest above the configured confidence threshold
 
 The system is security-minded by design: user interests are treated as the target surface, candidate metadata is treated as the fuzzer payload, and all provider credentials are sourced from environment variables.
@@ -29,6 +30,8 @@ Vanguarr currently reads watched history from Jellyfin's standard item APIs.
 - cadence: weekly cron
 - source: Jellyfin playback history
 - output: `/app/data/profiles/{username}.txt`
+- logic: deterministic profile synthesis from watch counts, grouped titles, genre weighting, repeat viewing, and recent momentum
+- optional LLM use: suggest a few adjacent discovery lanes
 - goal: keep a compact V3 profile block under 500 words
 
 ### Decision Engine
@@ -201,6 +204,8 @@ services:
 - `PROFILE_ARCHITECT_MAX_OUTPUT_TOKENS`
 - `PROFILE_ARCHITECT_TOP_TITLES_LIMIT`
 - `PROFILE_ARCHITECT_RECENT_MOMENTUM_LIMIT`
+- `PROFILE_LLM_ENRICHMENT_ENABLED`
+- `PROFILE_LLM_ENRICHMENT_MAX_OUTPUT_TOKENS`
 - `LLM_PROVIDER`
 - `LLM_MODEL`
 - `LLM_TIMEOUT_SECONDS`
@@ -240,11 +245,12 @@ python -m pytest
 
 ## Ollama Timeout Notes
 
-Local Ollama models can take longer than hosted APIs to finish profile-compression and scoring calls.
+Local Ollama models can take longer than hosted APIs to finish profile-enrichment and scoring calls.
 
 - `LLM_MODEL` can be either a bare Ollama tag like `glm-4.7-flash:latest` or an explicit LiteLLM form like `ollama/glm-4.7-flash:latest`.
 - If `LLM_TIMEOUT_SECONDS` is left blank, Vanguarr defaults to `180` seconds for Ollama and `45` seconds for hosted providers.
 - If your Ollama model still times out, set `LLM_TIMEOUT_SECONDS=240` or `300` in your `.env` or compose file.
-- Profile Architect uses a smaller dedicated output budget by default via `PROFILE_ARCHITECT_MAX_OUTPUT_TOKENS=384` to keep local summarization runs practical.
-- Profile Architect groups episode watches into show-level counts and only sends capped Top X title and recent-momentum lists by default.
+- Profile Architect now builds the durable profile in code and only uses the model for lightweight adjacent-lane suggestions when enabled.
+- `PROFILE_LLM_ENRICHMENT_MAX_OUTPUT_TOKENS=120` keeps that optional profile-side LLM assist small.
+- Profile Architect groups episode watches into show-level counts and weights both durable history and recent momentum by default.
 - Larger local models may also benefit from lowering `PROFILE_HISTORY_LIMIT` or switching to a faster quantization.

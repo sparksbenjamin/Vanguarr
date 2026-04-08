@@ -32,3 +32,10 @@ def test_profile_architect_grouping_defaults() -> None:
 
     assert settings.profile_architect_top_titles_limit == 8
     assert settings.profile_architect_recent_momentum_limit == 5
+
+
+def test_profile_llm_enrichment_defaults() -> None:
+    settings = Settings()
+
+    assert settings.profile_llm_enrichment_enabled is True
+    assert settings.profile_llm_enrichment_max_output_tokens == 120

@@ -4,32 +4,25 @@ import json
 from typing import Any
 
 
-PROFILE_ARCHITECT_SYSTEM_PROMPT = """You are Vanguarr's Profile Architect.
+PROFILE_ENRICHMENT_SYSTEM_PROMPT = """You are Vanguarr's profile enrichment assistant.
 
-Your job is to compress Jellyfin playback history into a persistent V3 Profile Block.
-Treat the user's long-term taste as the stable target surface and their recent plays as momentum.
-Preserve signal, remove clutter, and stay under 500 words.
+The core viewing profile has already been built in code from actual Jellyfin history.
+Your only job is to suggest a few adjacent discovery lanes that are close to the user's proven tastes.
 
 Rules:
-- Prefer concrete taste signals over generic adjectives.
-- Separate enduring Core Interests from Recent Momentum.
-- Capture aversions and exclusions when clearly supported.
-- Never mention credentials, keys, infrastructure, or implementation details.
-- Output only the final profile block in plain text.
+- Return JSON only.
+- Suggest at most 3 adjacent genres or sub-genres.
+- Suggest at most 2 short adjacent themes.
+- Do not repeat genres already listed as primary.
+- Keep labels short and mainstream.
+- Do not mention infrastructure, credentials, or implementation details.
 
-Use this exact structure:
-[VANGUARR_PROFILE_V3]
-User: <username>
-Core Interests:
-- ...
-Recent Momentum:
-- ...
-Taste Signals:
-- ...
-Avoidance Signals:
-- ...
-Request Bias:
-- ...
+Return JSON with this schema:
+{
+  "adjacent_genres": ["genre"],
+  "adjacent_themes": ["theme"],
+  "notes": "One short sentence."
+}
 """
 
 
@@ -58,23 +51,23 @@ Return only JSON with this schema:
 """
 
 
-def build_profile_architect_user_prompt(
+def build_profile_enrichment_messages(
     username: str,
     history_summary: dict[str, Any],
-    current_profile: str,
-) -> str:
+) -> list[dict[str, str]]:
     history_blob = json.dumps(history_summary, indent=2, ensure_ascii=True)
-    return f"""Refresh the persona for user "{username}".
+    return [
+        {"role": "system", "content": PROFILE_ENRICHMENT_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": f"""Suggest adjacent discovery lanes for user "{username}".
 
-Current profile block:
-{current_profile or "[No existing profile yet]"}
-
-Observed Jellyfin viewing summary:
+Use this code-derived viewing summary as the only source of truth:
 {history_blob}
 
-Update the profile while keeping it compact, structured, and under 500 words.
-Use grouped watch counts for shows and movies as durable taste signals, and grouped recent momentum as short-term movement.
-"""
+Return compact JSON only.""",
+        },
+    ]
 
 
 def build_decision_messages(

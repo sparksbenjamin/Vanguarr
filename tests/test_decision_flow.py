@@ -1,4 +1,4 @@
-from app.core.prompts import build_decision_messages, build_profile_architect_user_prompt
+from app.core.prompts import build_decision_messages, build_profile_enrichment_messages
 from app.core.services import VanguarrService
 
 
@@ -112,18 +112,99 @@ def test_profile_history_context_compacts_repeated_titles() -> None:
     assert "recent_plays" not in summary
 
 
-def test_profile_architect_prompt_uses_viewing_summary() -> None:
-    prompt = build_profile_architect_user_prompt(
+def test_profile_enrichment_prompt_uses_viewing_summary() -> None:
+    messages = build_profile_enrichment_messages(
         "alice",
         {
             "history_count": 12,
+            "primary_genres": ["Sci-Fi"],
+            "recent_genres": ["Mystery"],
             "top_titles": [{"title": "Show Alpha", "play_count": 4}],
-            "top_genres": ["Sci-Fi"],
-            "recent_momentum": [{"title": "Show Alpha", "play_count": 2}],
+            "discovery_lanes": ["Thriller"],
         },
-        "[VANGUARR_PROFILE_V3]\nUser: alice",
     )
 
-    assert "Observed Jellyfin viewing summary" in prompt
-    assert "Show Alpha" in prompt
-    assert "Use grouped watch counts for shows and movies as durable taste signals" in prompt
+    assert "adjacent_genres" in messages[0]["content"]
+    assert "Show Alpha" in messages[1]["content"]
+    assert "code-derived viewing summary" in messages[1]["content"]
+
+
+def test_render_profile_block_uses_code_derived_signals() -> None:
+    history = [
+        {
+            "Name": "Episode 1",
+            "SeriesName": "Show Alpha",
+            "Type": "Episode",
+            "Genres": ["Sci-Fi", "Drama"],
+            "CommunityRating": 8.3,
+            "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+        },
+        {
+            "Name": "Episode 2",
+            "SeriesName": "Show Alpha",
+            "Type": "Episode",
+            "Genres": ["Sci-Fi", "Thriller"],
+            "CommunityRating": 8.3,
+            "UserData": {"LastPlayedDate": "2026-04-07T10:00:00Z"},
+        },
+        {
+            "Name": "Movie Beta",
+            "Type": "Movie",
+            "Genres": ["Drama", "Mystery"],
+            "CommunityRating": 7.8,
+            "UserData": {"LastPlayedDate": "2026-04-06T10:00:00Z"},
+        },
+    ]
+
+    summary = VanguarrService._build_profile_history_context(history, top_limit=5, recent_limit=3, recent_window=3)
+    block = VanguarrService._render_profile_block(
+        "alice",
+        summary,
+        enrichment={"adjacent_genres": ["Adventure"], "adjacent_themes": ["found family"]},
+    )
+
+    assert "Primary genres:" in block
+    assert "Format bias:" in block
+    assert "Anchor titles:" in block
+    assert "Add-on lanes worth testing:" in block
+    assert "Adventure" in block
+    assert "found family" in block
+
+
+def test_viewing_history_context_reuses_profile_summary_signals() -> None:
+    history = [
+        {
+            "Name": "Episode 1",
+            "SeriesName": "Show Alpha",
+            "Type": "Episode",
+            "Genres": ["Sci-Fi", "Drama"],
+            "CommunityRating": 8.3,
+            "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+        },
+        {
+            "Name": "Episode 2",
+            "SeriesName": "Show Alpha",
+            "Type": "Episode",
+            "Genres": ["Sci-Fi", "Thriller"],
+            "CommunityRating": 8.3,
+            "UserData": {"LastPlayedDate": "2026-04-07T10:00:00Z"},
+        },
+        {
+            "Name": "Movie Beta",
+            "Type": "Movie",
+            "Genres": ["Drama", "Mystery"],
+            "CommunityRating": 7.8,
+            "UserData": {"LastPlayedDate": "2026-04-06T10:00:00Z"},
+        },
+    ]
+
+    summary = VanguarrService._build_profile_history_context(history, top_limit=5, recent_limit=3, recent_window=3)
+    viewing_history = VanguarrService._build_viewing_history_context(
+        history,
+        recommendation_seeds=[{"title": "Show Alpha", "media_type": "tv", "media_id": 101}],
+        profile_summary=summary,
+    )
+
+    assert "Sci-Fi" in viewing_history["primary_genres"]
+    assert viewing_history["format_preference"]["preferred"] == "tv"
+    assert viewing_history["recent_momentum"][0]["title"] == "Show Alpha"

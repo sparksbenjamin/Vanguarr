@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     profile_architect_max_output_tokens: int = 384
     profile_architect_top_titles_limit: int = 8
     profile_architect_recent_momentum_limit: int = 5
+    profile_llm_enrichment_enabled: bool = True
+    profile_llm_enrichment_max_output_tokens: int = 120
     candidate_limit: int = 25
     recommendation_seed_limit: int = 3
     decision_page_size: int = 100

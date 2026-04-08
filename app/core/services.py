@@ -17,9 +17,8 @@ from app.api.llm import LLMClient
 from app.api.seer import SeerClient
 from app.core.models import DecisionLog, RequestedMedia, TaskRun
 from app.core.prompts import (
-    PROFILE_ARCHITECT_SYSTEM_PROMPT,
     build_decision_messages,
-    build_profile_architect_user_prompt,
+    build_profile_enrichment_messages,
 )
 from app.core.settings import Settings
 
@@ -62,9 +61,9 @@ Core Interests:
 Recent Momentum:
 - No recent signals captured yet.
 Taste Signals:
-- Awaiting Profile Architect refresh.
+- Code-driven profile will strengthen as more viewing data arrives.
 Avoidance Signals:
-- Respect global exclusions until stronger user-specific signals exist.
+- No reliable user-specific avoidance signal yet.
 Request Bias:
 - Stay conservative until more evidence is available.
 """
@@ -150,16 +149,14 @@ class VanguarrService:
                         top_limit=self.settings.profile_architect_top_titles_limit,
                         recent_limit=self.settings.profile_architect_recent_momentum_limit,
                     )
-                    prompt = build_profile_architect_user_prompt(
+                    enrichment = await self._suggest_profile_enrichment(
                         current_username,
                         compact_history,
-                        self.profile_store.read(current_username),
                     )
-                    new_profile = await self.llm.generate_text(
-                        system_prompt=PROFILE_ARCHITECT_SYSTEM_PROMPT,
-                        user_prompt=prompt,
-                        max_tokens=self.settings.profile_architect_max_output_tokens,
-                        temperature=0.1,
+                    new_profile = self._render_profile_block(
+                        current_username,
+                        compact_history,
+                        enrichment=enrichment,
                     )
                     bounded_profile = self._limit_words(new_profile, max_words=500)
                     self.profile_store.write(current_username, bounded_profile)
@@ -215,8 +212,15 @@ class VanguarrService:
             for user in users:
                 current_username = user.get("Name", "unknown")
                 try:
-                    profile_block = self.profile_store.read(current_username)
                     history = await self.jellyfin.get_playback_history(user["Id"], self.settings.profile_history_limit)
+                    profile_summary = self._build_profile_history_context(
+                        history,
+                        top_limit=self.settings.profile_architect_top_titles_limit,
+                        recent_limit=self.settings.profile_architect_recent_momentum_limit,
+                    )
+                    profile_block = self.profile_store.read(current_username)
+                    if profile_block.strip() == self.profile_store.default_block(current_username).strip():
+                        profile_block = self._render_profile_block(current_username, profile_summary)
                     recommendation_seeds = self._select_recommendation_seeds(
                         history,
                         limit=self.settings.recommendation_seed_limit,
@@ -224,6 +228,7 @@ class VanguarrService:
                     viewing_history = self._build_viewing_history_context(
                         history,
                         recommendation_seeds=recommendation_seeds,
+                        profile_summary=profile_summary,
                     )
                     candidates = await self.seer.discover_candidates(
                         recommendation_seeds,
@@ -397,11 +402,15 @@ class VanguarrService:
     ) -> dict[str, Any]:
         grouped: dict[tuple[str, str], dict[str, Any]] = {}
         genre_counts: Counter[str] = Counter()
+        recent_genre_counts: Counter[str] = Counter()
+        media_type_counts: Counter[str] = Counter()
+        genre_pairs: Counter[tuple[str, str]] = Counter()
         recent_grouped: dict[tuple[str, str], dict[str, Any]] = {}
 
         for item in history:
             media_type = cls._map_history_media_type(item.get("Type")) or "other"
             title = cls._seed_title(item, media_type)
+            genres = cls._normalize_genres(item.get("Genres", []), limit=6)
             key = (title, media_type)
             grouped_entry = grouped.setdefault(
                 key,
@@ -417,7 +426,7 @@ class VanguarrService:
             )
 
             grouped_entry["play_count"] += 1
-            grouped_entry["genres"] = cls._merge_unique_strings(grouped_entry["genres"], item.get("Genres", [])[:4])
+            grouped_entry["genres"] = cls._merge_unique_strings(grouped_entry["genres"], genres[:4])
 
             if grouped_entry.get("community_rating") is None and item.get("CommunityRating") is not None:
                 grouped_entry["community_rating"] = item.get("CommunityRating")
@@ -428,13 +437,21 @@ class VanguarrService:
                 grouped_entry["last_played"] = last_played
                 grouped_entry["_last_played_score"] = last_played_score
 
-            for genre in item.get("Genres", []):
-                if genre:
-                    genre_counts[str(genre)] += 1
+            if media_type in {"movie", "tv"}:
+                media_type_counts[media_type] += 1
+
+            for genre in genres:
+                genre_counts[genre] += 1
+
+            for source_genre in genres:
+                for target_genre in genres:
+                    if source_genre != target_genre:
+                        genre_pairs[(source_genre, target_genre)] += 1
 
         for item in history[:recent_window]:
             media_type = cls._map_history_media_type(item.get("Type")) or "other"
             title = cls._seed_title(item, media_type)
+            genres = cls._normalize_genres(item.get("Genres", []), limit=5)
             key = (title, media_type)
             recent_entry = recent_grouped.setdefault(
                 key,
@@ -449,7 +466,7 @@ class VanguarrService:
                 },
             )
             recent_entry["play_count"] += 1
-            recent_entry["genres"] = cls._merge_unique_strings(recent_entry["genres"], item.get("Genres", [])[:3])
+            recent_entry["genres"] = cls._merge_unique_strings(recent_entry["genres"], genres[:3])
 
             if recent_entry.get("community_rating") is None and item.get("CommunityRating") is not None:
                 recent_entry["community_rating"] = item.get("CommunityRating")
@@ -459,42 +476,44 @@ class VanguarrService:
             if last_played_score >= recent_entry["_last_played_score"]:
                 recent_entry["last_played"] = last_played
                 recent_entry["_last_played_score"] = last_played_score
+            for genre in genres:
+                recent_genre_counts[genre] += 1
 
-        top_titles = list(grouped.values())
-        top_titles.sort(
-            key=lambda item: (
-                -int(item.get("play_count") or 0),
-                -float(item.get("_last_played_score") or 0.0),
-                str(item.get("title") or "").lower(),
-            )
-        )
+        top_titles = cls._sort_profile_entries(list(grouped.values()))
+        recent_momentum = cls._sort_profile_entries(list(recent_grouped.values()))
 
-        recent_momentum = list(recent_grouped.values())
-        recent_momentum.sort(
-            key=lambda item: (
-                -int(item.get("play_count") or 0),
-                -float(item.get("_last_played_score") or 0.0),
-                str(item.get("title") or "").lower(),
-            )
-        )
+        normalized_top_titles = [cls._clean_profile_entry(item) for item in top_titles[:top_limit]]
+        normalized_recent_momentum = [cls._clean_profile_entry(item) for item in recent_momentum[:recent_limit]]
+        repeat_titles = [cls._clean_profile_entry(item) for item in top_titles if int(item.get("play_count") or 0) > 1][:5]
+        ranked_genres = cls._rank_genres(genre_counts, recent_genre_counts)
+        primary_genres = [genre for genre, _score in ranked_genres[:4]]
+        secondary_genres = [genre for genre, _score in ranked_genres[4:8]]
+        recent_genres = [genre for genre, _count in recent_genre_counts.most_common(4)]
 
-        normalized_top_titles: list[dict[str, Any]] = []
-        for item in top_titles[:top_limit]:
-            cleaned = dict(item)
-            cleaned.pop("_last_played_score", None)
-            normalized_top_titles.append(cleaned)
-
-        normalized_recent_momentum: list[dict[str, Any]] = []
-        for item in recent_momentum[:recent_limit]:
-            cleaned = dict(item)
-            cleaned.pop("_last_played_score", None)
-            normalized_recent_momentum.append(cleaned)
+        total_genre_events = sum(genre_counts.values())
+        focus_share = 0.0
+        if total_genre_events and primary_genres:
+            focus_share = sum(genre_counts[genre] for genre in primary_genres[:3]) / total_genre_events
 
         return {
             "history_count": len(history),
+            "unique_titles": len(grouped),
             "top_titles": normalized_top_titles,
             "top_genres": [genre for genre, _count in genre_counts.most_common(8)],
+            "primary_genres": primary_genres,
+            "secondary_genres": secondary_genres,
+            "recent_genres": recent_genres,
             "recent_momentum": normalized_recent_momentum,
+            "repeat_titles": repeat_titles,
+            "format_preference": cls._determine_format_preference(media_type_counts),
+            "average_top_rating": cls._average_rating(normalized_top_titles),
+            "genre_focus_share": round(focus_share, 3),
+            "discovery_lanes": cls._build_discovery_lanes(
+                primary_genres=primary_genres,
+                secondary_genres=secondary_genres,
+                recent_genres=recent_genres,
+                genre_pairs=genre_pairs,
+            ),
         }
 
     @classmethod
@@ -569,15 +588,11 @@ class VanguarrService:
         history: list[dict[str, Any]],
         *,
         recommendation_seeds: list[dict[str, Any]],
+        profile_summary: dict[str, Any] | None = None,
         recent_limit: int = 12,
     ) -> dict[str, Any]:
-        genre_counts: Counter[str] = Counter()
         recent_plays: list[dict[str, Any]] = []
-
-        for item in history:
-            for genre in item.get("Genres", []):
-                if genre:
-                    genre_counts[str(genre)] += 1
+        summary = profile_summary or cls._build_profile_history_context(history)
 
         for item in history[:recent_limit]:
             recent_plays.append(
@@ -591,11 +606,373 @@ class VanguarrService:
             )
 
         return {
-            "history_count": len(history),
+            "history_count": summary.get("history_count", len(history)),
             "top_content": recommendation_seeds,
-            "top_genres": [genre for genre, _count in genre_counts.most_common(8)],
+            "top_titles": summary.get("top_titles", [])[:5],
+            "top_genres": summary.get("top_genres", []),
+            "primary_genres": summary.get("primary_genres", []),
+            "repeat_titles": summary.get("repeat_titles", [])[:3],
+            "recent_momentum": summary.get("recent_momentum", [])[:5],
+            "format_preference": summary.get("format_preference", {}),
+            "discovery_lanes": summary.get("discovery_lanes", []),
             "recent_plays": recent_plays,
         }
+
+    async def _suggest_profile_enrichment(
+        self,
+        username: str,
+        history_summary: dict[str, Any],
+    ) -> dict[str, list[str]]:
+        if not self.settings.profile_llm_enrichment_enabled:
+            return {}
+        if int(history_summary.get("history_count") or 0) == 0:
+            return {}
+
+        try:
+            payload = await self.llm.generate_json(
+                messages=build_profile_enrichment_messages(username, history_summary),
+                max_tokens=min(
+                    self.settings.profile_llm_enrichment_max_output_tokens,
+                    self.settings.profile_architect_max_output_tokens,
+                ),
+                temperature=0.1,
+            )
+        except Exception as exc:
+            logger.warning("Profile enrichment skipped for user=%s reason=%s", username, exc)
+            return {}
+
+        primary_genres = {
+            genre.lower()
+            for genre in history_summary.get("primary_genres", [])
+            if isinstance(genre, str) and genre.strip()
+        }
+        adjacent_genres: list[str] = []
+        for raw in payload.get("adjacent_genres", []):
+            value = str(raw).strip()
+            if value and value.lower() not in primary_genres:
+                adjacent_genres.append(value)
+
+        adjacent_themes = [str(raw).strip() for raw in payload.get("adjacent_themes", []) if str(raw).strip()]
+        return {
+            "adjacent_genres": self._merge_unique_strings([], adjacent_genres)[:3],
+            "adjacent_themes": self._merge_unique_strings([], adjacent_themes)[:2],
+        }
+
+    @classmethod
+    def _render_profile_block(
+        cls,
+        username: str,
+        history_summary: dict[str, Any],
+        *,
+        enrichment: dict[str, list[str]] | None = None,
+    ) -> str:
+        if int(history_summary.get("history_count") or 0) == 0:
+            return ProfileStore.default_block(username)
+
+        adjacent_genres = cls._merge_unique_strings(
+            list(history_summary.get("discovery_lanes", [])),
+            (enrichment or {}).get("adjacent_genres", []),
+        )[:3]
+        adjacent_themes = cls._merge_unique_strings([], (enrichment or {}).get("adjacent_themes", []))[:2]
+
+        lines = [
+            "[VANGUARR_PROFILE_V3]",
+            f"User: {username}",
+            "Core Interests:",
+        ]
+        lines.extend(f"- {line}" for line in cls._build_core_interest_lines(history_summary))
+        lines.append("Recent Momentum:")
+        lines.extend(f"- {line}" for line in cls._build_recent_momentum_lines(history_summary))
+        lines.append("Taste Signals:")
+        lines.extend(
+            f"- {line}"
+            for line in cls._build_taste_signal_lines(
+                history_summary,
+                adjacent_genres=adjacent_genres,
+                adjacent_themes=adjacent_themes,
+            )
+        )
+        lines.append("Avoidance Signals:")
+        lines.extend(f"- {line}" for line in cls._build_avoidance_lines(history_summary))
+        lines.append("Request Bias:")
+        lines.extend(
+            f"- {line}"
+            for line in cls._build_request_bias_lines(
+                history_summary,
+                adjacent_genres=adjacent_genres,
+                adjacent_themes=adjacent_themes,
+            )
+        )
+        return "\n".join(lines)
+
+    @classmethod
+    def _build_core_interest_lines(cls, history_summary: dict[str, Any]) -> list[str]:
+        primary_genres = history_summary.get("primary_genres") or history_summary.get("top_genres", [])[:4]
+        format_preference = history_summary.get("format_preference", {})
+        top_titles = history_summary.get("top_titles", [])
+        history_count = int(history_summary.get("history_count") or 0)
+        unique_titles = int(history_summary.get("unique_titles") or 0)
+        preferred = str(format_preference.get("preferred") or "balanced")
+        movie_plays = int(format_preference.get("movie_plays") or 0)
+        tv_plays = int(format_preference.get("tv_plays") or 0)
+
+        lines: list[str] = []
+        if primary_genres:
+            lines.append(f"Primary genres: {cls._human_join(primary_genres[:4])}.")
+
+        if preferred == "tv":
+            lines.append(
+                f"Format bias: series-forward, built from {history_count} plays across {unique_titles} grouped titles "
+                f"({tv_plays} TV vs {movie_plays} movie plays)."
+            )
+        elif preferred == "movie":
+            lines.append(
+                f"Format bias: movie-forward, built from {history_count} plays across {unique_titles} grouped titles "
+                f"({movie_plays} movie vs {tv_plays} TV plays)."
+            )
+        else:
+            lines.append(
+                f"Format bias: balanced across movies and series, built from {history_count} plays across "
+                f"{unique_titles} grouped titles."
+            )
+
+        if top_titles:
+            lines.append(f"Anchor titles: {cls._format_title_entries(top_titles[:3])}.")
+
+        return lines
+
+    @classmethod
+    def _build_recent_momentum_lines(cls, history_summary: dict[str, Any]) -> list[str]:
+        recent_momentum = history_summary.get("recent_momentum", [])
+        recent_genres = history_summary.get("recent_genres", [])
+        lines: list[str] = []
+
+        if recent_momentum:
+            lines.append(f"Active titles now: {cls._format_title_entries(recent_momentum[:3])}.")
+        else:
+            lines.append("No strong short-term title surge has formed yet.")
+
+        if recent_genres:
+            lines.append(f"Current genre push: {cls._human_join(recent_genres[:3])}.")
+        else:
+            lines.append("Recent activity is not concentrated enough to define a new lane yet.")
+
+        return lines
+
+    @classmethod
+    def _build_taste_signal_lines(
+        cls,
+        history_summary: dict[str, Any],
+        *,
+        adjacent_genres: list[str],
+        adjacent_themes: list[str],
+    ) -> list[str]:
+        lines = [cls._describe_engagement_style(history_summary)]
+
+        average_top_rating = history_summary.get("average_top_rating")
+        if average_top_rating is not None:
+            lines.append(
+                f"Top watched titles average community rating {average_top_rating}, so stronger-reviewed catalog is a positive signal."
+            )
+
+        focus_share = float(history_summary.get("genre_focus_share") or 0.0)
+        if focus_share >= 0.72:
+            lines.append("Genre profile is focused, so strong overlap on a few dependable lanes matters more than broad popularity.")
+        elif focus_share >= 0.5:
+            lines.append("Genre profile is balanced between a stable core and a smaller amount of exploration.")
+        else:
+            lines.append("Genre profile is broad enough to support adjacent discovery when tone and format still line up.")
+
+        if adjacent_genres:
+            lane_line = f"Add-on lanes worth testing: {cls._human_join(adjacent_genres)}."
+            if adjacent_themes:
+                lane_line += f" Theme hooks: {cls._human_join(adjacent_themes)}."
+            lines.append(lane_line)
+        elif adjacent_themes:
+            lines.append(f"Adjacent theme hooks worth testing: {cls._human_join(adjacent_themes)}.")
+
+        return lines
+
+    @classmethod
+    def _build_avoidance_lines(cls, history_summary: dict[str, Any]) -> list[str]:
+        format_preference = history_summary.get("format_preference", {})
+        preferred = str(format_preference.get("preferred") or "balanced")
+
+        if preferred == "tv":
+            return [
+                "Lower evidence for standalone movies than for serialized TV, so films need stronger genre or franchise overlap.",
+                "Treat non-engagement as unknown, not dislike, unless stronger evidence shows up in the watch history.",
+            ]
+        if preferred == "movie":
+            return [
+                "Lower evidence for long-running series than for movies, so TV picks need stronger momentum or genre overlap.",
+                "Treat non-engagement as unknown, not dislike, unless stronger evidence shows up in the watch history.",
+            ]
+        return [
+            "No strong user-specific format aversion is visible from watch history alone.",
+            "Treat non-engagement as unknown, not dislike, unless stronger evidence shows up in the watch history.",
+        ]
+
+    @classmethod
+    def _build_request_bias_lines(
+        cls,
+        history_summary: dict[str, Any],
+        *,
+        adjacent_genres: list[str],
+        adjacent_themes: list[str],
+    ) -> list[str]:
+        primary_genres = history_summary.get("primary_genres") or history_summary.get("top_genres", [])[:3]
+        format_preference = history_summary.get("format_preference", {})
+        preferred = str(format_preference.get("preferred") or "balanced")
+        lines: list[str] = []
+
+        if primary_genres:
+            lines.append(
+                f"Favor candidates that match {cls._human_join(primary_genres[:3])} and connect to anchor titles or repeat-watch neighborhoods."
+            )
+
+        if preferred == "tv":
+            lines.append("Give extra weight to serialized TV that matches the core genres and recent momentum.")
+        elif preferred == "movie":
+            lines.append("Give extra weight to movies that line up with the core genres and anchor-title neighborhoods.")
+        else:
+            lines.append("Use genre overlap first, then let recent momentum break ties between movies and series.")
+
+        if adjacent_genres or adjacent_themes:
+            extension = cls._human_join(adjacent_genres) if adjacent_genres else cls._human_join(adjacent_themes)
+            lines.append(f"When the core match is already strong, allow controlled exploration into {extension}.")
+
+        return lines
+
+    @classmethod
+    def _describe_engagement_style(cls, history_summary: dict[str, Any]) -> str:
+        repeat_titles = history_summary.get("repeat_titles", [])
+        top_titles = history_summary.get("top_titles", [])
+        history_count = int(history_summary.get("history_count") or 0)
+        unique_titles = int(history_summary.get("unique_titles") or 0)
+
+        if repeat_titles:
+            top_repeat_count = int(repeat_titles[0].get("play_count") or 0)
+            if history_count and top_repeat_count >= max(2, history_count // 4):
+                return f"Loyalty-heavy; returns to favorites like {cls._format_title_entries(repeat_titles[:2])}."
+            return f"Repeat-friendly; revisits titles like {cls._format_title_entries(repeat_titles[:3])}."
+
+        if unique_titles >= max(6, int(history_count * 0.7)):
+            return f"Exploratory; sampled {unique_titles} distinct titles across {history_count} recent plays."
+
+        if top_titles:
+            return f"Balanced; keeps a stable core anchored by {cls._format_title_entries(top_titles[:2])} while still exploring."
+
+        return "Balanced; keeps a stable core while still exploring."
+
+    @staticmethod
+    def _sort_profile_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        entries.sort(
+            key=lambda item: (
+                -int(item.get("play_count") or 0),
+                -float(item.get("_last_played_score") or 0.0),
+                str(item.get("title") or "").lower(),
+            )
+        )
+        return entries
+
+    @staticmethod
+    def _clean_profile_entry(item: dict[str, Any]) -> dict[str, Any]:
+        cleaned = dict(item)
+        cleaned.pop("_last_played_score", None)
+        return cleaned
+
+    @staticmethod
+    def _rank_genres(
+        genre_counts: Counter[str],
+        recent_genre_counts: Counter[str],
+    ) -> list[tuple[str, float]]:
+        ranked: list[tuple[str, float, int]] = []
+        for genre in set(genre_counts) | set(recent_genre_counts):
+            score = float(genre_counts.get(genre, 0)) + (float(recent_genre_counts.get(genre, 0)) * 0.75)
+            ranked.append((genre, score, int(genre_counts.get(genre, 0))))
+
+        ranked.sort(key=lambda item: (-item[1], -item[2], item[0].lower()))
+        return [(genre, score) for genre, score, _count in ranked]
+
+    @classmethod
+    def _build_discovery_lanes(
+        cls,
+        *,
+        primary_genres: list[str],
+        secondary_genres: list[str],
+        recent_genres: list[str],
+        genre_pairs: Counter[tuple[str, str]],
+        limit: int = 3,
+    ) -> list[str]:
+        primary_set = {genre.lower() for genre in primary_genres}
+        scores: Counter[str] = Counter()
+
+        for primary_genre in primary_genres[:3]:
+            for (source_genre, target_genre), count in genre_pairs.items():
+                if source_genre == primary_genre and target_genre.lower() not in primary_set:
+                    scores[target_genre] += count
+
+        for genre in recent_genres:
+            if genre.lower() not in primary_set:
+                scores[genre] += 2
+
+        for genre in secondary_genres:
+            if genre.lower() not in primary_set:
+                scores[genre] += 1
+
+        ranked = [genre for genre, _count in scores.most_common()]
+        return cls._merge_unique_strings([], ranked)[:limit]
+
+    @staticmethod
+    def _determine_format_preference(media_type_counts: Counter[str]) -> dict[str, Any]:
+        movie_plays = int(media_type_counts.get("movie", 0))
+        tv_plays = int(media_type_counts.get("tv", 0))
+        total_plays = movie_plays + tv_plays
+
+        if tv_plays > movie_plays and tv_plays >= max(2, int(total_plays * 0.6)):
+            preferred = "tv"
+        elif movie_plays > tv_plays and movie_plays >= max(2, int(total_plays * 0.6)):
+            preferred = "movie"
+        else:
+            preferred = "balanced"
+
+        return {
+            "preferred": preferred,
+            "movie_plays": movie_plays,
+            "tv_plays": tv_plays,
+        }
+
+    @staticmethod
+    def _average_rating(entries: list[dict[str, Any]]) -> float | None:
+        ratings = [float(item["community_rating"]) for item in entries if item.get("community_rating") is not None]
+        if not ratings:
+            return None
+        return round(sum(ratings) / len(ratings), 1)
+
+    @classmethod
+    def _format_title_entries(cls, entries: list[dict[str, Any]]) -> str:
+        parts: list[str] = []
+        for entry in entries:
+            title = str(entry.get("title") or entry.get("name") or "Unknown")
+            play_count = int(entry.get("play_count") or 0)
+            if play_count > 0:
+                suffix = "play" if play_count == 1 else "plays"
+                parts.append(f"{title} ({play_count} {suffix})")
+            else:
+                parts.append(title)
+        return cls._human_join(parts)
+
+    @staticmethod
+    def _human_join(values: list[str]) -> str:
+        filtered = [value.strip() for value in values if value and value.strip()]
+        if not filtered:
+            return ""
+        if len(filtered) == 1:
+            return filtered[0]
+        if len(filtered) == 2:
+            return f"{filtered[0]} and {filtered[1]}"
+        return f"{', '.join(filtered[:-1])}, and {filtered[-1]}"
 
     @staticmethod
     def _limit_words(text: str, *, max_words: int) -> str:
@@ -646,6 +1023,25 @@ class VanguarrService:
         if media_type == "tv":
             return str(item.get("SeriesName") or item.get("Name") or "Unknown TV")
         return str(item.get("Name") or "Unknown Movie")
+
+    @staticmethod
+    def _normalize_genres(raw_genres: list[Any], *, limit: int | None = None) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+
+        for raw in raw_genres:
+            value = str(raw).strip()
+            if not value:
+                continue
+            lowered = value.lower()
+            if lowered in seen:
+                continue
+            normalized.append(value)
+            seen.add(lowered)
+            if limit is not None and len(normalized) >= limit:
+                break
+
+        return normalized
 
     @staticmethod
     def _merge_unique_strings(current: list[str], extra: list[Any]) -> list[str]:
