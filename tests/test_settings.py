@@ -25,3 +25,10 @@ def test_profile_architect_max_tokens_default() -> None:
     settings = Settings()
 
     assert settings.profile_architect_max_output_tokens == 384
+
+
+def test_profile_architect_grouping_defaults() -> None:
+    settings = Settings()
+
+    assert settings.profile_architect_top_titles_limit == 8
+    assert settings.profile_architect_recent_momentum_limit == 5

@@ -145,7 +145,11 @@ class VanguarrService:
                 current_username = user.get("Name", "unknown")
                 try:
                     history = await self.jellyfin.get_playback_history(user["Id"], self.settings.profile_history_limit)
-                    compact_history = self._build_profile_history_context(history)
+                    compact_history = self._build_profile_history_context(
+                        history,
+                        top_limit=self.settings.profile_architect_top_titles_limit,
+                        recent_limit=self.settings.profile_architect_recent_momentum_limit,
+                    )
                     prompt = build_profile_architect_user_prompt(
                         current_username,
                         compact_history,
@@ -387,22 +391,23 @@ class VanguarrService:
         cls,
         history: list[dict[str, Any]],
         *,
-        top_limit: int = 10,
-        recent_limit: int = 8,
+        top_limit: int = 8,
+        recent_limit: int = 5,
+        recent_window: int = 12,
     ) -> dict[str, Any]:
         grouped: dict[tuple[str, str], dict[str, Any]] = {}
         genre_counts: Counter[str] = Counter()
-        recent_plays: list[dict[str, Any]] = []
+        recent_grouped: dict[tuple[str, str], dict[str, Any]] = {}
 
         for item in history:
-            title = cls._seed_title(item, cls._map_history_media_type(item.get("Type")) or "movie")
-            item_type = item.get("Type") or "Unknown"
-            key = (title, item_type)
+            media_type = cls._map_history_media_type(item.get("Type")) or "other"
+            title = cls._seed_title(item, media_type)
+            key = (title, media_type)
             grouped_entry = grouped.setdefault(
                 key,
                 {
                     "title": title,
-                    "type": item_type,
+                    "media_type": media_type,
                     "play_count": 0,
                     "genres": [],
                     "community_rating": item.get("CommunityRating"),
@@ -427,19 +432,45 @@ class VanguarrService:
                 if genre:
                     genre_counts[str(genre)] += 1
 
-        for item in history[:recent_limit]:
-            recent_plays.append(
+        for item in history[:recent_window]:
+            media_type = cls._map_history_media_type(item.get("Type")) or "other"
+            title = cls._seed_title(item, media_type)
+            key = (title, media_type)
+            recent_entry = recent_grouped.setdefault(
+                key,
                 {
-                    "title": cls._seed_title(item, cls._map_history_media_type(item.get("Type")) or "movie"),
-                    "type": item.get("Type"),
-                    "genres": item.get("Genres", [])[:3],
+                    "title": title,
+                    "media_type": media_type,
+                    "play_count": 0,
+                    "genres": [],
                     "community_rating": item.get("CommunityRating"),
-                    "last_played": item.get("UserData", {}).get("LastPlayedDate"),
-                }
+                    "last_played": None,
+                    "_last_played_score": 0.0,
+                },
             )
+            recent_entry["play_count"] += 1
+            recent_entry["genres"] = cls._merge_unique_strings(recent_entry["genres"], item.get("Genres", [])[:3])
+
+            if recent_entry.get("community_rating") is None and item.get("CommunityRating") is not None:
+                recent_entry["community_rating"] = item.get("CommunityRating")
+
+            last_played = item.get("UserData", {}).get("LastPlayedDate")
+            last_played_score = cls._to_timestamp(last_played)
+            if last_played_score >= recent_entry["_last_played_score"]:
+                recent_entry["last_played"] = last_played
+                recent_entry["_last_played_score"] = last_played_score
 
         top_titles = list(grouped.values())
         top_titles.sort(
+            key=lambda item: (
+                -int(item.get("play_count") or 0),
+                -float(item.get("_last_played_score") or 0.0),
+                str(item.get("title") or "").lower(),
+            )
+        )
+
+        recent_momentum = list(recent_grouped.values())
+        recent_momentum.sort(
             key=lambda item: (
                 -int(item.get("play_count") or 0),
                 -float(item.get("_last_played_score") or 0.0),
@@ -453,11 +484,17 @@ class VanguarrService:
             cleaned.pop("_last_played_score", None)
             normalized_top_titles.append(cleaned)
 
+        normalized_recent_momentum: list[dict[str, Any]] = []
+        for item in recent_momentum[:recent_limit]:
+            cleaned = dict(item)
+            cleaned.pop("_last_played_score", None)
+            normalized_recent_momentum.append(cleaned)
+
         return {
             "history_count": len(history),
             "top_titles": normalized_top_titles,
             "top_genres": [genre for genre, _count in genre_counts.most_common(8)],
-            "recent_plays": recent_plays,
+            "recent_momentum": normalized_recent_momentum,
         }
 
     @classmethod

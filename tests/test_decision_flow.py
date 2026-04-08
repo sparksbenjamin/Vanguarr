@@ -100,13 +100,16 @@ def test_profile_history_context_compacts_repeated_titles() -> None:
         },
     ]
 
-    summary = VanguarrService._build_profile_history_context(history, top_limit=5, recent_limit=3)
+    summary = VanguarrService._build_profile_history_context(history, top_limit=5, recent_limit=3, recent_window=3)
 
     assert summary["history_count"] == 3
     assert summary["top_titles"][0]["title"] == "Show Alpha"
     assert summary["top_titles"][0]["play_count"] == 2
+    assert summary["top_titles"][0]["media_type"] == "tv"
     assert "Sci-Fi" in summary["top_genres"]
-    assert len(summary["recent_plays"]) == 3
+    assert summary["recent_momentum"][0]["title"] == "Show Alpha"
+    assert summary["recent_momentum"][0]["play_count"] == 2
+    assert "recent_plays" not in summary
 
 
 def test_profile_architect_prompt_uses_viewing_summary() -> None:
@@ -116,11 +119,11 @@ def test_profile_architect_prompt_uses_viewing_summary() -> None:
             "history_count": 12,
             "top_titles": [{"title": "Show Alpha", "play_count": 4}],
             "top_genres": ["Sci-Fi"],
-            "recent_plays": [{"title": "Show Alpha"}],
+            "recent_momentum": [{"title": "Show Alpha", "play_count": 2}],
         },
         "[VANGUARR_PROFILE_V3]\nUser: alice",
     )
 
     assert "Observed Jellyfin viewing summary" in prompt
     assert "Show Alpha" in prompt
-    assert "Use repeated titles and top genres as durable taste signals" in prompt
+    assert "Use grouped watch counts for shows and movies as durable taste signals" in prompt

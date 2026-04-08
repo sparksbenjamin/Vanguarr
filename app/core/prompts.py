@@ -73,7 +73,7 @@ Observed Jellyfin viewing summary:
 {history_blob}
 
 Update the profile while keeping it compact, structured, and under 500 words.
-Use repeated titles and top genres as durable taste signals, and recent plays as momentum.
+Use grouped watch counts for shows and movies as durable taste signals, and grouped recent momentum as short-term movement.
 """
 
 
