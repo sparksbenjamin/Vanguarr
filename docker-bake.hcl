@@ -9,6 +9,7 @@ group "default" {
 target "docker-metadata-action" {}
 
 target "image" {
+  inherits = ["docker-metadata-action"]
   context = "."
   dockerfile = "Dockerfile"
   tags = ["${REGISTRY_IMAGE}:latest"]
@@ -26,4 +27,3 @@ target "ci" {
   inherits = ["image"]
   output = ["type=image"]
 }
-
