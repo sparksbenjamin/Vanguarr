@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     llm_model: str = "ollama/llama3.1:8b"
     llm_temperature: float = 0.2
     llm_max_output_tokens: int = 700
-    llm_timeout_seconds: int = 45
+    llm_timeout_seconds: int | None = None
     ollama_api_base: str = "http://ollama:11434"
     openai_api_key: str | None = None
     openai_api_base: str | None = None
@@ -68,6 +68,21 @@ class Settings(BaseSettings):
         if value in ("", None):
             return None
         return value
+
+    @field_validator("llm_timeout_seconds", mode="before")
+    @classmethod
+    def blank_timeout_to_none(cls, value: object) -> object:
+        if value in ("", None):
+            return None
+        return value
+
+    @property
+    def effective_llm_timeout_seconds(self) -> int:
+        if self.llm_timeout_seconds is not None:
+            return self.llm_timeout_seconds
+        if self.llm_provider.lower() == "ollama":
+            return 180
+        return 45
 
     def ensure_runtime_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

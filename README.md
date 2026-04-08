@@ -112,6 +112,7 @@ services:
       REQUEST_THRESHOLD: "0.72"
       LLM_PROVIDER: ollama
       LLM_MODEL: ollama/llama3.1:8b
+      LLM_TIMEOUT_SECONDS: "180"
       OLLAMA_API_BASE: http://host.docker.internal:11434
 ```
 
@@ -199,6 +200,7 @@ services:
 - `SEER_REQUEST_USER_ID`
 - `LLM_PROVIDER`
 - `LLM_MODEL`
+- `LLM_TIMEOUT_SECONDS`
 - `OLLAMA_API_BASE`
 - `OPENAI_API_KEY`
 - `OPENAI_API_BASE`
@@ -232,3 +234,11 @@ Run a quick smoke test with:
 ```bash
 python -m pytest
 ```
+
+## Ollama Timeout Notes
+
+Local Ollama models can take longer than hosted APIs to finish profile-compression and scoring calls.
+
+- If `LLM_TIMEOUT_SECONDS` is left blank, Vanguarr defaults to `180` seconds for Ollama and `45` seconds for hosted providers.
+- If your Ollama model still times out, set `LLM_TIMEOUT_SECONDS=240` or `300` in your `.env` or compose file.
+- Larger local models may also benefit from lowering `PROFILE_HISTORY_LIMIT` or switching to a faster quantization.

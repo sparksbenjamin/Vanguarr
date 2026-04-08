@@ -35,7 +35,7 @@ class LLMClient:
                 user_prompt="Respond with OK.",
                 max_tokens=8,
                 temperature=0,
-                timeout_seconds=min(self.settings.llm_timeout_seconds, 8),
+                timeout_seconds=min(self.settings.effective_llm_timeout_seconds, 8),
             )
             return ConnectionCheck(
                 service="LLM",
@@ -131,7 +131,7 @@ class LLMClient:
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self.settings.llm_model,
-            "timeout": timeout_seconds or self.settings.llm_timeout_seconds,
+            "timeout": timeout_seconds or self.settings.effective_llm_timeout_seconds,
             "max_tokens": max_tokens or self.settings.llm_max_output_tokens,
             "temperature": self.settings.llm_temperature if temperature is None else temperature,
         }
@@ -152,7 +152,7 @@ class LLMClient:
 
     async def _ping_ollama(self) -> dict[str, Any]:
         async with httpx.AsyncClient(
-            timeout=min(self.settings.llm_timeout_seconds, 8),
+            timeout=min(self.settings.effective_llm_timeout_seconds, 8),
             base_url=self.settings.ollama_api_base.rstrip("/"),
         ) as client:
             try:
