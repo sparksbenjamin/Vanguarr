@@ -35,6 +35,7 @@ class LLMClient:
                 user_prompt="Respond with OK.",
                 max_tokens=8,
                 temperature=0,
+                timeout_seconds=min(self.settings.llm_timeout_seconds, 8),
             )
             return ConnectionCheck(
                 service="LLM",
@@ -57,6 +58,7 @@ class LLMClient:
         user_prompt: str,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        timeout_seconds: int | None = None,
     ) -> str:
         messages = [
             {"role": "system", "content": system_prompt},
@@ -66,6 +68,7 @@ class LLMClient:
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            timeout_seconds=timeout_seconds,
         )
 
     async def generate_messages(
@@ -74,12 +77,14 @@ class LLMClient:
         messages: list[dict[str, Any]],
         max_tokens: int | None = None,
         temperature: float | None = None,
+        timeout_seconds: int | None = None,
     ) -> str:
         self._validate_config()
 
         kwargs = self._build_completion_kwargs(
             max_tokens=max_tokens,
             temperature=temperature,
+            timeout_seconds=timeout_seconds,
         )
 
         try:
@@ -95,11 +100,13 @@ class LLMClient:
         messages: list[dict[str, Any]],
         max_tokens: int | None = None,
         temperature: float | None = None,
+        timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         raw_text = await self.generate_messages(
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            timeout_seconds=timeout_seconds,
         )
         return self._extract_json_object(raw_text)
 
@@ -120,10 +127,11 @@ class LLMClient:
         *,
         max_tokens: int | None,
         temperature: float | None,
+        timeout_seconds: int | None,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self.settings.llm_model,
-            "timeout": self.settings.llm_timeout_seconds,
+            "timeout": timeout_seconds or self.settings.llm_timeout_seconds,
             "max_tokens": max_tokens or self.settings.llm_max_output_tokens,
             "temperature": self.settings.llm_temperature if temperature is None else temperature,
         }
@@ -144,7 +152,7 @@ class LLMClient:
 
     async def _ping_ollama(self) -> dict[str, Any]:
         async with httpx.AsyncClient(
-            timeout=self.settings.llm_timeout_seconds,
+            timeout=min(self.settings.llm_timeout_seconds, 8),
             base_url=self.settings.ollama_api_base.rstrip("/"),
         ) as client:
             try:

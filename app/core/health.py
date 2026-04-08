@@ -58,6 +58,6 @@ class HealthMonitor:
     @staticmethod
     async def _safe_check(service_name: str, coroutine: Any) -> ConnectionCheck:
         try:
-            return await coroutine
+            return await asyncio.wait_for(coroutine, timeout=8)
         except Exception as exc:  # pragma: no cover - defensive catch for dashboard health
             return ConnectionCheck(service=service_name, ok=False, detail=str(exc))

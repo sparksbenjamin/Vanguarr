@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     profile_history_limit: int = 40
     candidate_limit: int = 25
     recommendation_seed_limit: int = 3
+    decision_page_size: int = 100
 
     jellyfin_base_url: str | None = None
     jellyfin_api_key: str | None = None

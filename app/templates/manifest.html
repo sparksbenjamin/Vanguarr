@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="grid gap-6 lg:grid-cols-[0.8fr_1.4fr]">
+  <aside class="panel rounded-[2rem] p-6">
+    <p class="mono text-xs uppercase tracking-[0.35em] text-[var(--teal)]">Manifest editor</p>
+    <h2 class="mt-2 text-2xl font-bold">Persona blocks</h2>
+    <p class="mt-2 text-sm text-[var(--ink-soft)]">Load any saved profile block, inspect the raw text, and make manual adjustments.</p>
+
+    <form class="mt-6 space-y-3" method="get" action="/manifest">
+      <label class="block text-sm font-medium" for="manifest-user">Load username</label>
+      <input
+        id="manifest-user"
+        name="username"
+        value="{{ selected_user }}"
+        placeholder="username"
+        class="w-full rounded-2xl border border-[var(--line)] bg-white/90 px-4 py-3 text-sm outline-none transition focus:border-[var(--teal)]"
+      />
+      <button class="w-full rounded-2xl bg-[var(--teal)] px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90" type="submit">
+        Load Manifest
+      </button>
+    </form>
+
+    <div class="mt-6 space-y-2">
+      {% for profile in profiles %}
+      <a
+        href="/manifest?username={{ profile }}"
+        class="block rounded-2xl border px-4 py-3 text-sm transition {{ 'border-[var(--teal)] bg-[rgba(15,124,130,0.08)] text-[var(--teal)]' if profile == selected_user else 'border-[var(--line)] bg-white/75 hover:border-[var(--teal)] hover:text-[var(--teal)]' }}"
+      >
+        {{ profile }}
+      </a>
+      {% else %}
+      <p class="text-sm text-[var(--ink-soft)]">No profile files have been generated yet.</p>
+      {% endfor %}
+    </div>
+  </aside>
+
+  <section class="panel rounded-[2rem] p-6">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <p class="mono text-xs uppercase tracking-[0.35em] text-[var(--amber)]">Raw profile block</p>
+        <h2 class="mt-2 text-2xl font-bold">{{ selected_user or "Choose a profile" }}</h2>
+        {% if profile_path %}
+        <p class="mono mt-2 text-xs text-[var(--ink-soft)]">{{ profile_path }}</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <form class="mt-6 space-y-4" method="post" action="/manifest/save">
+      <input type="hidden" name="username" value="{{ selected_user }}" />
+      <textarea
+        name="content"
+        rows="26"
+        class="mono w-full rounded-[1.8rem] border border-[var(--line)] bg-[rgba(23,33,44,0.04)] p-5 text-sm outline-none transition focus:border-[var(--teal)]"
+        placeholder="Load or create a profile block to edit it here."
+      >{{ profile_content }}</textarea>
+      <button
+        class="rounded-2xl bg-[var(--amber)] px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        type="submit"
+        {% if not selected_user %}disabled{% endif %}
+      >
+        Save Manifest
+      </button>
+    </form>
+  </section>
+</section>
+{% endblock %}
