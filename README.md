@@ -53,13 +53,13 @@ docker compose build
 docker compose up -d
 ```
 
-4. If you want a local ROCm-backed Ollama sidecar, enable the `local-llm` profile:
+4. If you are using Ollama, point Vanguarr at the already-running Ollama instance:
 
 ```bash
-docker compose --profile local-llm up -d
+OLLAMA_API_BASE=http://host.docker.internal:11434
 ```
 
-The optional Ollama service is wired for ROCm passthrough with `/dev/kfd` and `/dev/dri`. On hosts that do not expose AMD GPU devices, leave the `local-llm` profile disabled and point Vanguarr at OpenAI, Anthropic, or another Ollama endpoint via environment variables.
+The Docker stack does not run Ollama itself. It connects to an existing Ollama, OpenAI, Anthropic, or compatible endpoint via environment variables. The default Docker example uses `host.docker.internal` so the container can reach an Ollama process running on the host machine.
 
 ## Core Environment Variables
 
