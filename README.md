@@ -14,6 +14,14 @@ Vanguarr is a Dockerized FastAPI service that:
 
 The system is security-minded by design: user interests are treated as the target surface, candidate metadata is treated as the fuzzer payload, and all provider credentials are sourced from environment variables.
 
+## Jellyfin Requirements
+
+Vanguarr currently reads watched history from Jellyfin's standard item APIs.
+
+- It uses the normal Jellyfin `/Items` endpoint with played-state filters and `DatePlayed` sorting.
+- The Jellyfin Playback Reporting plugin is not required for the current implementation.
+- If Vanguarr later adds an optional Playback Reporting integration, that requirement will be documented separately.
+
 ## Architecture
 
 ### Profile Architect
