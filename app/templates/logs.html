@@ -1,76 +1,160 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="panel rounded-[2rem] p-6 sm:p-8">
-  <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-    <div>
-      <p class="mono text-xs uppercase tracking-[0.35em] text-[var(--amber)]">War room</p>
-      <h2 class="mt-2 text-2xl font-bold">Decision log search</h2>
-      <p class="mt-2 text-sm text-[var(--ink-soft)]">Search usernames, titles, or LLM reasoning across the most recent stored decisions.</p>
-    </div>
+{% set stats = namespace(requests=0, ignores=0, errored=0) %}
+{% for log in logs %}
+  {% if log.decision == "REQUEST" %}
+    {% set stats.requests = stats.requests + 1 %}
+  {% else %}
+    {% set stats.ignores = stats.ignores + 1 %}
+  {% endif %}
+  {% if log.error %}
+    {% set stats.errored = stats.errored + 1 %}
+  {% endif %}
+{% endfor %}
 
-    <form class="flex w-full max-w-xl gap-3" method="get" action="/logs">
+<section class="space-y-5">
+  <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+    <div>
+      <p class="panel-kicker">War Room</p>
+      <h1 class="mt-2 text-3xl font-semibold tracking-tight">Decision log</h1>
+      <p class="mt-2 max-w-3xl text-sm text-[var(--text-soft)]">
+        Search the stored LLM outcomes, inspect reasoning, and quickly verify whether Vanguarr requested or ignored a candidate.
+      </p>
+    </div>
+    <form class="grid w-full gap-3 sm:grid-cols-[minmax(0,1fr)_auto] xl:max-w-2xl" method="get" action="/logs">
       <input
         name="q"
         value="{{ query }}"
-        placeholder="Search decisions"
-        class="w-full rounded-2xl border border-[var(--line)] bg-white/90 px-4 py-3 text-sm outline-none transition focus:border-[var(--teal)]"
+        placeholder="Search usernames, titles, or reasoning"
+        class="field-input text-sm"
       />
-      <button class="rounded-2xl bg-[var(--teal)] px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90" type="submit">
-        Search
-      </button>
+      <button class="button button-primary" type="submit">Search</button>
     </form>
   </div>
 
-  <div class="mt-8 overflow-x-auto">
-    <table class="min-w-full border-separate border-spacing-y-3">
-      <thead>
-        <tr class="text-left text-xs uppercase tracking-[0.25em] text-[var(--ink-soft)]">
-          <th class="px-4 py-2">When</th>
-          <th class="px-4 py-2">User</th>
-          <th class="px-4 py-2">Title</th>
-          <th class="px-4 py-2">Decision</th>
-          <th class="px-4 py-2">Confidence</th>
-          <th class="px-4 py-2">Requested</th>
-          <th class="px-4 py-2">Reasoning</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for log in logs %}
-        <tr class="rounded-[1.5rem] bg-white/75 shadow-sm">
-          <td class="rounded-l-[1.3rem] px-4 py-4 align-top text-sm text-[var(--ink-soft)]">{{ log.created_at }}</td>
-          <td class="px-4 py-4 align-top text-sm">{{ log.username }}</td>
-          <td class="px-4 py-4 align-top text-sm">
-            <p class="font-semibold">{{ log.media_title }}</p>
-            <p class="mt-1 text-xs text-[var(--ink-soft)]">{{ log.media_type }} · {{ log.source }}</p>
-          </td>
-          <td class="px-4 py-4 align-top text-sm">
-            <span
-              class="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]"
-              style="background-color: {{ 'rgba(26,143,88,0.14)' if log.decision == 'REQUEST' else 'rgba(23,33,44,0.08)' }}; color: {{ '#1a8f58' if log.decision == 'REQUEST' else '#17212c' }};"
-            >
-              {{ log.decision }}
-            </span>
-          </td>
-          <td class="px-4 py-4 align-top text-sm text-[var(--ink-soft)]">{{ "%.2f"|format(log.confidence) }}</td>
-          <td class="px-4 py-4 align-top text-sm text-[var(--ink-soft)]">{{ "yes" if log.requested else "no" }}</td>
-          <td class="rounded-r-[1.3rem] px-4 py-4 align-top text-sm text-[var(--ink-soft)]">
-            <details>
-              <summary class="cursor-pointer text-[var(--teal)]">Open reasoning</summary>
-              <p class="mt-3 whitespace-pre-wrap">{{ log.reasoning }}</p>
-              {% if log.error %}
-              <p class="mt-3 text-[var(--red)]">Error: {{ log.error }}</p>
-              {% endif %}
-            </details>
-          </td>
-        </tr>
-        {% else %}
-        <tr>
-          <td colspan="7" class="px-4 py-8 text-center text-sm text-[var(--ink-soft)]">No decision logs matched your query yet.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div class="shell-card rounded-2xl px-4 py-3">
+      <p class="panel-kicker">Rows</p>
+      <p class="mt-2 text-lg font-semibold">{{ logs|length }}</p>
+      <p class="mt-1 text-sm text-[var(--text-soft)]">{{ "Filtered view" if query else "Latest stored decisions" }}</p>
+    </div>
+    <div class="shell-card rounded-2xl px-4 py-3">
+      <p class="panel-kicker">Requests</p>
+      <p class="mt-2 text-lg font-semibold">{{ stats.requests }}</p>
+      <p class="mt-1 text-sm text-[var(--text-soft)]">Decisions marked REQUEST</p>
+    </div>
+    <div class="shell-card rounded-2xl px-4 py-3">
+      <p class="panel-kicker">Ignores</p>
+      <p class="mt-2 text-lg font-semibold">{{ stats.ignores }}</p>
+      <p class="mt-1 text-sm text-[var(--text-soft)]">Decisions marked IGNORE</p>
+    </div>
+    <div class="shell-card rounded-2xl px-4 py-3">
+      <p class="panel-kicker">Errors</p>
+      <p class="mt-2 text-lg font-semibold">{{ stats.errored }}</p>
+      <p class="mt-1 text-sm text-[var(--text-soft)]">Request failures in this page</p>
+    </div>
   </div>
+
+  <section class="shell-card rounded-[1.4rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
+      <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p class="panel-kicker">Stored Decisions</p>
+          <h2 class="mt-2 panel-title">Search results</h2>
+        </div>
+        <p class="mono text-xs text-[var(--text-dim)]">
+          {% if query %}
+          query={{ query }}
+          {% else %}
+          latest={{ logs|length }}
+          {% endif %}
+        </p>
+      </div>
+    </div>
+
+    <div class="hidden xl:block overflow-x-auto">
+      <table class="data-table min-w-full">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>User</th>
+            <th>Title</th>
+            <th>Decision</th>
+            <th>Confidence</th>
+            <th>Requested</th>
+            <th>Reasoning</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for log in logs %}
+          <tr>
+            <td class="mono text-xs text-[var(--text-soft)]">{{ log.created_at }}</td>
+            <td class="text-sm">{{ log.username }}</td>
+            <td>
+              <p class="font-medium">{{ log.media_title }}</p>
+              <p class="mt-1 text-xs text-[var(--text-dim)]">{{ log.media_type }} / {{ log.source }}</p>
+            </td>
+            <td>
+              <span class="status-pill {{ 'status-good' if log.decision == 'REQUEST' else 'status-neutral' }}">
+                {{ log.decision }}
+              </span>
+            </td>
+            <td class="mono text-xs text-[var(--text-soft)]">{{ "%.2f"|format(log.confidence) }}</td>
+            <td class="text-sm text-[var(--text-soft)]">{{ "yes" if log.requested else "no" }}</td>
+            <td class="text-sm text-[var(--text-soft)]">
+              <details>
+                <summary class="cursor-pointer text-[var(--accent)]">Open reasoning</summary>
+                <p class="mt-3 whitespace-pre-wrap leading-6">{{ log.reasoning }}</p>
+                {% if log.error %}
+                <p class="mt-3 rounded-xl border border-[rgba(255,109,109,0.22)] bg-[rgba(255,109,109,0.08)] px-3 py-2 text-sm text-[var(--red)]">
+                  Error: {{ log.error }}
+                </p>
+                {% endif %}
+              </details>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="text-sm text-[var(--text-soft)]">No decision logs matched your query yet.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="divide-y divide-white/5 xl:hidden">
+      {% for log in logs %}
+      <article class="px-5 py-4">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <p class="font-medium">{{ log.media_title }}</p>
+            <p class="mt-1 text-sm text-[var(--text-soft)]">{{ log.username }}</p>
+            <p class="mt-1 text-xs text-[var(--text-dim)]">{{ log.media_type }} / {{ log.source }}</p>
+          </div>
+          <span class="status-pill {{ 'status-good' if log.decision == 'REQUEST' else 'status-neutral' }}">
+            {{ log.decision }}
+          </span>
+        </div>
+        <div class="mt-3 grid gap-2 text-xs text-[var(--text-soft)] sm:grid-cols-3">
+          <p><span class="text-[var(--text-dim)]">When</span><br>{{ log.created_at }}</p>
+          <p><span class="text-[var(--text-dim)]">Confidence</span><br>{{ "%.2f"|format(log.confidence) }}</p>
+          <p><span class="text-[var(--text-dim)]">Requested</span><br>{{ "yes" if log.requested else "no" }}</p>
+        </div>
+        <details class="mt-4">
+          <summary class="cursor-pointer text-sm text-[var(--accent)]">Open reasoning</summary>
+          <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-[var(--text-soft)]">{{ log.reasoning }}</p>
+          {% if log.error %}
+          <p class="mt-3 rounded-xl border border-[rgba(255,109,109,0.22)] bg-[rgba(255,109,109,0.08)] px-3 py-2 text-sm text-[var(--red)]">
+            Error: {{ log.error }}
+          </p>
+          {% endif %}
+        </details>
+      </article>
+      {% else %}
+      <div class="px-5 py-5 text-sm text-[var(--text-soft)]">No decision logs matched your query yet.</div>
+      {% endfor %}
+    </div>
+  </section>
 </section>
 {% endblock %}

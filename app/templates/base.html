@@ -8,30 +8,38 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <style>
       :root {
-        --sand: #f6f0e3;
-        --paper: rgba(255, 252, 246, 0.88);
-        --ink: #17212c;
-        --ink-soft: #556170;
-        --line: rgba(23, 33, 44, 0.12);
-        --teal: #0f7c82;
-        --amber: #c68b2c;
-        --green: #1a8f58;
-        --red: #b4463d;
-        --panel-shadow: 0 22px 60px rgba(23, 33, 44, 0.12);
+        --bg: #11161d;
+        --sidebar: #18202b;
+        --sidebar-alt: #121922;
+        --surface: #1e2632;
+        --surface-alt: #232d3a;
+        --surface-muted: #2a3443;
+        --line: rgba(255, 255, 255, 0.08);
+        --text: #eef3f9;
+        --text-soft: #aab7c7;
+        --text-dim: #7f8b99;
+        --accent: #35a1ff;
+        --accent-soft: rgba(53, 161, 255, 0.14);
+        --green: #4dd38a;
+        --amber: #f6b85f;
+        --red: #ff6d6d;
+      }
+
+      html {
+        background: var(--bg);
       }
 
       body {
-        font-family: "Space Grotesk", sans-serif;
-        color: var(--ink);
+        font-family: "IBM Plex Sans", sans-serif;
+        color: var(--text);
         background:
-          radial-gradient(circle at top left, rgba(15, 124, 130, 0.16), transparent 32%),
-          radial-gradient(circle at top right, rgba(198, 139, 44, 0.18), transparent 36%),
-          linear-gradient(160deg, #f8f3e8 0%, #edf1f1 54%, #f8f3e8 100%);
+          linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 30%),
+          linear-gradient(135deg, #10151c 0%, #141b24 45%, #11161d 100%);
       }
 
       code,
@@ -40,42 +48,297 @@
         font-family: "IBM Plex Mono", monospace;
       }
 
-      .panel {
-        background: var(--paper);
+      .shell-card {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015));
         border: 1px solid var(--line);
-        box-shadow: var(--panel-shadow);
-        backdrop-filter: blur(14px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.18);
+      }
+
+      .panel-title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+
+      .panel-kicker {
+        color: var(--text-dim);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 11px;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+      }
+
+      .field-input,
+      .field-textarea {
+        width: 100%;
+        border-radius: 0.95rem;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(9, 13, 18, 0.45);
+        color: var(--text);
+        outline: none;
+        transition: border-color 0.18s ease, box-shadow 0.18s ease;
+      }
+
+      .field-input {
+        padding: 0.82rem 0.95rem;
+      }
+
+      .field-textarea {
+        min-height: 520px;
+        padding: 1rem 1.05rem;
+        resize: vertical;
+      }
+
+      .field-input:focus,
+      .field-textarea:focus {
+        border-color: rgba(53, 161, 255, 0.8);
+        box-shadow: 0 0 0 1px rgba(53, 161, 255, 0.18);
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 0.95rem;
+        border: 1px solid transparent;
+        font-size: 0.875rem;
+        font-weight: 600;
+        padding: 0.8rem 1rem;
+        transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, opacity 0.18s ease;
+      }
+
+      .button-primary {
+        background: var(--accent);
+        color: white;
+      }
+
+      .button-primary:hover {
+        background: #4aabff;
+      }
+
+      .button-amber {
+        background: var(--amber);
+        color: #1a1d21;
+      }
+
+      .button-amber:hover {
+        background: #ffc66d;
+      }
+
+      .button-ghost {
+        background: rgba(255, 255, 255, 0.02);
+        border-color: var(--line);
+        color: var(--text-soft);
+      }
+
+      .button-ghost:hover {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text);
+      }
+
+      .button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        padding: 0.45rem 0.72rem;
+        text-transform: uppercase;
+      }
+
+      .status-pill::before {
+        content: "";
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 999px;
+        background: currentColor;
+      }
+
+      .status-good {
+        background: rgba(77, 211, 138, 0.12);
+        color: var(--green);
+      }
+
+      .status-warn {
+        background: rgba(246, 184, 95, 0.14);
+        color: var(--amber);
+      }
+
+      .status-bad {
+        background: rgba(255, 109, 109, 0.14);
+        color: var(--red);
+      }
+
+      .status-neutral {
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--text-soft);
+      }
+
+      .data-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .data-table th {
+        color: var(--text-dim);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.18em;
+        padding: 0.9rem 1rem;
+        text-align: left;
+        text-transform: uppercase;
+      }
+
+      .data-table td {
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 1rem;
+        vertical-align: top;
+      }
+
+      .data-table tbody tr:hover {
+        background: rgba(255, 255, 255, 0.025);
+      }
+
+      .table-grid {
+        display: grid;
+        grid-template-columns: minmax(110px, 0.9fr) minmax(150px, 1fr) minmax(160px, 1.25fr) minmax(100px, 0.8fr) minmax(80px, 0.7fr) minmax(120px, 0.8fr) minmax(280px, 2fr);
+      }
+
+      @media (max-width: 1279px) {
+        .table-grid {
+          grid-template-columns: minmax(110px, 1fr) minmax(150px, 1fr) minmax(180px, 1.2fr) minmax(100px, 0.8fr) minmax(80px, 0.6fr) minmax(120px, 0.8fr);
+        }
+
+        .table-grid > :last-child {
+          grid-column: 1 / -1;
+          padding-top: 0;
+        }
+      }
+
+      @media (max-width: 1023px) {
+        .table-grid {
+          display: block;
+        }
       }
     </style>
   </head>
   <body class="min-h-screen">
-    <div class="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
-      <header class="panel mb-6 rounded-[2rem] px-5 py-5 sm:px-8">
-        <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p class="mono text-xs uppercase tracking-[0.35em] text-[var(--teal)]">Security-minded media bridge</p>
-            <h1 class="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Vanguarr</h1>
-            <p class="mt-2 max-w-3xl text-sm text-[var(--ink-soft)] sm:text-base">
-              Proactive curation for Jellyfin and Seer, driven by persistent LLM personas and fuzz-tested candidate payloads.
-            </p>
+    {% set path = request.url.path %}
+    <div class="min-h-screen lg:grid lg:grid-cols-[260px_minmax(0,1fr)]">
+      <aside class="border-b border-white/5 bg-[var(--sidebar)] lg:min-h-screen lg:border-b-0 lg:border-r lg:border-r-white/5">
+        <div class="flex h-full flex-col">
+          <div class="border-b border-white/5 px-5 py-5">
+            <div class="flex items-center gap-3">
+              <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-sm font-semibold text-[var(--accent)]">
+                VG
+              </div>
+              <div>
+                <p class="text-lg font-semibold tracking-tight">Vanguarr</p>
+                <p class="mono text-[11px] uppercase tracking-[0.24em] text-[var(--text-dim)]">Curation Engine</p>
+              </div>
+            </div>
           </div>
-          <nav class="flex flex-wrap gap-2 text-sm">
-            <a class="rounded-full border border-[var(--line)] px-4 py-2 transition hover:border-[var(--teal)] hover:text-[var(--teal)]" href="/">Dashboard</a>
-            <a class="rounded-full border border-[var(--line)] px-4 py-2 transition hover:border-[var(--teal)] hover:text-[var(--teal)]" href="/logs">War Room</a>
-            <a class="rounded-full border border-[var(--line)] px-4 py-2 transition hover:border-[var(--teal)] hover:text-[var(--teal)]" href="/manifest">Manifest Editor</a>
-          </nav>
+
+          <div class="px-4 py-5">
+            <p class="mono px-3 text-[11px] uppercase tracking-[0.28em] text-[var(--text-dim)]">Main</p>
+            <nav class="mt-3 space-y-1 text-sm">
+              <a
+                href="/"
+                class="flex items-center justify-between rounded-xl border px-3 py-3 transition {{ 'border-[var(--accent)] bg-[var(--accent-soft)] text-white' if path == '/' else 'border-transparent text-[var(--text-soft)] hover:border-white/10 hover:bg-white/5 hover:text-white' }}"
+              >
+                <span>System</span>
+                <span class="mono text-[11px] uppercase tracking-[0.18em]">Dashboard</span>
+              </a>
+              <a
+                href="/logs"
+                class="flex items-center justify-between rounded-xl border px-3 py-3 transition {{ 'border-[var(--accent)] bg-[var(--accent-soft)] text-white' if path.startswith('/logs') else 'border-transparent text-[var(--text-soft)] hover:border-white/10 hover:bg-white/5 hover:text-white' }}"
+              >
+                <span>War Room</span>
+                <span class="mono text-[11px] uppercase tracking-[0.18em]">Logs</span>
+              </a>
+              <a
+                href="/manifest"
+                class="flex items-center justify-between rounded-xl border px-3 py-3 transition {{ 'border-[var(--accent)] bg-[var(--accent-soft)] text-white' if path.startswith('/manifest') else 'border-transparent text-[var(--text-soft)] hover:border-white/10 hover:bg-white/5 hover:text-white' }}"
+              >
+                <span>Profiles</span>
+                <span class="mono text-[11px] uppercase tracking-[0.18em]">Editor</span>
+              </a>
+            </nav>
+          </div>
+
+          <div class="px-4 pb-5">
+            <p class="mono px-3 text-[11px] uppercase tracking-[0.28em] text-[var(--text-dim)]">What Matters</p>
+            <div class="mt-3 space-y-3">
+              <div class="shell-card rounded-2xl p-4">
+                <p class="mono text-[11px] uppercase tracking-[0.24em] text-[var(--text-dim)]">Deployment</p>
+                <p class="mt-2 text-sm font-medium">Install, configure, and stay out of the way.</p>
+                <p class="mt-2 text-sm text-[var(--text-soft)]">
+                  This shell is tuned for quick navigation and operational context, following the familiar Servarr app pattern.
+                </p>
+              </div>
+              <div class="shell-card rounded-2xl p-4">
+                <p class="mono text-[11px] uppercase tracking-[0.24em] text-[var(--text-dim)]">Mounted Data</p>
+                <p class="mt-2 text-sm text-[var(--text-soft)]">Host-visible runtime files live under:</p>
+                <p class="mt-2 mono text-xs text-[var(--text)]">./data/</p>
+                <p class="mt-3 text-xs text-[var(--text-dim)]">DB, profile blocks, and rotating logs are all inspectable there.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-auto border-t border-white/5 px-4 py-4">
+            <div class="shell-card rounded-2xl p-4">
+              <p class="mono text-[11px] uppercase tracking-[0.24em] text-[var(--text-dim)]">App Surface</p>
+              <div class="mt-3 space-y-2 text-sm text-[var(--text-soft)]">
+                <div class="flex items-center justify-between">
+                  <span>Web UI</span>
+                  <span class="mono text-xs text-white">:8000</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span>Persona Store</span>
+                  <span class="mono text-xs text-white">profiles</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span>Decision Store</span>
+                  <span class="mono text-xs text-white">sqlite</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-      </header>
+      </aside>
 
-      {% if toast %}
-      <div class="mb-6 rounded-3xl border border-[var(--line)] bg-white/75 px-5 py-4 text-sm text-[var(--ink)] shadow-sm">
-        {{ toast }}
+      <div class="min-w-0">
+        <header class="border-b border-white/5 bg-[rgba(10,14,20,0.55)] px-4 py-4 backdrop-blur md:px-6 lg:px-8">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p class="mono text-[11px] uppercase tracking-[0.28em] text-[var(--text-dim)]">Vanguarr Control Surface</p>
+                <p class="mt-1 text-sm text-[var(--text-soft)]">Side rail navigation, data-first pages, and operational visibility inspired by the Servarr layout model.</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-soft)]">
+                <span class="rounded-full border border-white/10 px-3 py-1.5">Data Mount: ./data</span>
+                <span class="rounded-full border border-white/10 px-3 py-1.5">API: /api/health</span>
+              </div>
+            </div>
+          </header>
+
+        <main class="px-4 py-5 md:px-6 lg:px-8">
+          {% if toast %}
+          <div class="mb-5 rounded-2xl border border-[var(--accent)]/40 bg-[var(--accent-soft)] px-4 py-3 text-sm text-white">
+            {{ toast }}
+          </div>
+          {% endif %}
+
+          {% block content %}{% endblock %}
+        </main>
       </div>
-      {% endif %}
-
-      <main class="flex-1">
-        {% block content %}{% endblock %}
-      </main>
     </div>
 
     {% block scripts %}{% endblock %}
