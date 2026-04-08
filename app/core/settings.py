@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +55,13 @@ class Settings(BaseSettings):
         extra="ignore",
         populate_by_name=True,
     )
+
+    @field_validator("seer_request_user_id", mode="before")
+    @classmethod
+    def blank_int_to_none(cls, value: object) -> object:
+        if value in ("", None):
+            return None
+        return value
 
     def ensure_runtime_dirs(self) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)

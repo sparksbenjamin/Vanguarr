@@ -61,6 +61,22 @@ OLLAMA_API_BASE=http://host.docker.internal:11434
 
 The Docker stack does not run Ollama itself. It connects to an existing Ollama, OpenAI, Anthropic, or compatible endpoint via environment variables. The default Docker example uses `host.docker.internal` so the container can reach an Ollama process running on the host machine.
 
+## Multi-Arch Images
+
+The image is configured for multi-platform builds with Docker Buildx and GitHub Actions.
+
+- supported image targets: `linux/amd64`, `linux/arm64`
+- local multi-arch build command:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t vanguarr:multiarch-test --output=type=oci,dest=dist/vanguarr-multiarch.tar .
+```
+
+- CI workflow: [docker.yml](.github/workflows/docker.yml)
+- Bake definition: [docker-bake.hcl](docker-bake.hcl)
+
+If you want to publish to a different registry, override `REGISTRY_IMAGE` when invoking Buildx or update the workflow metadata image name.
+
 ## Core Environment Variables
 
 - `JELLYFIN_BASE_URL`
