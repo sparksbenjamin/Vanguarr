@@ -81,13 +81,11 @@ class SeerClient(BaseAPIClient):
 
     async def discover_candidates(
         self,
-        history: list[dict[str, Any]],
+        seed_items: list[dict[str, Any]],
         *,
         limit: int | None = None,
-        seed_limit: int | None = None,
     ) -> list[dict[str, Any]]:
         max_candidates = limit or self.settings.candidate_limit
-        seed_count = seed_limit or self.settings.recommendation_seed_limit
 
         movie_genres = await self.get_genre_map("movie")
         tv_genres = await self.get_genre_map("tv")
@@ -110,26 +108,25 @@ class SeerClient(BaseAPIClient):
             seen[key] = candidate
             candidates.append(candidate)
 
-        for item in await self.get_trending():
-            add_candidate(item, "trending")
-            if len(candidates) >= max_candidates:
-                return candidates
-
-        seeded = 0
-        for entry in history:
-            tmdb_id = self._extract_tmdb_id(entry)
-            media_type = self._map_jellyfin_media_type(entry.get("Type"))
-            if not tmdb_id or media_type not in {"movie", "tv"}:
+        for seed in seed_items:
+            media_id = seed.get("media_id")
+            media_type = seed.get("media_type")
+            seed_title = seed.get("title") or "seed"
+            if media_type not in {"movie", "tv"} or media_id is None:
                 continue
 
-            for item in await self.get_recommendations(media_type, tmdb_id):
-                add_candidate(item, f"recommended:{entry.get('Name', 'seed')}")
+            for item in await self.get_recommendations(media_type, int(media_id)):
+                add_candidate(item, f"recommended:{seed_title}")
                 if len(candidates) >= max_candidates:
                     return candidates
 
-            seeded += 1
-            if seeded >= seed_count:
-                break
+        if candidates:
+            return candidates
+
+        for item in await self.get_trending():
+            add_candidate(item, "trending-fallback")
+            if len(candidates) >= max_candidates:
+                return candidates
 
         return candidates
 

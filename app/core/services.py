@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -212,10 +213,17 @@ class VanguarrService:
                 try:
                     profile_block = self.profile_store.read(current_username)
                     history = await self.jellyfin.get_playback_history(user["Id"], self.settings.profile_history_limit)
-                    candidates = await self.seer.discover_candidates(
+                    recommendation_seeds = self._select_recommendation_seeds(
                         history,
+                        limit=self.settings.recommendation_seed_limit,
+                    )
+                    viewing_history = self._build_viewing_history_context(
+                        history,
+                        recommendation_seeds=recommendation_seeds,
+                    )
+                    candidates = await self.seer.discover_candidates(
+                        recommendation_seeds,
                         limit=self.settings.candidate_limit,
-                        seed_limit=self.settings.recommendation_seed_limit,
                     )
 
                     for candidate in candidates:
@@ -233,6 +241,7 @@ class VanguarrService:
                                 messages=build_decision_messages(
                                     username=current_username,
                                     profile_block=profile_block,
+                                    viewing_history=viewing_history,
                                     candidate=candidate,
                                     global_exclusions=exclusions,
                                 ),
@@ -390,6 +399,106 @@ class VanguarrService:
             )
         return compacted
 
+    @classmethod
+    def _select_recommendation_seeds(
+        cls,
+        history: list[dict[str, Any]],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        grouped: dict[tuple[str, int], dict[str, Any]] = {}
+
+        for item in history:
+            media_type = cls._map_history_media_type(item.get("Type"))
+            tmdb_id = cls._extract_tmdb_id(item)
+            if media_type not in {"movie", "tv"} or tmdb_id is None:
+                continue
+
+            key = (media_type, tmdb_id)
+            seed = grouped.setdefault(
+                key,
+                {
+                    "media_type": media_type,
+                    "media_id": tmdb_id,
+                    "title": cls._seed_title(item, media_type),
+                    "genres": [],
+                    "overview": (item.get("Overview") or "")[:280],
+                    "community_rating": item.get("CommunityRating"),
+                    "play_count": 0,
+                    "last_played": None,
+                    "_last_played_score": 0.0,
+                },
+            )
+
+            seed["play_count"] += 1
+
+            genres = item.get("Genres", [])
+            if genres:
+                seed["genres"] = cls._merge_unique_strings(seed["genres"], genres)
+
+            if not seed.get("overview") and item.get("Overview"):
+                seed["overview"] = str(item.get("Overview"))[:280]
+
+            if seed.get("community_rating") is None and item.get("CommunityRating") is not None:
+                seed["community_rating"] = item.get("CommunityRating")
+
+            last_played = item.get("UserData", {}).get("LastPlayedDate")
+            last_played_score = cls._to_timestamp(last_played)
+            if last_played_score >= seed["_last_played_score"]:
+                seed["last_played"] = last_played
+                seed["_last_played_score"] = last_played_score
+
+        seeds = list(grouped.values())
+        seeds.sort(
+            key=lambda item: (
+                -int(item.get("play_count") or 0),
+                -float(item.get("_last_played_score") or 0.0),
+                -float(item.get("community_rating") or 0.0),
+                str(item.get("title") or "").lower(),
+            )
+        )
+
+        trimmed: list[dict[str, Any]] = []
+        for seed in seeds[:limit]:
+            cleaned = dict(seed)
+            cleaned.pop("_last_played_score", None)
+            trimmed.append(cleaned)
+        return trimmed
+
+    @classmethod
+    def _build_viewing_history_context(
+        cls,
+        history: list[dict[str, Any]],
+        *,
+        recommendation_seeds: list[dict[str, Any]],
+        recent_limit: int = 12,
+    ) -> dict[str, Any]:
+        genre_counts: Counter[str] = Counter()
+        recent_plays: list[dict[str, Any]] = []
+
+        for item in history:
+            for genre in item.get("Genres", []):
+                if genre:
+                    genre_counts[str(genre)] += 1
+
+        for item in history[:recent_limit]:
+            recent_plays.append(
+                {
+                    "name": item.get("SeriesName") or item.get("Name"),
+                    "type": item.get("Type"),
+                    "genres": item.get("Genres", [])[:4],
+                    "community_rating": item.get("CommunityRating"),
+                    "last_played": item.get("UserData", {}).get("LastPlayedDate"),
+                }
+            )
+
+        return {
+            "history_count": len(history),
+            "top_content": recommendation_seeds,
+            "top_genres": [genre for genre, _count in genre_counts.most_common(8)],
+            "recent_plays": recent_plays,
+        }
+
     @staticmethod
     def _limit_words(text: str, *, max_words: int) -> str:
         words = text.split()
@@ -412,4 +521,55 @@ class VanguarrService:
         try:
             return max(0.0, min(1.0, float(value)))
         except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _extract_tmdb_id(item: dict[str, Any]) -> int | None:
+        provider_ids = item.get("ProviderIds", {})
+        raw_tmdb = provider_ids.get("Tmdb") or provider_ids.get("TMDB") or provider_ids.get("tmdb")
+        if raw_tmdb is None:
+            return None
+
+        try:
+            return int(raw_tmdb)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _map_history_media_type(item_type: str | None) -> str | None:
+        if item_type == "Movie":
+            return "movie"
+        if item_type in {"Series", "Episode"}:
+            return "tv"
+        return None
+
+    @staticmethod
+    def _seed_title(item: dict[str, Any], media_type: str) -> str:
+        if media_type == "tv":
+            return str(item.get("SeriesName") or item.get("Name") or "Unknown TV")
+        return str(item.get("Name") or "Unknown Movie")
+
+    @staticmethod
+    def _merge_unique_strings(current: list[str], extra: list[Any]) -> list[str]:
+        merged = list(current)
+        seen = {value.lower() for value in current}
+        for raw in extra:
+            value = str(raw).strip()
+            if not value:
+                continue
+            lowered = value.lower()
+            if lowered in seen:
+                continue
+            merged.append(value)
+            seen.add(lowered)
+        return merged
+
+    @staticmethod
+    def _to_timestamp(value: Any) -> float:
+        if not value:
+            return 0.0
+
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+        except ValueError:
             return 0.0

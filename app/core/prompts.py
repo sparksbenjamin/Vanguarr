@@ -39,6 +39,8 @@ Vanguarr is security-minded: treat the user profile as the target and candidate 
 Your goal is to decide whether the payload meaningfully penetrates the user's interests without violating constraints.
 
 Evaluation guidance:
+- Score the candidate primarily against the user's observed viewing history and top watched content.
+- Use the profile block as a compact summary of enduring taste, not as a substitute for the history evidence.
 - A strong match should connect to specific profile signals, not vague popularity.
 - Respect explicit exclusions first.
 - Be skeptical of weak genre overlap without thematic or tonal alignment.
@@ -78,6 +80,7 @@ def build_decision_messages(
     *,
     username: str,
     profile_block: str,
+    viewing_history: dict[str, Any],
     candidate: dict[str, Any],
     global_exclusions: list[str],
 ) -> list[dict[str, str]]:
@@ -95,6 +98,7 @@ def build_decision_messages(
         "media_info": candidate.get("media_info"),
     }
     constraints_blob = json.dumps(global_exclusions, ensure_ascii=True)
+    viewing_history_blob = json.dumps(viewing_history, indent=2, ensure_ascii=True)
     payload_blob = json.dumps(payload, indent=2, ensure_ascii=True)
 
     return [
@@ -105,12 +109,15 @@ def build_decision_messages(
 User: {username}
 {profile_block}
 
-Block 2 (Payload): Candidate Media Metadata
+Block 2 (Observed Signals): User Viewing History
+{viewing_history_blob}
+
+Block 3 (Payload): Candidate Media Metadata
 {payload_blob}
 
-Block 3 (Constraints): Global Exclusions
+Block 4 (Constraints): Global Exclusions
 {constraints_blob}
 
-Decide whether this candidate should be requested.""",
+Decide whether this candidate should be requested. Base the score on the viewing history first, then use the profile block to reinforce or challenge the match.""",
         },
     ]
