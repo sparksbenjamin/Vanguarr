@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode
@@ -11,6 +12,7 @@ from app.api.llm import LLMClient
 from app.api.seer import SeerClient
 from app.core.db import SessionLocal, init_db
 from app.core.health import HealthMonitor
+from app.core.logging import setup_logging
 from app.core.scheduler import EngineScheduler
 from app.core.settings import get_settings
 from app.core.services import VanguarrService
@@ -28,6 +30,13 @@ def redirect_with_toast(path: str, message: str, **params: str) -> RedirectRespo
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging(settings)
+    logging.getLogger("vanguarr").info(
+        "Preparing runtime data_dir=%s profiles_dir=%s log_file=%s",
+        settings.data_dir,
+        settings.profiles_dir,
+        settings.log_file,
+    )
     init_db()
     jellyfin = JellyfinClient(settings)
     seer = SeerClient(settings)
@@ -54,7 +63,9 @@ async def lifespan(app: FastAPI):
     )
     app.state.scheduler = scheduler
     scheduler.start()
+    logging.getLogger("vanguarr").info("Vanguarr startup complete.")
     yield
+    logging.getLogger("vanguarr").info("Vanguarr shutting down.")
     scheduler.shutdown()
 
 

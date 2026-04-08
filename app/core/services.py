@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,9 @@ from app.core.prompts import (
     build_profile_architect_user_prompt,
 )
 from app.core.settings import Settings
+
+
+logger = logging.getLogger("vanguarr.service")
 
 
 class ProfileStore:
@@ -124,6 +128,7 @@ class VanguarrService:
             return list(session.scalars(stmt))
 
     async def run_profile_architect(self, username: str | None = None) -> dict[str, Any]:
+        logger.info("Profile Architect started for target=%s", username or "all-users")
         with self.session_scope() as session:
             task = self._start_task(session, "profile_architect")
 
@@ -154,8 +159,10 @@ class VanguarrService:
                     bounded_profile = self._limit_words(new_profile, max_words=500)
                     self.profile_store.write(current_username, bounded_profile)
                     updated_users.append(current_username)
+                    logger.info("Profile Architect updated profile for user=%s", current_username)
                 except Exception as exc:
                     errors.append(f"{current_username}: {exc}")
+                    logger.exception("Profile Architect failed for user=%s", current_username)
 
             if not users:
                 status = "error"
@@ -174,6 +181,8 @@ class VanguarrService:
         with self.session_scope() as session:
             self._finish_task(session, task.id, status=status, summary=summary)
 
+        logger.info("Profile Architect finished status=%s summary=%s", status, summary)
+
         return {
             "engine": "profile_architect",
             "status": status,
@@ -183,6 +192,7 @@ class VanguarrService:
         }
 
     async def run_decision_engine(self, username: str | None = None) -> dict[str, Any]:
+        logger.info("Decision Engine started for target=%s", username or "all-users")
         with self.session_scope() as session:
             task = self._start_task(session, "decision_engine")
 
@@ -247,9 +257,21 @@ class VanguarrService:
                                         candidate["media_id"],
                                     )
                                     request_id = response.get("id")
+                                    logger.info(
+                                        "Decision Engine requested media user=%s title=%s type=%s request_id=%s",
+                                        current_username,
+                                        candidate["title"],
+                                        candidate["media_type"],
+                                        request_id,
+                                    )
                                 except Exception as exc:
                                     error = str(exc)
                                     errors.append(f"{current_username}::{candidate['title']}: {exc}")
+                                    logger.exception(
+                                        "Decision Engine request failed user=%s title=%s",
+                                        current_username,
+                                        candidate["title"],
+                                    )
 
                             with self.session_scope() as session:
                                 if should_request and error is None:
@@ -286,8 +308,14 @@ class VanguarrService:
                             evaluated += 1
                         except Exception as exc:
                             errors.append(f"{current_username}::{candidate.get('title', 'unknown')}: {exc}")
+                            logger.exception(
+                                "Decision Engine evaluation failed user=%s title=%s",
+                                current_username,
+                                candidate.get("title", "unknown"),
+                            )
                 except Exception as exc:
                     errors.append(f"{current_username}: {exc}")
+                    logger.exception("Decision Engine failed while preparing user=%s", current_username)
 
             if not users:
                 status = "error"
@@ -308,6 +336,8 @@ class VanguarrService:
 
         with self.session_scope() as session:
             self._finish_task(session, task.id, status=status, summary=summary)
+
+        logger.info("Decision Engine finished status=%s summary=%s", status, summary)
 
         return {
             "engine": "decision_engine",

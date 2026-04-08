@@ -14,8 +14,12 @@ services:
       APP_HOST: "${APP_HOST:-0.0.0.0}"
       APP_PORT: "8000"
       TZ: "${TZ:-America/New_York}"
-      DATABASE_URL: "${DATABASE_URL:-sqlite:////app/config/vanguarr.db}"
-      PROFILES_DIR: "${PROFILES_DIR:-/app/config/profiles}"
+      DATA_DIR: "${DATA_DIR:-/app/data}"
+      DATABASE_URL: "${DATABASE_URL:-sqlite:////app/data/vanguarr.db}"
+      PROFILES_DIR: "${PROFILES_DIR:-/app/data/profiles}"
+      LOGS_DIR: "${LOGS_DIR:-/app/data/logs}"
+      LOG_FILE: "${LOG_FILE:-/app/data/logs/vanguarr.log}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       GLOBAL_EXCLUSIONS: "${GLOBAL_EXCLUSIONS:-No Horror,No Reality TV}"
       REQUEST_THRESHOLD: "${REQUEST_THRESHOLD:-0.72}"
       SCHEDULER_ENABLED: "${SCHEDULER_ENABLED:-true}"
@@ -42,4 +46,4 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       ANTHROPIC_API_BASE: "${ANTHROPIC_API_BASE:-}"
     volumes:
-      - ./config:/app/config
+      - "${VANGUARR_DATA_PATH:-./data}:/app/data"

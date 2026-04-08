@@ -28,5 +28,10 @@ config/*.db
 config/*.sqlite
 config/*.sqlite3
 config/profiles/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/logs/
+data/profiles/
 
 .DS_Store

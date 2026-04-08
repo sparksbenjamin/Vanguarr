@@ -20,7 +20,7 @@ The system is security-minded by design: user interests are treated as the targe
 
 - cadence: weekly cron
 - source: Jellyfin playback history
-- output: `/config/profiles/{username}.txt`
+- output: `/app/data/profiles/{username}.txt`
 - goal: keep a compact V3 profile block under 500 words
 
 ### Decision Engine
@@ -29,6 +29,16 @@ The system is security-minded by design: user interests are treated as the targe
 - source: Seer trending plus recommendation endpoints
 - logic: profile block + candidate payload + global exclusions
 - action: POST a Seer request when `decision == REQUEST` and confidence clears the configured threshold
+
+## Mounted Data
+
+Mount `./data` into the container if you want direct access to the raw runtime artifacts.
+
+- SQLite decision history: `./data/vanguarr.db`
+- user persona files: `./data/profiles/*.txt`
+- app log file: `./data/logs/vanguarr.log`
+
+Those files are safe to inspect from the host. The War Room UI reads from the SQLite database, and the Manifest Editor reads the profile text files from the same mounted data path.
 
 ## Web Interface
 
@@ -40,7 +50,7 @@ The system is security-minded by design: user interests are treated as the targe
 
 ## Quick Start
 
-1. Copy `.env.example` to `.env` and fill in Jellyfin, Seer, and LLM settings.
+1. Copy `.env.example` to `.env` and fill in Jellyfin, Seer, and provider values.
 2. Build the stack:
 
 ```bash
@@ -53,13 +63,143 @@ docker compose build
 docker compose up -d
 ```
 
-4. If you are using Ollama, point Vanguarr at the already-running Ollama instance:
+4. Open the dashboard:
 
-```bash
-OLLAMA_API_BASE=http://host.docker.internal:11434
+```text
+http://localhost:8000
 ```
 
-The Docker stack does not run Ollama itself. It connects to an existing Ollama, OpenAI, Anthropic, or compatible endpoint via environment variables. The default Docker example uses `host.docker.internal` so the container can reach an Ollama process running on the host machine.
+## Example Docker Compose
+
+Each example below mounts `./data` so you can inspect the raw SQLite database, profile text files, and the rotating app log from the host.
+
+### Ollama
+
+```yaml
+services:
+  vanguarr:
+    image: ghcr.io/sparksbenjamin/vanguarr:latest
+    container_name: vanguarr
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+    environment:
+      APP_ENV: production
+      TZ: America/New_York
+      DATA_DIR: /app/data
+      DATABASE_URL: sqlite:////app/data/vanguarr.db
+      PROFILES_DIR: /app/data/profiles
+      LOGS_DIR: /app/data/logs
+      LOG_FILE: /app/data/logs/vanguarr.log
+      JELLYFIN_BASE_URL: http://jellyfin:8096
+      JELLYFIN_API_KEY: your-jellyfin-api-key
+      SEER_BASE_URL: http://jellyseerr:5055
+      SEER_API_KEY: your-seer-api-key
+      SEER_REQUEST_USER_ID: ""
+      GLOBAL_EXCLUSIONS: No Horror,No Reality TV
+      REQUEST_THRESHOLD: "0.72"
+      LLM_PROVIDER: ollama
+      LLM_MODEL: ollama/llama3.1:8b
+      OLLAMA_API_BASE: http://host.docker.internal:11434
+```
+
+### OpenAI / ChatGPT
+
+```yaml
+services:
+  vanguarr:
+    image: ghcr.io/sparksbenjamin/vanguarr:latest
+    container_name: vanguarr
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+    environment:
+      APP_ENV: production
+      TZ: America/New_York
+      DATA_DIR: /app/data
+      DATABASE_URL: sqlite:////app/data/vanguarr.db
+      PROFILES_DIR: /app/data/profiles
+      LOGS_DIR: /app/data/logs
+      LOG_FILE: /app/data/logs/vanguarr.log
+      JELLYFIN_BASE_URL: http://jellyfin:8096
+      JELLYFIN_API_KEY: your-jellyfin-api-key
+      SEER_BASE_URL: http://jellyseerr:5055
+      SEER_API_KEY: your-seer-api-key
+      SEER_REQUEST_USER_ID: ""
+      GLOBAL_EXCLUSIONS: No Horror,No Reality TV
+      REQUEST_THRESHOLD: "0.72"
+      LLM_PROVIDER: openai
+      LLM_MODEL: openai/your-openai-model
+      OPENAI_API_KEY: your-openai-api-key
+      OPENAI_API_BASE: https://api.openai.com/v1
+```
+
+### Claude / Anthropic
+
+```yaml
+services:
+  vanguarr:
+    image: ghcr.io/sparksbenjamin/vanguarr:latest
+    container_name: vanguarr
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+    environment:
+      APP_ENV: production
+      TZ: America/New_York
+      DATA_DIR: /app/data
+      DATABASE_URL: sqlite:////app/data/vanguarr.db
+      PROFILES_DIR: /app/data/profiles
+      LOGS_DIR: /app/data/logs
+      LOG_FILE: /app/data/logs/vanguarr.log
+      JELLYFIN_BASE_URL: http://jellyfin:8096
+      JELLYFIN_API_KEY: your-jellyfin-api-key
+      SEER_BASE_URL: http://jellyseerr:5055
+      SEER_API_KEY: your-seer-api-key
+      SEER_REQUEST_USER_ID: ""
+      GLOBAL_EXCLUSIONS: No Horror,No Reality TV
+      REQUEST_THRESHOLD: "0.72"
+      LLM_PROVIDER: anthropic
+      LLM_MODEL: anthropic/your-claude-model
+      ANTHROPIC_API_KEY: your-anthropic-api-key
+      ANTHROPIC_API_BASE: https://api.anthropic.com
+```
+
+## Runtime Environment Variables
+
+- `DATA_DIR`
+- `DATABASE_URL`
+- `PROFILES_DIR`
+- `LOGS_DIR`
+- `LOG_FILE`
+- `JELLYFIN_BASE_URL`
+- `JELLYFIN_API_KEY`
+- `SEER_BASE_URL`
+- `SEER_API_KEY`
+- `SEER_REQUEST_USER_ID`
+- `LLM_PROVIDER`
+- `LLM_MODEL`
+- `OLLAMA_API_BASE`
+- `OPENAI_API_KEY`
+- `OPENAI_API_BASE`
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_API_BASE`
+- `GLOBAL_EXCLUSIONS`
+- `REQUEST_THRESHOLD`
+- `PROFILE_CRON`
+- `DECISION_CRON`
 
 ## Multi-Arch Images
 
@@ -77,26 +217,10 @@ docker buildx build --platform linux/amd64,linux/arm64 -t vanguarr:multiarch-tes
 
 If you want to publish to a different registry, override `REGISTRY_IMAGE` when invoking Buildx or update the workflow metadata image name.
 
-## Core Environment Variables
-
-- `JELLYFIN_BASE_URL`
-- `JELLYFIN_API_KEY`
-- `SEER_BASE_URL`
-- `SEER_API_KEY`
-- `LLM_PROVIDER`
-- `LLM_MODEL`
-- `OLLAMA_API_BASE`
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `GLOBAL_EXCLUSIONS`
-- `REQUEST_THRESHOLD`
-- `PROFILE_CRON`
-- `DECISION_CRON`
-
 ## Development
 
 Run a quick smoke test with:
 
 ```bash
-pytest
+python -m pytest
 ```

@@ -8,8 +8,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-CONFIG_DIR = BASE_DIR / "config"
-DEFAULT_PROFILES_DIR = CONFIG_DIR / "profiles"
+DATA_DIR = BASE_DIR / "data"
+DEFAULT_PROFILES_DIR = DATA_DIR / "profiles"
+DEFAULT_LOGS_DIR = DATA_DIR / "logs"
+DEFAULT_LOG_FILE = DEFAULT_LOGS_DIR / "vanguarr.log"
 
 
 class Settings(BaseSettings):
@@ -19,8 +21,12 @@ class Settings(BaseSettings):
     app_port: int = 8000
     timezone: str = Field(default="America/New_York", alias="TZ")
 
-    database_url: str = f"sqlite:///{(CONFIG_DIR / 'vanguarr.db').as_posix()}"
+    data_dir: Path = DATA_DIR
+    database_url: str = f"sqlite:///{(DATA_DIR / 'vanguarr.db').as_posix()}"
     profiles_dir: Path = DEFAULT_PROFILES_DIR
+    logs_dir: Path = DEFAULT_LOGS_DIR
+    log_file: Path = DEFAULT_LOG_FILE
+    log_level: str = "INFO"
     global_exclusions: str = "No Horror,No Reality TV"
     request_threshold: float = 0.72
     scheduler_enabled: bool = True
@@ -64,8 +70,13 @@ class Settings(BaseSettings):
         return value
 
     def ensure_runtime_dirs(self) -> None:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        if self.database_url.startswith("sqlite:///") and ":memory:" not in self.database_url:
+            db_path = Path(self.database_url.replace("sqlite:///", "", 1))
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)
