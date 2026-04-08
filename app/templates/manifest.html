@@ -8,13 +8,13 @@
         <p class="panel-kicker">Profiles</p>
         <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Manifest editor</h1>
         <p class="mt-3 text-sm leading-6 text-[var(--text-soft)] sm:text-[0.96rem]">
-          Review the raw v3 persona block, make a manual correction when needed, and keep the stored taste model grounded in what users actually watch.
+          Edit the canonical JSON taste manifest, then inspect the derived summary block the engines and operators use for quick review.
         </p>
       </div>
       <div class="surface rounded-[1.25rem] bg-[rgba(255,255,255,0.03)] px-4 py-4 xl:min-w-[320px]">
         <p class="panel-kicker">Mounted Path</p>
         <p class="mt-2 mono text-sm text-white">./data/profiles</p>
-        <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">The editor writes directly to the same host-visible files operators can inspect outside the UI.</p>
+        <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">Each profile writes a JSON manifest plus a companion summary text file into the same host-visible directory.</p>
       </div>
     </div>
   </section>
@@ -71,36 +71,60 @@
       <div class="border-b border-white/5 px-5 py-4">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p class="panel-kicker">Raw Profile Block</p>
+            <p class="panel-kicker">JSON Manifest</p>
             <h2 class="mt-2 panel-title">{{ selected_user or "Choose a profile" }}</h2>
-            {% if profile_path %}
-            <p class="mono mt-2 text-xs text-[var(--text-dim)]">{{ profile_path }}</p>
+            {% if profile_json_path %}
+            <p class="mono mt-2 text-xs text-[var(--text-dim)]">{{ profile_json_path }}</p>
             {% else %}
-            <p class="mt-2 text-sm text-[var(--text-soft)]">Select a profile from the left rail or type a username to start a new block.</p>
+            <p class="mt-2 text-sm text-[var(--text-soft)]">Select a profile from the left rail or type a username to start a new manifest.</p>
             {% endif %}
           </div>
           <div class="max-w-md rounded-2xl border border-[rgba(160,182,207,0.1)] bg-white/5 px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
-            Keep the block compact: long-term interests, recent momentum, taste signals, avoidances, and request bias.
+            The manifest is the source of truth. The summary preview below is regenerated from this JSON whenever you save.
           </div>
         </div>
       </div>
 
-      <form class="space-y-4 px-5 py-5" method="post" action="/manifest/save">
-        <input type="hidden" name="username" value="{{ selected_user }}" />
-        <textarea
-          name="content"
-          class="field-textarea mono text-sm"
-          placeholder="Load or create a profile block to edit it here."
-        >{{ profile_content }}</textarea>
-        <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <p class="text-sm leading-6 text-[var(--text-soft)]">
-            Saved changes write back to the mounted profile file so the raw manifest stays visible both in the UI and on disk.
-          </p>
-          <button class="button button-amber lg:min-w-[180px]" type="submit" {% if not selected_user %}disabled{% endif %}>
-            Save Manifest
-          </button>
+      <div class="grid gap-5 px-5 py-5 2xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.85fr)]">
+        <form class="space-y-4" method="post" action="/manifest/save">
+          <input type="hidden" name="username" value="{{ selected_user }}" />
+          <textarea
+            name="content"
+            class="field-textarea mono text-sm"
+            placeholder="Load or create a profile manifest to edit it here."
+          >{{ profile_content }}</textarea>
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <p class="text-sm leading-6 text-[var(--text-soft)]">
+              Save writes the canonical JSON manifest back to disk and regenerates the summary preview file beside it.
+            </p>
+            <button class="button button-amber lg:min-w-[180px]" type="submit" {% if not selected_user %}disabled{% endif %}>
+              Save Manifest
+            </button>
+          </div>
+        </form>
+
+        <div class="space-y-5">
+          <section class="rounded-[1.35rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)]">
+            <div class="border-b border-white/5 px-5 py-4">
+              <p class="panel-kicker">Derived Summary</p>
+              {% if profile_summary_path %}
+              <p class="mono mt-2 text-xs text-[var(--text-dim)]">{{ profile_summary_path }}</p>
+              {% else %}
+              <p class="mt-2 text-sm text-[var(--text-soft)]">The summary preview appears after a profile is loaded.</p>
+              {% endif %}
+            </div>
+            <pre class="max-h-[620px] overflow-auto px-5 py-5 text-sm leading-6 text-[var(--text-soft)] whitespace-pre-wrap">{{ profile_summary or "No summary generated yet." }}</pre>
+          </section>
+
+          <section class="rounded-[1.35rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-5 py-5">
+            <p class="panel-kicker">What To Edit</p>
+            <div class="mt-3 space-y-3 text-sm leading-6 text-[var(--text-soft)]">
+              <p>Use JSON for durable fields like `adjacent_genres`, `adjacent_themes`, `explicit_feedback`, `profile_exclusions`, and `operator_notes`.</p>
+              <p>Core watch-derived fields can be tuned manually, but they will usually be refreshed by Profile Architect from live Jellyfin history.</p>
+            </div>
+          </section>
         </div>
-      </form>
+      </div>
     </section>
   </div>
 </section>

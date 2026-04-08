@@ -31,30 +31,127 @@ class ProfileStore:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def path_for(self, username: str) -> Path:
+    def json_path_for(self, username: str) -> Path:
+        safe_name = quote(username, safe="-_.")
+        return self.root / f"{safe_name}.json"
+
+    def summary_path_for(self, username: str) -> Path:
         safe_name = quote(username, safe="-_.")
         return self.root / f"{safe_name}.txt"
 
+    def path_for(self, username: str) -> Path:
+        return self.json_path_for(username)
+
     def list_profiles(self) -> list[str]:
-        return sorted(unquote(path.stem) for path in self.root.glob("*.txt"))
+        json_profiles = {unquote(path.stem) for path in self.root.glob("*.json")}
+        text_profiles = {unquote(path.stem) for path in self.root.glob("*.txt")}
+        return sorted(json_profiles | text_profiles)
 
-    def read(self, username: str) -> str:
-        path = self.path_for(username)
-        if not path.exists():
-            return self.default_block(username)
-        return path.read_text(encoding="utf-8")
+    def read_payload(self, username: str) -> dict[str, Any]:
+        json_path = self.json_path_for(username)
+        if json_path.exists():
+            try:
+                payload = json.loads(json_path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    return self._normalize_payload(username, payload)
+            except json.JSONDecodeError:
+                logger.warning("Profile JSON is invalid for user=%s path=%s", username, json_path)
 
-    def write(self, username: str, content: str) -> Path:
-        path = self.path_for(username)
-        body = content.strip()
-        if body:
-            body += "\n"
-        path.write_text(body, encoding="utf-8")
-        return path
+        summary_path = self.summary_path_for(username)
+        if summary_path.exists():
+            return self.legacy_payload(username, summary_path.read_text(encoding="utf-8"))
+
+        return self.default_payload(username)
+
+    def read_payload_text(self, username: str) -> str:
+        return json.dumps(self.read_payload(username), indent=2, ensure_ascii=True)
+
+    def read_summary(self, username: str) -> str:
+        payload = self.read_payload(username)
+        summary = str(payload.get("summary_block") or "").strip()
+        return summary or self.default_block(username)
+
+    def write_payload(self, username: str, payload: dict[str, Any]) -> tuple[Path, Path]:
+        normalized = self._normalize_payload(username, payload)
+        json_path = self.json_path_for(username)
+        summary_path = self.summary_path_for(username)
+
+        json_body = json.dumps(normalized, indent=2, ensure_ascii=True).strip()
+        if json_body:
+            json_body += "\n"
+        json_path.write_text(json_body, encoding="utf-8")
+
+        summary_body = str(normalized.get("summary_block") or "").strip()
+        if summary_body:
+            summary_body += "\n"
+        summary_path.write_text(summary_body, encoding="utf-8")
+
+        return json_path, summary_path
+
+    def _normalize_payload(self, username: str, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = self.default_payload(username)
+        normalized.update(payload)
+        normalized["profile_version"] = str(normalized.get("profile_version") or "v4")
+        normalized["username"] = username
+        summary = str(normalized.get("summary_block") or "").strip()
+        normalized["summary_block"] = summary or self.default_block(username)
+        return normalized
+
+    @classmethod
+    def default_payload(cls, username: str) -> dict[str, Any]:
+        return {
+            "profile_version": "v5",
+            "profile_state": "default",
+            "username": username,
+            "generated_at": None,
+            "history_count": 0,
+            "unique_titles": 0,
+            "top_titles": [],
+            "top_genres": [],
+            "ranked_genres": [],
+            "primary_genres": [],
+            "secondary_genres": [],
+            "recent_genres": [],
+            "recent_momentum": [],
+            "repeat_titles": [],
+            "format_preference": {"preferred": "balanced", "movie_plays": 0, "tv_plays": 0},
+            "release_year_preference": {"bias": "balanced", "average_year": None},
+            "average_top_rating": None,
+            "genre_focus_share": 0.0,
+            "discovery_lanes": [],
+            "adjacent_genres": [],
+            "adjacent_themes": [],
+            "seed_lanes": [],
+            "explicit_feedback": {
+                "liked_titles": [],
+                "disliked_titles": [],
+                "liked_genres": [],
+                "disliked_genres": [],
+            },
+            "profile_exclusions": [],
+            "operator_notes": "",
+            "summary_block": cls.default_block(username),
+        }
+
+    @classmethod
+    def legacy_payload(cls, username: str, summary_text: str) -> dict[str, Any]:
+        payload = cls.default_payload(username)
+        payload["profile_state"] = "legacy_text"
+        summary = summary_text.strip()
+        if summary:
+            payload["summary_block"] = summary
+            payload["legacy_summary_text"] = summary
+        return payload
+
+    @staticmethod
+    def is_structured_payload(payload: dict[str, Any]) -> bool:
+        if str(payload.get("profile_state") or "") in {"default", "legacy_text"}:
+            return False
+        return int(payload.get("history_count") or 0) > 0
 
     @staticmethod
     def default_block(username: str) -> str:
-        return f"""[VANGUARR_PROFILE_V3]
+        return f"""[VANGUARR_PROFILE_SUMMARY_V1]
 User: {username}
 Core Interests:
 - Insufficient viewing history.
@@ -102,10 +199,18 @@ class VanguarrService:
         return self.profile_store.list_profiles()
 
     def read_profile(self, username: str) -> str:
-        return self.profile_store.read(username)
+        return self.profile_store.read_payload_text(username)
+
+    def read_profile_summary(self, username: str) -> str:
+        return self.profile_store.read_summary(username)
 
     def save_profile(self, username: str, content: str) -> Path:
-        return self.profile_store.write(username, content)
+        payload = json.loads(content)
+        if not isinstance(payload, dict):
+            raise ValueError("Profile manifest must be a JSON object.")
+        normalized = self._normalize_saved_profile_payload(username, payload)
+        json_path, _summary_path = self.profile_store.write_payload(username, normalized)
+        return json_path
 
     def get_logs(self, *, search: str | None = None, limit: int | None = None) -> list[DecisionLog]:
         with self.session_scope() as session:
@@ -144,6 +249,7 @@ class VanguarrService:
                 current_username = user.get("Name", "unknown")
                 try:
                     history = await self.jellyfin.get_playback_history(user["Id"], self.settings.profile_history_limit)
+                    stored_payload = self.profile_store.read_payload(current_username)
                     compact_history = self._build_profile_history_context(
                         history,
                         top_limit=self.settings.profile_architect_top_titles_limit,
@@ -153,13 +259,13 @@ class VanguarrService:
                         current_username,
                         compact_history,
                     )
-                    new_profile = self._render_profile_block(
+                    profile_payload = self._build_profile_payload(
                         current_username,
                         compact_history,
                         enrichment=enrichment,
+                        existing_payload=stored_payload,
                     )
-                    bounded_profile = self._limit_words(new_profile, max_words=500)
-                    self.profile_store.write(current_username, bounded_profile)
+                    self.profile_store.write_payload(current_username, profile_payload)
                     updated_users.append(current_username)
                     logger.info("Profile Architect updated profile for user=%s", current_username)
                 except Exception as exc:
@@ -198,6 +304,8 @@ class VanguarrService:
         with self.session_scope() as session:
             task = self._start_task(session, "decision_engine")
 
+        scored = 0
+        shortlisted = 0
         evaluated = 0
         requested = 0
         skipped = 0
@@ -213,58 +321,125 @@ class VanguarrService:
                 current_username = user.get("Name", "unknown")
                 try:
                     history = await self.jellyfin.get_playback_history(user["Id"], self.settings.profile_history_limit)
-                    profile_summary = self._build_profile_history_context(
+                    history_summary = self._build_profile_history_context(
                         history,
                         top_limit=self.settings.profile_architect_top_titles_limit,
                         recent_limit=self.settings.profile_architect_recent_momentum_limit,
                     )
-                    profile_block = self.profile_store.read(current_username)
-                    if profile_block.strip() == self.profile_store.default_block(current_username).strip():
-                        profile_block = self._render_profile_block(current_username, profile_summary)
-                    recommendation_seeds = self._select_recommendation_seeds(
+                    stored_profile = self.profile_store.read_payload(current_username)
+                    profile_payload = self._build_profile_payload(
+                        current_username,
+                        history_summary,
+                        enrichment={
+                            "adjacent_genres": stored_profile.get("adjacent_genres", []),
+                            "adjacent_themes": stored_profile.get("adjacent_themes", []),
+                        },
+                        existing_payload=stored_profile,
+                    )
+                    if not ProfileStore.is_structured_payload(stored_profile) and int(
+                        profile_payload.get("history_count") or 0
+                    ) > 0:
+                        self.profile_store.write_payload(current_username, profile_payload)
+
+                    recommendation_seeds = self._build_recommendation_seed_pool(
                         history,
+                        profile_summary=profile_payload,
                         limit=self.settings.recommendation_seed_limit,
                     )
                     viewing_history = self._build_viewing_history_context(
                         history,
                         recommendation_seeds=recommendation_seeds,
-                        profile_summary=profile_summary,
+                        profile_summary=profile_payload,
                     )
-                    candidates = await self.seer.discover_candidates(
+                    candidate_pool = await self.seer.discover_candidates(
                         recommendation_seeds,
                         limit=self.settings.candidate_limit,
+                        trending_limit=self.settings.trending_candidate_limit,
+                    )
+                    watched_media_keys = self._build_watched_media_keys(history)
+                    ranked_candidates = self._rank_candidate_pool(
+                        candidate_pool,
+                        profile_summary=profile_payload,
                     )
 
-                    for candidate in candidates:
+                    with self.session_scope() as session:
+                        requested_media_keys = self._requested_media_keys(session, current_username)
+
+                    filtered_candidates: list[dict[str, Any]] = []
+                    for candidate in ranked_candidates:
+                        scored += 1
                         if self._is_managed_candidate(candidate):
                             skipped += 1
                             continue
+                        if self._candidate_key(candidate) in watched_media_keys:
+                            skipped += 1
+                            continue
+                        if self._candidate_key(candidate) in requested_media_keys:
+                            skipped += 1
+                            continue
 
-                        with self.session_scope() as session:
-                            if self._already_requested(session, current_username, candidate):
-                                skipped += 1
-                                continue
+                        deterministic_score = float(
+                            candidate.get("recommendation_features", {}).get("deterministic_score") or 0.0
+                        )
+                        if deterministic_score < self._decision_prefilter_threshold():
+                            skipped += 1
+                            continue
 
+                        filtered_candidates.append(candidate)
+
+                    candidates = self._diversify_candidates(
+                        filtered_candidates,
+                        limit=self.settings.decision_shortlist_limit,
+                    )
+                    shortlisted += len(candidates)
+
+                    for candidate in candidates:
                         try:
-                            llm_payload = await self.llm.generate_json(
-                                messages=build_decision_messages(
-                                    username=current_username,
-                                    profile_block=profile_block,
-                                    viewing_history=viewing_history,
-                                    candidate=candidate,
-                                    global_exclusions=exclusions,
-                                ),
-                                max_tokens=350,
-                                temperature=0,
+                            deterministic_score = float(
+                                candidate.get("recommendation_features", {}).get("deterministic_score") or 0.0
                             )
+                            llm_vote = "UNAVAILABLE"
+                            llm_confidence: float | None = None
+                            llm_reasoning = ""
 
-                            decision = str(llm_payload.get("decision", "IGNORE")).upper()
-                            if decision not in {"REQUEST", "IGNORE"}:
-                                decision = "IGNORE"
+                            try:
+                                llm_payload = await self.llm.generate_json(
+                                    messages=build_decision_messages(
+                                        username=current_username,
+                                        profile_payload=profile_payload,
+                                        viewing_history=viewing_history,
+                                        candidate=candidate,
+                                        global_exclusions=exclusions,
+                                    ),
+                                    max_tokens=350,
+                                    temperature=0,
+                                )
+                                llm_vote = str(llm_payload.get("decision", "IGNORE")).upper()
+                                if llm_vote not in {"REQUEST", "IGNORE"}:
+                                    llm_vote = "IGNORE"
+                                llm_confidence = self._coerce_float(llm_payload.get("confidence"))
+                                llm_reasoning = str(llm_payload.get("reasoning", "No reasoning provided.")).strip()
+                            except Exception as exc:
+                                logger.warning(
+                                    "Decision Engine LLM fallback triggered user=%s title=%s reason=%s",
+                                    current_username,
+                                    candidate.get("title", "unknown"),
+                                    exc,
+                                )
 
-                            confidence = self._coerce_float(llm_payload.get("confidence"))
-                            reasoning = str(llm_payload.get("reasoning", "No reasoning provided.")).strip()
-                            should_request = decision == "REQUEST" and confidence >= self.settings.request_threshold
+                            confidence = self._blend_confidences(
+                                deterministic_score=deterministic_score,
+                                llm_confidence=llm_confidence,
+                                llm_vote=llm_vote,
+                            )
+                            should_request = confidence >= self.settings.request_threshold
+                            decision = "REQUEST" if should_request else "IGNORE"
+                            reasoning = self._compose_decision_reasoning(
+                                candidate,
+                                hybrid_confidence=confidence,
+                                llm_vote=llm_vote,
+                                llm_reasoning=llm_reasoning,
+                            )
 
                             request_id: int | None = None
                             error: str | None = None
@@ -275,6 +450,7 @@ class VanguarrService:
                                         candidate["media_id"],
                                     )
                                     request_id = response.get("id")
+                                    requested_media_keys.add(self._candidate_key(candidate))
                                     logger.info(
                                         "Decision Engine requested media user=%s title=%s type=%s request_id=%s",
                                         current_username,
@@ -341,12 +517,15 @@ class VanguarrService:
             elif errors:
                 status = "partial"
                 summary = (
-                    f"Evaluated {evaluated} candidates, requested {requested}, "
+                    f"Scored {scored} candidates, shortlisted {shortlisted}, evaluated {evaluated}, requested {requested}, "
                     f"skipped {skipped}, errors {len(errors)}."
                 )
             else:
                 status = "success"
-                summary = f"Evaluated {evaluated} candidates, requested {requested}, skipped {skipped}."
+                summary = (
+                    f"Scored {scored} candidates, shortlisted {shortlisted}, "
+                    f"evaluated {evaluated}, requested {requested}, skipped {skipped}."
+                )
         except Exception as exc:
             status = "error"
             summary = f"Decision Engine failed: {exc}"
@@ -361,6 +540,8 @@ class VanguarrService:
             "engine": "decision_engine",
             "status": status,
             "summary": summary,
+            "scored": scored,
+            "shortlisted": shortlisted,
             "evaluated": evaluated,
             "requested": requested,
             "skipped": skipped,
@@ -391,6 +572,18 @@ class VanguarrService:
         )
         return session.scalar(stmt) is not None
 
+    @staticmethod
+    def _candidate_key(candidate: dict[str, Any]) -> tuple[str, int]:
+        return str(candidate.get("media_type") or "unknown"), int(candidate.get("media_id") or 0)
+
+    @staticmethod
+    def _requested_media_keys(session: Session, username: str) -> set[tuple[str, int]]:
+        stmt = select(RequestedMedia).where(RequestedMedia.username == username)
+        return {
+            (item.media_type, item.media_id)
+            for item in session.scalars(stmt)
+        }
+
     @classmethod
     def _build_profile_history_context(
         cls,
@@ -405,6 +598,7 @@ class VanguarrService:
         recent_genre_counts: Counter[str] = Counter()
         media_type_counts: Counter[str] = Counter()
         genre_pairs: Counter[tuple[str, str]] = Counter()
+        release_years: list[int] = []
         recent_grouped: dict[tuple[str, str], dict[str, Any]] = {}
 
         for item in history:
@@ -439,6 +633,10 @@ class VanguarrService:
 
             if media_type in {"movie", "tv"}:
                 media_type_counts[media_type] += 1
+
+            release_year = cls._extract_history_release_year(item)
+            if release_year is not None:
+                release_years.append(release_year)
 
             for genre in genres:
                 genre_counts[genre] += 1
@@ -489,6 +687,15 @@ class VanguarrService:
         primary_genres = [genre for genre, _score in ranked_genres[:4]]
         secondary_genres = [genre for genre, _score in ranked_genres[4:8]]
         recent_genres = [genre for genre, _count in recent_genre_counts.most_common(4)]
+        ranked_genre_details = [
+            {
+                "genre": genre,
+                "raw_count": int(genre_counts.get(genre, 0)),
+                "recent_count": int(recent_genre_counts.get(genre, 0)),
+                "weighted_score": round(score, 3),
+            }
+            for genre, score in ranked_genres[:8]
+        ]
 
         total_genre_events = sum(genre_counts.values())
         focus_share = 0.0
@@ -500,12 +707,14 @@ class VanguarrService:
             "unique_titles": len(grouped),
             "top_titles": normalized_top_titles,
             "top_genres": [genre for genre, _count in genre_counts.most_common(8)],
+            "ranked_genres": ranked_genre_details,
             "primary_genres": primary_genres,
             "secondary_genres": secondary_genres,
             "recent_genres": recent_genres,
             "recent_momentum": normalized_recent_momentum,
             "repeat_titles": repeat_titles,
             "format_preference": cls._determine_format_preference(media_type_counts),
+            "release_year_preference": cls._build_release_year_preference(release_years),
             "average_top_rating": cls._average_rating(normalized_top_titles),
             "genre_focus_share": round(focus_share, 3),
             "discovery_lanes": cls._build_discovery_lanes(
@@ -517,12 +726,7 @@ class VanguarrService:
         }
 
     @classmethod
-    def _select_recommendation_seeds(
-        cls,
-        history: list[dict[str, Any]],
-        *,
-        limit: int,
-    ) -> list[dict[str, Any]]:
+    def _collect_recommendation_seed_candidates(cls, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
         grouped: dict[tuple[str, int], dict[str, Any]] = {}
 
         for item in history:
@@ -576,11 +780,103 @@ class VanguarrService:
         )
 
         trimmed: list[dict[str, Any]] = []
-        for seed in seeds[:limit]:
+        for seed in seeds:
             cleaned = dict(seed)
             cleaned.pop("_last_played_score", None)
             trimmed.append(cleaned)
         return trimmed
+
+    @classmethod
+    def _select_recommendation_seeds(
+        cls,
+        history: list[dict[str, Any]],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        return cls._collect_recommendation_seed_candidates(history)[:limit]
+
+    @classmethod
+    def _build_recommendation_seed_pool(
+        cls,
+        history: list[dict[str, Any]],
+        *,
+        profile_summary: dict[str, Any],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        seeds = cls._collect_recommendation_seed_candidates(history)
+        if not seeds or limit <= 0:
+            return []
+
+        primary_genres = cls._normalize_genres(profile_summary.get("primary_genres", []), limit=4)
+        recent_genres = cls._normalize_genres(profile_summary.get("recent_genres", []), limit=3)
+
+        recent_order = sorted(
+            seeds,
+            key=lambda item: (
+                -float(cls._to_timestamp(item.get("last_played"))),
+                -int(item.get("play_count") or 0),
+                -float(item.get("community_rating") or 0.0),
+                str(item.get("title") or "").lower(),
+            ),
+        )
+
+        top_lookup = {
+            (str(item.get("media_type") or ""), int(item.get("media_id") or 0))
+            for item in seeds[: max(2, min(limit, 4))]
+        }
+        recent_lookup = {
+            (str(item.get("media_type") or ""), int(item.get("media_id") or 0))
+            for item in recent_order[: max(2, min(limit, 4))]
+        }
+
+        pool: list[dict[str, Any]] = []
+        for seed in seeds:
+            annotated = dict(seed)
+            annotated["seed_lanes"] = cls._build_seed_lanes(
+                seed,
+                top_lookup=top_lookup,
+                recent_lookup=recent_lookup,
+                primary_genres=primary_genres,
+                recent_genres=recent_genres,
+            )
+            if annotated["seed_lanes"]:
+                pool.append(annotated)
+
+        pool.sort(
+            key=lambda item: (
+                -len(item.get("seed_lanes", [])),
+                -int(item.get("play_count") or 0),
+                -float(cls._to_timestamp(item.get("last_played"))),
+                -float(item.get("community_rating") or 0.0),
+                str(item.get("title") or "").lower(),
+            )
+        )
+        return pool[:limit]
+
+    @classmethod
+    def _build_seed_lanes(
+        cls,
+        seed: dict[str, Any],
+        *,
+        top_lookup: set[tuple[str, int]],
+        recent_lookup: set[tuple[str, int]],
+        primary_genres: list[str],
+        recent_genres: list[str],
+    ) -> list[str]:
+        lanes: list[str] = []
+        key = (str(seed.get("media_type") or ""), int(seed.get("media_id") or 0))
+        seed_genres = cls._normalize_genres(seed.get("genres", []), limit=5)
+
+        if key in top_lookup:
+            lanes.append("top_seed")
+        if int(seed.get("play_count") or 0) > 1:
+            lanes.append("repeat_watch_seed")
+        if key in recent_lookup:
+            lanes.append("recent_seed")
+        if cls._intersect_strings(seed_genres, primary_genres) or cls._intersect_strings(seed_genres, recent_genres):
+            lanes.append("genre_anchor_seed")
+
+        return lanes
 
     @classmethod
     def _build_viewing_history_context(
@@ -610,13 +906,255 @@ class VanguarrService:
             "top_content": recommendation_seeds,
             "top_titles": summary.get("top_titles", [])[:5],
             "top_genres": summary.get("top_genres", []),
+            "ranked_genres": summary.get("ranked_genres", [])[:5],
             "primary_genres": summary.get("primary_genres", []),
+            "secondary_genres": summary.get("secondary_genres", []),
             "repeat_titles": summary.get("repeat_titles", [])[:3],
             "recent_momentum": summary.get("recent_momentum", [])[:5],
             "format_preference": summary.get("format_preference", {}),
+            "release_year_preference": summary.get("release_year_preference", {}),
             "discovery_lanes": summary.get("discovery_lanes", []),
+            "adjacent_genres": summary.get("adjacent_genres", []),
+            "adjacent_themes": summary.get("adjacent_themes", []),
+            "seed_lanes": summary.get("seed_lanes", []),
             "recent_plays": recent_plays,
         }
+
+    @classmethod
+    def _build_watched_media_keys(cls, history: list[dict[str, Any]]) -> set[tuple[str, int]]:
+        watched: set[tuple[str, int]] = set()
+        for item in history:
+            media_type = cls._map_history_media_type(item.get("Type"))
+            tmdb_id = cls._extract_tmdb_id(item)
+            if media_type not in {"movie", "tv"} or tmdb_id is None:
+                continue
+            watched.add((media_type, tmdb_id))
+        return watched
+
+    @classmethod
+    def _rank_candidate_pool(
+        cls,
+        candidates: list[dict[str, Any]],
+        *,
+        profile_summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        enriched = [cls._annotate_candidate(candidate, profile_summary=profile_summary) for candidate in candidates]
+        enriched.sort(
+            key=lambda item: (
+                -float(item.get("recommendation_features", {}).get("deterministic_score") or 0.0),
+                -float(item.get("rating") or 0.0),
+                -float(item.get("vote_count") or 0.0),
+                str(item.get("title") or "").lower(),
+            )
+        )
+        return enriched
+
+    @classmethod
+    def _annotate_candidate(
+        cls,
+        candidate: dict[str, Any],
+        *,
+        profile_summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        annotated = dict(candidate)
+        annotated["recommendation_features"] = cls._build_candidate_features(
+            candidate,
+            profile_summary=profile_summary,
+        )
+        return annotated
+
+    @classmethod
+    def _build_candidate_features(
+        cls,
+        candidate: dict[str, Any],
+        *,
+        profile_summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        candidate_genres = cls._normalize_genres(candidate.get("genres", []), limit=6)
+        primary_genres = cls._normalize_genres(profile_summary.get("primary_genres", []), limit=6)
+        secondary_genres = cls._normalize_genres(profile_summary.get("secondary_genres", []), limit=6)
+        recent_genres = cls._normalize_genres(profile_summary.get("recent_genres", []), limit=6)
+        discovery_lanes = cls._merge_unique_strings(
+            cls._normalize_genres(profile_summary.get("discovery_lanes", []), limit=6),
+            profile_summary.get("adjacent_genres", []),
+        )[:6]
+        source_lanes = cls._normalize_string_list(candidate.get("source_lanes", []), limit=6)
+
+        matched_primary = cls._intersect_strings(candidate_genres, primary_genres)
+        matched_secondary = cls._intersect_strings(candidate_genres, secondary_genres)
+        matched_recent = cls._intersect_strings(candidate_genres, recent_genres)
+        matched_discovery = cls._intersect_strings(candidate_genres, discovery_lanes)
+
+        source_titles = cls._extract_source_titles(candidate.get("sources", []))
+        top_titles = {str(item.get("title") or "").strip().lower() for item in profile_summary.get("top_titles", [])}
+        repeat_titles = {str(item.get("title") or "").strip().lower() for item in profile_summary.get("repeat_titles", [])}
+        recent_titles = {str(item.get("title") or "").strip().lower() for item in profile_summary.get("recent_momentum", [])}
+        recommended_source_titles = [title for title in source_titles if title.lower() in top_titles or title.lower() in repeat_titles]
+
+        score_breakdown: dict[str, float] = {}
+        score_breakdown["source_affinity"] = cls._score_source_affinity(
+            sources=candidate.get("sources", []),
+            source_lanes=source_lanes,
+            source_titles=source_titles,
+            top_titles=top_titles,
+            repeat_titles=repeat_titles,
+            recent_titles=recent_titles,
+        )
+        score_breakdown["genre_affinity"] = cls._score_genre_affinity(
+            candidate_genres=candidate_genres,
+            matched_primary=matched_primary,
+            matched_secondary=matched_secondary,
+            matched_recent=matched_recent,
+            matched_discovery=matched_discovery,
+            ranked_genres=profile_summary.get("ranked_genres", []),
+        )
+        score_breakdown["format_fit"] = cls._score_format_fit(
+            candidate_media_type=str(candidate.get("media_type") or ""),
+            format_preference=profile_summary.get("format_preference", {}),
+        )
+        freshness_score, freshness_fit = cls._score_release_year_fit(
+            candidate_release_date=candidate.get("release_date"),
+            release_year_preference=profile_summary.get("release_year_preference", {}),
+        )
+        score_breakdown["freshness_fit"] = freshness_score
+        score_breakdown["quality"] = cls._score_quality(
+            rating=candidate.get("rating"),
+            vote_count=candidate.get("vote_count"),
+        )
+        score_breakdown["exploration"] = cls._score_exploration(
+            matched_discovery=matched_discovery,
+            source_titles=source_titles,
+            recommended_source_titles=recommended_source_titles,
+        )
+        score_breakdown["popularity"] = cls._score_popularity(candidate.get("popularity"))
+        score_breakdown["feedback_fit"] = cls._score_feedback_fit(
+            candidate_title=str(candidate.get("title") or ""),
+            candidate_genres=candidate_genres,
+            explicit_feedback=profile_summary.get("explicit_feedback", {}),
+        )
+
+        deterministic_score = round(min(1.0, sum(score_breakdown.values())), 3)
+        lane_tags = cls._derive_lane_tags(
+            sources=candidate.get("sources", []),
+            source_lanes=source_lanes,
+            matched_primary=matched_primary,
+            matched_recent=matched_recent,
+            matched_discovery=matched_discovery,
+        )
+
+        return {
+            "deterministic_score": deterministic_score,
+            "lane_tags": lane_tags,
+            "matched_primary_genres": matched_primary,
+            "matched_secondary_genres": matched_secondary,
+            "matched_recent_genres": matched_recent,
+            "matched_discovery_lanes": matched_discovery,
+            "source_titles": source_titles,
+            "source_lanes": source_lanes,
+            "recommended_source_titles": recommended_source_titles,
+            "dominant_genre": cls._choose_dominant_genre(
+                candidate_genres,
+                matched_primary=matched_primary,
+                matched_recent=matched_recent,
+            ),
+            "freshness_fit": freshness_fit,
+            "score_breakdown": {key: round(value, 3) for key, value in score_breakdown.items()},
+            "analysis_summary": cls._build_analysis_summary(
+                matched_primary=matched_primary,
+                matched_recent=matched_recent,
+                matched_discovery=matched_discovery,
+                source_titles=source_titles,
+                lane_tags=lane_tags,
+                freshness_fit=freshness_fit,
+            ),
+        }
+
+    @classmethod
+    def _diversify_candidates(
+        cls,
+        candidates: list[dict[str, Any]],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        selected: list[dict[str, Any]] = []
+        lane_counts: Counter[str] = Counter()
+        genre_counts: Counter[str] = Counter()
+
+        for candidate in candidates:
+            if len(selected) >= limit:
+                break
+
+            features = candidate.get("recommendation_features", {})
+            lane_key = (features.get("lane_tags") or ["generic"])[0]
+            dominant_genre = str(features.get("dominant_genre") or "unknown")
+
+            if lane_counts[lane_key] >= 3:
+                continue
+            if dominant_genre != "unknown" and genre_counts[dominant_genre] >= 3:
+                continue
+
+            selected.append(candidate)
+            lane_counts[lane_key] += 1
+            if dominant_genre != "unknown":
+                genre_counts[dominant_genre] += 1
+
+        if len(selected) < limit:
+            selected_keys = {cls._candidate_key(candidate) for candidate in selected}
+            for candidate in candidates:
+                if len(selected) >= limit:
+                    break
+                if cls._candidate_key(candidate) in selected_keys:
+                    continue
+                selected.append(candidate)
+                selected_keys.add(cls._candidate_key(candidate))
+
+        return selected
+
+    def _decision_prefilter_threshold(self) -> float:
+        return max(0.28, min(0.42, self.settings.request_threshold * 0.55))
+
+    @staticmethod
+    def _blend_confidences(
+        *,
+        deterministic_score: float,
+        llm_confidence: float | None,
+        llm_vote: str,
+    ) -> float:
+        if llm_confidence is None or llm_vote == "UNAVAILABLE":
+            return max(0.0, min(1.0, deterministic_score))
+
+        blended = (deterministic_score * 0.75) + (llm_confidence * 0.25)
+        if llm_vote == "REQUEST":
+            blended += 0.04
+        elif llm_vote == "IGNORE" and llm_confidence >= 0.55:
+            blended -= 0.06
+        return max(0.0, min(1.0, round(blended, 3)))
+
+    @classmethod
+    def _compose_decision_reasoning(
+        cls,
+        candidate: dict[str, Any],
+        *,
+        hybrid_confidence: float,
+        llm_vote: str,
+        llm_reasoning: str,
+    ) -> str:
+        features = candidate.get("recommendation_features", {})
+        breakdown = features.get("score_breakdown", {})
+        summary = str(features.get("analysis_summary") or "Limited alignment signals.")
+        reasoning = (
+            f"Code score {hybrid_confidence:.2f}. {summary} "
+            f"Breakdown: source {float(breakdown.get('source_affinity', 0.0)):.2f}, "
+            f"genres {float(breakdown.get('genre_affinity', 0.0)):.2f}, "
+            f"format {float(breakdown.get('format_fit', 0.0)):.2f}, "
+            f"freshness {float(breakdown.get('freshness_fit', 0.0)):.2f}, "
+            f"quality {float(breakdown.get('quality', 0.0)):.2f}."
+        )
+        if llm_vote == "UNAVAILABLE":
+            return reasoning + " LLM unavailable, so the final decision used the deterministic ranker only."
+        if llm_reasoning:
+            return reasoning + f" LLM vote: {llm_vote}. {llm_reasoning}"
+        return reasoning + f" LLM vote: {llm_vote}."
 
     async def _suggest_profile_enrichment(
         self,
@@ -659,6 +1197,255 @@ class VanguarrService:
         }
 
     @classmethod
+    def _build_profile_payload(
+        cls,
+        username: str,
+        history_summary: dict[str, Any],
+        *,
+        enrichment: dict[str, list[str]] | None = None,
+        existing_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = ProfileStore.default_payload(username)
+        payload.update(history_summary)
+
+        existing = existing_payload if isinstance(existing_payload, dict) else {}
+        payload["profile_version"] = "v5"
+        payload["profile_state"] = "ready" if cls._has_profile_signal(payload) else "default"
+        payload["username"] = username
+        payload["generated_at"] = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        payload["top_titles"] = cls._normalize_profile_entries(payload.get("top_titles", []), limit=8)
+        payload["repeat_titles"] = cls._normalize_profile_entries(payload.get("repeat_titles", []), limit=5)
+        payload["recent_momentum"] = cls._normalize_profile_entries(payload.get("recent_momentum", []), limit=5)
+        payload["top_genres"] = cls._normalize_string_list(payload.get("top_genres", []), limit=8)
+        payload["primary_genres"] = cls._normalize_string_list(payload.get("primary_genres", []), limit=4)
+        payload["secondary_genres"] = cls._normalize_string_list(payload.get("secondary_genres", []), limit=4)
+        payload["recent_genres"] = cls._normalize_string_list(payload.get("recent_genres", []), limit=4)
+        payload["ranked_genres"] = cls._normalize_ranked_genres(payload.get("ranked_genres", []), limit=8)
+        payload["discovery_lanes"] = cls._normalize_string_list(payload.get("discovery_lanes", []), limit=4)
+        payload["adjacent_genres"] = cls._merge_unique_strings(
+            cls._normalize_string_list(existing.get("adjacent_genres", []), limit=4),
+            (enrichment or {}).get("adjacent_genres", []),
+        )[:4]
+        payload["adjacent_themes"] = cls._merge_unique_strings(
+            cls._normalize_string_list(existing.get("adjacent_themes", []), limit=3),
+            (enrichment or {}).get("adjacent_themes", []),
+        )[:3]
+        payload["seed_lanes"] = cls._build_profile_seed_lanes(payload)
+        payload["format_preference"] = cls._normalize_format_preference(payload.get("format_preference", {}))
+        payload["release_year_preference"] = cls._normalize_release_year_preference(
+            payload.get("release_year_preference", {})
+        )
+        payload["explicit_feedback"] = cls._normalize_explicit_feedback(existing.get("explicit_feedback", {}))
+        payload["profile_exclusions"] = cls._normalize_string_list(existing.get("profile_exclusions", []), limit=8)
+        payload["operator_notes"] = str(existing.get("operator_notes") or "").strip()
+        payload["summary_block"] = (
+            cls._limit_words(cls._render_profile_block(username, payload), max_words=500)
+            if cls._has_profile_signal(payload)
+            else ProfileStore.default_block(username)
+        )
+        return payload
+
+    @classmethod
+    def _normalize_saved_profile_payload(cls, username: str, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = ProfileStore.default_payload(username)
+        normalized.update(payload)
+        normalized["profile_version"] = "v5"
+        normalized["username"] = username
+        normalized["generated_at"] = str(normalized.get("generated_at") or "").strip() or (
+            datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        )
+        normalized["history_count"] = max(0, int(normalized.get("history_count") or 0))
+        normalized["unique_titles"] = max(0, int(normalized.get("unique_titles") or 0))
+        normalized["average_top_rating"] = cls._coerce_optional_number(normalized.get("average_top_rating"))
+        normalized["genre_focus_share"] = max(0.0, min(1.0, float(normalized.get("genre_focus_share") or 0.0)))
+        normalized["top_titles"] = cls._normalize_profile_entries(normalized.get("top_titles", []), limit=8)
+        normalized["repeat_titles"] = cls._normalize_profile_entries(normalized.get("repeat_titles", []), limit=5)
+        normalized["recent_momentum"] = cls._normalize_profile_entries(normalized.get("recent_momentum", []), limit=5)
+        normalized["top_genres"] = cls._normalize_string_list(normalized.get("top_genres", []), limit=8)
+        normalized["primary_genres"] = cls._normalize_string_list(normalized.get("primary_genres", []), limit=4)
+        normalized["secondary_genres"] = cls._normalize_string_list(normalized.get("secondary_genres", []), limit=4)
+        normalized["recent_genres"] = cls._normalize_string_list(normalized.get("recent_genres", []), limit=4)
+        normalized["ranked_genres"] = cls._normalize_ranked_genres(normalized.get("ranked_genres", []), limit=8)
+        normalized["discovery_lanes"] = cls._normalize_string_list(normalized.get("discovery_lanes", []), limit=4)
+        normalized["adjacent_genres"] = cls._normalize_string_list(normalized.get("adjacent_genres", []), limit=4)
+        normalized["adjacent_themes"] = cls._normalize_string_list(normalized.get("adjacent_themes", []), limit=3)
+        normalized["seed_lanes"] = cls._normalize_string_list(normalized.get("seed_lanes", []), limit=8)
+        if not normalized["seed_lanes"]:
+            normalized["seed_lanes"] = cls._build_profile_seed_lanes(normalized)
+        normalized["format_preference"] = cls._normalize_format_preference(normalized.get("format_preference", {}))
+        normalized["release_year_preference"] = cls._normalize_release_year_preference(
+            normalized.get("release_year_preference", {})
+        )
+        normalized["explicit_feedback"] = cls._normalize_explicit_feedback(normalized.get("explicit_feedback", {}))
+        normalized["profile_exclusions"] = cls._normalize_string_list(normalized.get("profile_exclusions", []), limit=8)
+        normalized["operator_notes"] = str(normalized.get("operator_notes") or "").strip()
+        normalized["profile_state"] = "ready" if cls._has_profile_signal(normalized) else "default"
+        normalized["summary_block"] = (
+            cls._limit_words(cls._render_profile_block(username, normalized), max_words=500)
+            if cls._has_profile_signal(normalized)
+            else ProfileStore.default_block(username)
+        )
+        return normalized
+
+    @classmethod
+    def _normalize_profile_entries(cls, raw_items: Any, *, limit: int) -> list[dict[str, Any]]:
+        if not isinstance(raw_items, list):
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for item in raw_items:
+            if isinstance(item, dict):
+                title = str(item.get("title") or item.get("name") or "").strip()
+                if not title:
+                    continue
+                entry = {
+                    "title": title,
+                    "media_type": str(item.get("media_type") or "").strip() or None,
+                    "play_count": max(0, int(item.get("play_count") or 0)),
+                    "genres": cls._normalize_string_list(item.get("genres", []), limit=5),
+                    "community_rating": cls._coerce_optional_number(item.get("community_rating")),
+                    "last_played": str(item.get("last_played") or "").strip() or None,
+                }
+            else:
+                title = str(item).strip()
+                if not title:
+                    continue
+                entry = {
+                    "title": title,
+                    "media_type": None,
+                    "play_count": 0,
+                    "genres": [],
+                    "community_rating": None,
+                    "last_played": None,
+                }
+            normalized.append(entry)
+            if len(normalized) >= limit:
+                break
+        return normalized
+
+    @classmethod
+    def _normalize_ranked_genres(cls, raw_items: Any, *, limit: int) -> list[dict[str, Any]]:
+        if not isinstance(raw_items, list):
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for item in raw_items:
+            if isinstance(item, dict):
+                genre = str(item.get("genre") or "").strip()
+                if not genre:
+                    continue
+                normalized.append(
+                    {
+                        "genre": genre,
+                        "raw_count": max(0, int(item.get("raw_count") or 0)),
+                        "recent_count": max(0, int(item.get("recent_count") or 0)),
+                        "weighted_score": round(float(item.get("weighted_score") or 0.0), 3),
+                    }
+                )
+            else:
+                genre = str(item).strip()
+                if not genre:
+                    continue
+                normalized.append(
+                    {
+                        "genre": genre,
+                        "raw_count": 0,
+                        "recent_count": 0,
+                        "weighted_score": 0.0,
+                    }
+                )
+            if len(normalized) >= limit:
+                break
+        return normalized
+
+    @classmethod
+    def _build_profile_seed_lanes(cls, profile_summary: dict[str, Any]) -> list[str]:
+        lanes: list[str] = []
+        if profile_summary.get("top_titles"):
+            lanes.append("top_seed")
+        if profile_summary.get("repeat_titles"):
+            lanes.append("repeat_watch_seed")
+        if profile_summary.get("recent_momentum"):
+            lanes.append("recent_seed")
+        if profile_summary.get("primary_genres") or profile_summary.get("recent_genres"):
+            lanes.append("genre_anchor_seed")
+        return lanes
+
+    @staticmethod
+    def _normalize_string_list(raw_items: Any, *, limit: int | None = None) -> list[str]:
+        if not isinstance(raw_items, list):
+            return []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in raw_items:
+            value = str(raw).strip()
+            if not value:
+                continue
+            lowered = value.lower()
+            if lowered in seen:
+                continue
+            normalized.append(value)
+            seen.add(lowered)
+            if limit is not None and len(normalized) >= limit:
+                break
+        return normalized
+
+    @staticmethod
+    def _normalize_format_preference(raw_value: Any) -> dict[str, Any]:
+        value = raw_value if isinstance(raw_value, dict) else {}
+        preferred = str(value.get("preferred") or "balanced").strip().lower()
+        if preferred not in {"balanced", "movie", "tv"}:
+            preferred = "balanced"
+        return {
+            "preferred": preferred,
+            "movie_plays": max(0, int(value.get("movie_plays") or 0)),
+            "tv_plays": max(0, int(value.get("tv_plays") or 0)),
+        }
+
+    @staticmethod
+    def _normalize_release_year_preference(raw_value: Any) -> dict[str, Any]:
+        value = raw_value if isinstance(raw_value, dict) else {}
+        bias = str(value.get("bias") or "balanced").strip().lower()
+        if bias not in {"balanced", "recent", "catalog"}:
+            bias = "balanced"
+        average_year = value.get("average_year")
+        try:
+            normalized_year = int(average_year) if average_year not in (None, "") else None
+        except (TypeError, ValueError):
+            normalized_year = None
+        return {"bias": bias, "average_year": normalized_year}
+
+    @classmethod
+    def _normalize_explicit_feedback(cls, raw_value: Any) -> dict[str, list[str]]:
+        value = raw_value if isinstance(raw_value, dict) else {}
+        return {
+            "liked_titles": cls._normalize_string_list(value.get("liked_titles", []), limit=12),
+            "disliked_titles": cls._normalize_string_list(value.get("disliked_titles", []), limit=12),
+            "liked_genres": cls._normalize_string_list(value.get("liked_genres", []), limit=8),
+            "disliked_genres": cls._normalize_string_list(value.get("disliked_genres", []), limit=8),
+        }
+
+    @staticmethod
+    def _coerce_optional_number(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            return round(float(value), 3)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _has_profile_signal(payload: dict[str, Any]) -> bool:
+        return any(
+            (
+                int(payload.get("history_count") or 0) > 0,
+                bool(payload.get("top_titles")),
+                bool(payload.get("primary_genres")),
+                bool(payload.get("ranked_genres")),
+            )
+        )
+
+    @classmethod
     def _render_profile_block(
         cls,
         username: str,
@@ -670,13 +1457,19 @@ class VanguarrService:
             return ProfileStore.default_block(username)
 
         adjacent_genres = cls._merge_unique_strings(
-            list(history_summary.get("discovery_lanes", [])),
+            cls._merge_unique_strings(
+                list(history_summary.get("discovery_lanes", [])),
+                list(history_summary.get("adjacent_genres", [])),
+            ),
             (enrichment or {}).get("adjacent_genres", []),
         )[:3]
-        adjacent_themes = cls._merge_unique_strings([], (enrichment or {}).get("adjacent_themes", []))[:2]
+        adjacent_themes = cls._merge_unique_strings(
+            list(history_summary.get("adjacent_themes", [])),
+            (enrichment or {}).get("adjacent_themes", []),
+        )[:2]
 
         lines = [
-            "[VANGUARR_PROFILE_V3]",
+            "[VANGUARR_PROFILE_SUMMARY_V1]",
             f"User: {username}",
             "Core Interests:",
         ]
@@ -708,7 +1501,9 @@ class VanguarrService:
     @classmethod
     def _build_core_interest_lines(cls, history_summary: dict[str, Any]) -> list[str]:
         primary_genres = history_summary.get("primary_genres") or history_summary.get("top_genres", [])[:4]
+        ranked_genres = history_summary.get("ranked_genres", [])
         format_preference = history_summary.get("format_preference", {})
+        release_year_preference = history_summary.get("release_year_preference", {})
         top_titles = history_summary.get("top_titles", [])
         history_count = int(history_summary.get("history_count") or 0)
         unique_titles = int(history_summary.get("unique_titles") or 0)
@@ -719,6 +1514,9 @@ class VanguarrService:
         lines: list[str] = []
         if primary_genres:
             lines.append(f"Primary genres: {cls._human_join(primary_genres[:4])}.")
+        if ranked_genres:
+            ranked_preview = [f"{item['genre']} ({item['raw_count']})" for item in ranked_genres[:4]]
+            lines.append(f"Ranked genre stack: {cls._human_join(ranked_preview)}.")
 
         if preferred == "tv":
             lines.append(
@@ -735,6 +1533,16 @@ class VanguarrService:
                 f"Format bias: balanced across movies and series, built from {history_count} plays across "
                 f"{unique_titles} grouped titles."
             )
+
+        release_bias = str(release_year_preference.get("bias") or "balanced")
+        average_year = release_year_preference.get("average_year")
+        if average_year is not None:
+            if release_bias == "recent":
+                lines.append(f"Release window leans recent, centered around {average_year}.")
+            elif release_bias == "catalog":
+                lines.append(f"Release window leans catalog, centered around {average_year}.")
+            else:
+                lines.append(f"Release window is balanced, centered around {average_year}.")
 
         if top_titles:
             lines.append(f"Anchor titles: {cls._format_title_entries(top_titles[:3])}.")
@@ -768,6 +1576,9 @@ class VanguarrService:
         adjacent_themes: list[str],
     ) -> list[str]:
         lines = [cls._describe_engagement_style(history_summary)]
+        explicit_feedback = history_summary.get("explicit_feedback", {})
+        liked_titles = cls._normalize_string_list(explicit_feedback.get("liked_titles", []), limit=2)
+        liked_genres = cls._normalize_string_list(explicit_feedback.get("liked_genres", []), limit=3)
 
         average_top_rating = history_summary.get("average_top_rating")
         if average_top_rating is not None:
@@ -783,6 +1594,14 @@ class VanguarrService:
         else:
             lines.append("Genre profile is broad enough to support adjacent discovery when tone and format still line up.")
 
+        if liked_titles or liked_genres:
+            feedback_parts: list[str] = []
+            if liked_titles:
+                feedback_parts.append(f"favor titles adjacent to {cls._human_join(liked_titles)}")
+            if liked_genres:
+                feedback_parts.append(f"keep leaning into {cls._human_join(liked_genres)}")
+            lines.append(f"Explicit positive feedback says to {cls._human_join(feedback_parts)}.")
+
         if adjacent_genres:
             lane_line = f"Add-on lanes worth testing: {cls._human_join(adjacent_genres)}."
             if adjacent_themes:
@@ -797,21 +1616,45 @@ class VanguarrService:
     def _build_avoidance_lines(cls, history_summary: dict[str, Any]) -> list[str]:
         format_preference = history_summary.get("format_preference", {})
         preferred = str(format_preference.get("preferred") or "balanced")
+        explicit_feedback = history_summary.get("explicit_feedback", {})
+        disliked_titles = cls._normalize_string_list(explicit_feedback.get("disliked_titles", []), limit=2)
+        disliked_genres = cls._normalize_string_list(explicit_feedback.get("disliked_genres", []), limit=3)
+        profile_exclusions = cls._normalize_string_list(history_summary.get("profile_exclusions", []), limit=3)
+
+        feedback_line = ""
+        if disliked_titles or disliked_genres or profile_exclusions:
+            parts: list[str] = []
+            if disliked_titles:
+                parts.append(f"avoid titles adjacent to {cls._human_join(disliked_titles)}")
+            if disliked_genres:
+                parts.append(f"be careful with {cls._human_join(disliked_genres)}")
+            if profile_exclusions:
+                parts.append(f"honor manual exclusions like {cls._human_join(profile_exclusions)}")
+            feedback_line = f"Explicit avoidance guidance: {cls._human_join(parts)}."
 
         if preferred == "tv":
-            return [
+            lines = [
                 "Lower evidence for standalone movies than for serialized TV, so films need stronger genre or franchise overlap.",
                 "Treat non-engagement as unknown, not dislike, unless stronger evidence shows up in the watch history.",
             ]
+            if feedback_line:
+                lines.insert(0, feedback_line)
+            return lines
         if preferred == "movie":
-            return [
+            lines = [
                 "Lower evidence for long-running series than for movies, so TV picks need stronger momentum or genre overlap.",
                 "Treat non-engagement as unknown, not dislike, unless stronger evidence shows up in the watch history.",
             ]
-        return [
+            if feedback_line:
+                lines.insert(0, feedback_line)
+            return lines
+        lines = [
             "No strong user-specific format aversion is visible from watch history alone.",
             "Treat non-engagement as unknown, not dislike, unless stronger evidence shows up in the watch history.",
         ]
+        if feedback_line:
+            lines.insert(0, feedback_line)
+        return lines
 
     @classmethod
     def _build_request_bias_lines(
@@ -823,6 +1666,8 @@ class VanguarrService:
     ) -> list[str]:
         primary_genres = history_summary.get("primary_genres") or history_summary.get("top_genres", [])[:3]
         format_preference = history_summary.get("format_preference", {})
+        release_year_preference = history_summary.get("release_year_preference", {})
+        operator_notes = str(history_summary.get("operator_notes") or "").strip()
         preferred = str(format_preference.get("preferred") or "balanced")
         lines: list[str] = []
 
@@ -838,9 +1683,18 @@ class VanguarrService:
         else:
             lines.append("Use genre overlap first, then let recent momentum break ties between movies and series.")
 
+        release_bias = str(release_year_preference.get("bias") or "balanced")
+        if release_bias == "recent":
+            lines.append("Prefer newer releases when the genre and source affinity are already there.")
+        elif release_bias == "catalog":
+            lines.append("Do not underrate older catalog titles if they fit the core genre stack.")
+
         if adjacent_genres or adjacent_themes:
             extension = cls._human_join(adjacent_genres) if adjacent_genres else cls._human_join(adjacent_themes)
             lines.append(f"When the core match is already strong, allow controlled exploration into {extension}.")
+
+        if operator_notes:
+            lines.append(f"Operator note: {operator_notes}.")
 
         return lines
 
@@ -973,6 +1827,318 @@ class VanguarrService:
         if len(filtered) == 2:
             return f"{filtered[0]} and {filtered[1]}"
         return f"{', '.join(filtered[:-1])}, and {filtered[-1]}"
+
+    @staticmethod
+    def _intersect_strings(left: list[str], right: list[str]) -> list[str]:
+        right_lookup = {value.lower() for value in right}
+        return [value for value in left if value.lower() in right_lookup]
+
+    @staticmethod
+    def _extract_source_titles(sources: list[Any]) -> list[str]:
+        titles: list[str] = []
+        for raw in sources:
+            source = str(raw).strip()
+            if source.lower().startswith("recommended:"):
+                title = source.split(":", 1)[1].strip()
+                if title:
+                    titles.append(title)
+        return titles
+
+    @classmethod
+    def _score_source_affinity(
+        cls,
+        *,
+        sources: list[Any],
+        source_lanes: list[str],
+        source_titles: list[str],
+        top_titles: set[str],
+        repeat_titles: set[str],
+        recent_titles: set[str],
+    ) -> float:
+        score = 0.0
+        lane_lookup = {lane.lower() for lane in source_lanes}
+        if "repeat_watch_seed" in lane_lookup:
+            score += 0.08
+        if "top_seed" in lane_lookup:
+            score += 0.06
+        if "recent_seed" in lane_lookup:
+            score += 0.06
+        if "genre_anchor_seed" in lane_lookup:
+            score += 0.04
+        if any(str(source).strip().lower().startswith("trending") for source in sources):
+            score += 0.04
+
+        for title in source_titles:
+            lowered = title.lower()
+            if lowered in repeat_titles:
+                score += 0.14
+            elif lowered in top_titles:
+                score += 0.12
+            elif lowered in recent_titles:
+                score += 0.1
+            else:
+                score += 0.08
+
+        return min(0.32, score)
+
+    @staticmethod
+    def _score_genre_affinity(
+        *,
+        candidate_genres: list[str],
+        matched_primary: list[str],
+        matched_secondary: list[str],
+        matched_recent: list[str],
+        matched_discovery: list[str],
+        ranked_genres: list[dict[str, Any]],
+    ) -> float:
+        score = 0.0
+        score += min(0.22, 0.11 * len(matched_primary))
+        score += min(0.12, 0.06 * len(matched_secondary))
+        score += min(0.1, 0.05 * len(matched_recent))
+        score += min(0.08, 0.04 * len(matched_discovery))
+        ranked_lookup = {
+            str(item.get("genre") or "").lower(): float(item.get("weighted_score") or 0.0)
+            for item in ranked_genres
+            if isinstance(item, dict) and str(item.get("genre") or "").strip()
+        }
+        rank_bonus = 0.0
+        for genre in candidate_genres:
+            weighted_score = ranked_lookup.get(genre.lower())
+            if weighted_score:
+                rank_bonus += min(0.04, weighted_score / 40.0)
+        score += min(0.08, rank_bonus)
+        return min(0.38, score)
+
+    @staticmethod
+    def _score_format_fit(candidate_media_type: str, format_preference: dict[str, Any]) -> float:
+        preferred = str(format_preference.get("preferred") or "balanced")
+        if preferred == "balanced":
+            return 0.04
+        if candidate_media_type == preferred:
+            return 0.08
+        return 0.0
+
+    @staticmethod
+    def _score_quality(rating: Any, vote_count: Any) -> float:
+        try:
+            rating_value = float(rating or 0.0)
+        except (TypeError, ValueError):
+            rating_value = 0.0
+
+        try:
+            vote_value = float(vote_count or 0.0)
+        except (TypeError, ValueError):
+            vote_value = 0.0
+
+        rating_norm = max(0.0, min(1.0, (rating_value - 6.0) / 3.0))
+        vote_norm = max(0.0, min(1.0, vote_value / 500.0))
+        return 0.1 * ((rating_norm * 0.8) + (vote_norm * 0.2))
+
+    @classmethod
+    def _score_release_year_fit(
+        cls,
+        *,
+        candidate_release_date: Any,
+        release_year_preference: dict[str, Any],
+    ) -> tuple[float, str]:
+        candidate_year = cls._parse_release_year(candidate_release_date)
+        if candidate_year is None:
+            return 0.0, "unknown"
+
+        current_year = datetime.utcnow().year
+        bias = str(release_year_preference.get("bias") or "balanced")
+        average_year = release_year_preference.get("average_year")
+
+        if bias == "recent":
+            if candidate_year >= current_year - 4:
+                return 0.07, "recent"
+            if candidate_year >= current_year - 8:
+                return 0.04, "slightly-recent"
+            return 0.0, "older-than-usual"
+
+        if bias == "catalog":
+            if candidate_year <= current_year - 8:
+                return 0.07, "catalog"
+            if candidate_year <= current_year - 4:
+                return 0.04, "mid-catalog"
+            return 0.0, "newer-than-usual"
+
+        if average_year is None:
+            return 0.03, "balanced"
+
+        year_delta = abs(int(average_year) - candidate_year)
+        if year_delta <= 5:
+            return 0.07, "close-to-core-window"
+        if year_delta <= 10:
+            return 0.04, "near-core-window"
+        return 0.02, "outside-core-window"
+
+    @staticmethod
+    def _score_exploration(
+        *,
+        matched_discovery: list[str],
+        source_titles: list[str],
+        recommended_source_titles: list[str],
+    ) -> float:
+        if not matched_discovery:
+            return 0.0
+        if source_titles and recommended_source_titles:
+            return 0.02
+        return 0.05
+
+    @staticmethod
+    def _score_popularity(popularity: Any) -> float:
+        try:
+            popularity_value = float(popularity or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return min(0.03, max(0.0, popularity_value / 2000.0))
+
+    @classmethod
+    def _score_feedback_fit(
+        cls,
+        *,
+        candidate_title: str,
+        candidate_genres: list[str],
+        explicit_feedback: dict[str, Any],
+    ) -> float:
+        if not isinstance(explicit_feedback, dict):
+            return 0.0
+
+        liked_titles = {value.lower() for value in cls._normalize_string_list(explicit_feedback.get("liked_titles", []))}
+        disliked_titles = {
+            value.lower() for value in cls._normalize_string_list(explicit_feedback.get("disliked_titles", []))
+        }
+        liked_genres = {value.lower() for value in cls._normalize_string_list(explicit_feedback.get("liked_genres", []))}
+        disliked_genres = {
+            value.lower() for value in cls._normalize_string_list(explicit_feedback.get("disliked_genres", []))
+        }
+
+        score = 0.0
+        lowered_title = candidate_title.strip().lower()
+        if lowered_title and lowered_title in liked_titles:
+            score += 0.08
+        if lowered_title and lowered_title in disliked_titles:
+            score -= 0.08
+
+        for genre in candidate_genres:
+            lowered = genre.lower()
+            if lowered in liked_genres:
+                score += 0.03
+            if lowered in disliked_genres:
+                score -= 0.03
+
+        return max(-0.12, min(0.12, score))
+
+    @staticmethod
+    def _derive_lane_tags(
+        *,
+        sources: list[Any],
+        source_lanes: list[str],
+        matched_primary: list[str],
+        matched_recent: list[str],
+        matched_discovery: list[str],
+    ) -> list[str]:
+        tags: list[str] = []
+        source_strings = [str(source).strip().lower() for source in sources]
+        lane_lookup = {lane.lower() for lane in source_lanes}
+        if any(source.startswith("recommended:") for source in source_strings):
+            tags.append("because_you_watched")
+        if "repeat_watch_seed" in lane_lookup:
+            tags.append("repeat_watch_lane")
+        if "genre_anchor_seed" in lane_lookup:
+            tags.append("genre_match_lane")
+        if matched_primary:
+            tags.append("top_genre_lane")
+        if "recent_seed" in lane_lookup:
+            tags.append("recent_seed_lane")
+        if matched_recent:
+            tags.append("recent_momentum_lane")
+        if matched_discovery:
+            tags.append("adjacent_explore_lane")
+        if any(source.startswith("trending") for source in source_strings):
+            tags.append("trending_lane")
+        return tags or ["generic_lane"]
+
+    @staticmethod
+    def _choose_dominant_genre(
+        candidate_genres: list[str],
+        *,
+        matched_primary: list[str],
+        matched_recent: list[str],
+    ) -> str:
+        if matched_primary:
+            return matched_primary[0]
+        if matched_recent:
+            return matched_recent[0]
+        if candidate_genres:
+            return candidate_genres[0]
+        return "unknown"
+
+    @classmethod
+    def _build_analysis_summary(
+        cls,
+        *,
+        matched_primary: list[str],
+        matched_recent: list[str],
+        matched_discovery: list[str],
+        source_titles: list[str],
+        lane_tags: list[str],
+        freshness_fit: str,
+    ) -> str:
+        parts: list[str] = []
+        if source_titles:
+            parts.append(f"Because-you-watched seeds: {cls._human_join(source_titles[:2])}.")
+        if matched_primary:
+            parts.append(f"Matches top genres {cls._human_join(matched_primary[:3])}.")
+        if matched_recent:
+            parts.append(f"Aligns with recent momentum in {cls._human_join(matched_recent[:2])}.")
+        if matched_discovery:
+            parts.append(f"Supports controlled exploration into {cls._human_join(matched_discovery[:2])}.")
+        if freshness_fit not in {"unknown", "balanced"}:
+            parts.append(f"Release fit: {freshness_fit}.")
+        if not parts:
+            parts.append(f"Primary lane: {lane_tags[0].replace('_', ' ')}.")
+        return " ".join(parts)
+
+    @classmethod
+    def _build_release_year_preference(cls, release_years: list[int]) -> dict[str, Any]:
+        if not release_years:
+            return {"bias": "balanced", "average_year": None}
+
+        average_year = round(sum(release_years) / len(release_years))
+        current_year = datetime.utcnow().year
+        if average_year >= current_year - 6:
+            bias = "recent"
+        elif average_year <= current_year - 15:
+            bias = "catalog"
+        else:
+            bias = "balanced"
+
+        return {"bias": bias, "average_year": average_year}
+
+    @classmethod
+    def _extract_history_release_year(cls, item: dict[str, Any]) -> int | None:
+        if item.get("ProductionYear") is not None:
+            try:
+                return int(item.get("ProductionYear"))
+            except (TypeError, ValueError):
+                return None
+        return cls._parse_release_year(item.get("PremiereDate"))
+
+    @staticmethod
+    def _parse_release_year(value: Any) -> int | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, int):
+            return value
+        try:
+            text = str(value).strip()
+            if len(text) >= 4:
+                return int(text[:4])
+        except (TypeError, ValueError):
+            return None
+        return None
 
     @staticmethod
     def _limit_words(text: str, *, max_words: int) -> str:

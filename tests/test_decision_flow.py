@@ -1,5 +1,5 @@
 from app.core.prompts import build_decision_messages, build_profile_enrichment_messages
-from app.core.services import VanguarrService
+from app.core.services import ProfileStore, VanguarrService
 
 
 def test_select_recommendation_seeds_prefers_top_watched_titles() -> None:
@@ -43,7 +43,13 @@ def test_select_recommendation_seeds_prefers_top_watched_titles() -> None:
 def test_decision_prompt_includes_viewing_history_block() -> None:
     messages = build_decision_messages(
         username="alice",
-        profile_block="[VANGUARR_PROFILE_V3]\nUser: alice",
+        profile_payload={
+            "profile_version": "v5",
+            "profile_state": "ready",
+            "username": "alice",
+            "primary_genres": ["Sci-Fi"],
+            "summary_block": "[VANGUARR_PROFILE_SUMMARY_V1]\nUser: alice",
+        },
         viewing_history={
             "history_count": 12,
             "top_content": [{"title": "Movie Alpha", "play_count": 3}],
@@ -62,15 +68,21 @@ def test_decision_prompt_includes_viewing_history_block() -> None:
             "release_date": "2026-01-01",
             "sources": ["recommended:Movie Alpha"],
             "media_info": {},
+            "recommendation_features": {
+                "deterministic_score": 0.83,
+                "lane_tags": ["because_you_watched", "top_genre_lane"],
+            },
         },
         global_exclusions=["No Horror"],
     )
 
     prompt = messages[1]["content"]
 
-    assert "Block 2 (Observed Signals): User Viewing History" in prompt
+    assert "Block 1 (Target): Canonical User Profile JSON" in prompt
+    assert "Block 3 (Observed Signals): User Viewing History" in prompt
     assert "Movie Alpha" in prompt
-    assert "Base the score on the viewing history first" in prompt
+    assert "recommendation_features" in prompt
+    assert "profile manifest and summary" in prompt
 
 
 def test_profile_history_context_compacts_repeated_titles() -> None:
@@ -107,8 +119,11 @@ def test_profile_history_context_compacts_repeated_titles() -> None:
     assert summary["top_titles"][0]["play_count"] == 2
     assert summary["top_titles"][0]["media_type"] == "tv"
     assert "Sci-Fi" in summary["top_genres"]
+    assert summary["ranked_genres"][0]["genre"] in {"Sci-Fi", "Drama"}
+    assert any(item["genre"] == "Sci-Fi" and item["raw_count"] == 2 for item in summary["ranked_genres"])
     assert summary["recent_momentum"][0]["title"] == "Show Alpha"
     assert summary["recent_momentum"][0]["play_count"] == 2
+    assert summary["release_year_preference"]["bias"] == "balanced"
     assert "recent_plays" not in summary
 
 
@@ -159,11 +174,19 @@ def test_render_profile_block_uses_code_derived_signals() -> None:
     summary = VanguarrService._build_profile_history_context(history, top_limit=5, recent_limit=3, recent_window=3)
     block = VanguarrService._render_profile_block(
         "alice",
-        summary,
-        enrichment={"adjacent_genres": ["Adventure"], "adjacent_themes": ["found family"]},
+        {
+            **summary,
+            "adjacent_genres": ["Adventure"],
+            "adjacent_themes": ["found family"],
+            "explicit_feedback": {"liked_titles": [], "disliked_titles": [], "liked_genres": [], "disliked_genres": []},
+            "profile_exclusions": [],
+            "operator_notes": "",
+        },
     )
 
+    assert "[VANGUARR_PROFILE_SUMMARY_V1]" in block
     assert "Primary genres:" in block
+    assert "Ranked genre stack:" in block
     assert "Format bias:" in block
     assert "Anchor titles:" in block
     assert "Add-on lanes worth testing:" in block
@@ -206,5 +229,165 @@ def test_viewing_history_context_reuses_profile_summary_signals() -> None:
     )
 
     assert "Sci-Fi" in viewing_history["primary_genres"]
+    assert any(item["genre"] == "Sci-Fi" for item in viewing_history["ranked_genres"])
     assert viewing_history["format_preference"]["preferred"] == "tv"
     assert viewing_history["recent_momentum"][0]["title"] == "Show Alpha"
+
+
+def test_candidate_pool_ranking_favors_anchor_and_genre_overlap() -> None:
+    profile_summary = {
+        "primary_genres": ["Sci-Fi", "Thriller"],
+        "secondary_genres": ["Drama"],
+        "recent_genres": ["Sci-Fi"],
+        "discovery_lanes": ["Mystery"],
+        "adjacent_genres": ["Adventure"],
+        "top_titles": [{"title": "Show Alpha", "play_count": 4}],
+        "repeat_titles": [{"title": "Show Alpha", "play_count": 4}],
+        "recent_momentum": [{"title": "Show Alpha", "play_count": 2}],
+        "format_preference": {"preferred": "tv", "movie_plays": 1, "tv_plays": 4},
+        "release_year_preference": {"bias": "recent", "average_year": 2022},
+        "ranked_genres": [{"genre": "Sci-Fi", "raw_count": 4, "recent_count": 2, "weighted_score": 5.5}],
+        "explicit_feedback": {"liked_titles": [], "disliked_titles": [], "liked_genres": [], "disliked_genres": []},
+    }
+    candidates = [
+        {
+            "media_type": "tv",
+            "media_id": 303,
+            "title": "Show Gamma",
+            "genres": ["Sci-Fi", "Thriller"],
+            "rating": 8.5,
+            "vote_count": 800,
+            "popularity": 100,
+            "release_date": "2025-01-01",
+            "sources": ["recommended:Show Alpha"],
+            "source_lanes": ["top_seed", "repeat_watch_seed"],
+            "media_info": {},
+        },
+        {
+            "media_type": "movie",
+            "media_id": 404,
+            "title": "Movie Delta",
+            "genres": ["Comedy"],
+            "rating": 7.1,
+            "vote_count": 50,
+            "popularity": 80,
+            "release_date": "2010-01-01",
+            "sources": ["trending"],
+            "source_lanes": ["trending_lane"],
+            "media_info": {},
+        },
+    ]
+
+    ranked = VanguarrService._rank_candidate_pool(candidates, profile_summary=profile_summary)
+
+    assert ranked[0]["title"] == "Show Gamma"
+    assert ranked[0]["recommendation_features"]["deterministic_score"] > ranked[1]["recommendation_features"]["deterministic_score"]
+    assert "because_you_watched" in ranked[0]["recommendation_features"]["lane_tags"]
+
+
+def test_build_recommendation_seed_pool_blends_behavior_lanes() -> None:
+    history = [
+        {
+            "Name": "Episode 1",
+            "SeriesName": "Show Alpha",
+            "Type": "Episode",
+            "Genres": ["Sci-Fi", "Drama"],
+            "CommunityRating": 8.4,
+            "ProviderIds": {"Tmdb": "101"},
+            "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+        },
+        {
+            "Name": "Episode 2",
+            "SeriesName": "Show Alpha",
+            "Type": "Episode",
+            "Genres": ["Sci-Fi", "Thriller"],
+            "CommunityRating": 8.4,
+            "ProviderIds": {"Tmdb": "101"},
+            "UserData": {"LastPlayedDate": "2026-04-07T10:00:00Z"},
+        },
+        {
+            "Name": "Movie Beta",
+            "Type": "Movie",
+            "Genres": ["Drama"],
+            "CommunityRating": 7.8,
+            "ProviderIds": {"Tmdb": "202"},
+            "UserData": {"LastPlayedDate": "2026-04-08T09:00:00Z"},
+        },
+    ]
+
+    summary = VanguarrService._build_profile_history_context(history, top_limit=5, recent_limit=3, recent_window=3)
+    seeds = VanguarrService._build_recommendation_seed_pool(history, profile_summary=summary, limit=3)
+
+    assert seeds
+    assert seeds[0]["media_id"] == 101
+    assert "top_seed" in seeds[0]["seed_lanes"]
+    assert "repeat_watch_seed" in seeds[0]["seed_lanes"]
+    assert "genre_anchor_seed" in seeds[0]["seed_lanes"]
+    assert any("recent_seed" in seed["seed_lanes"] for seed in seeds)
+
+
+def test_normalize_saved_profile_payload_regenerates_summary() -> None:
+    payload = VanguarrService._normalize_saved_profile_payload(
+        "alice",
+        {
+            "history_count": 4,
+            "unique_titles": 2,
+            "primary_genres": ["Sci-Fi", "Thriller"],
+            "top_genres": ["Sci-Fi", "Thriller"],
+            "ranked_genres": [{"genre": "Sci-Fi", "raw_count": 3, "recent_count": 2, "weighted_score": 4.5}],
+            "top_titles": [{"title": "Show Alpha", "play_count": 3, "media_type": "tv"}],
+            "recent_momentum": [{"title": "Show Alpha", "play_count": 2, "media_type": "tv"}],
+            "repeat_titles": [{"title": "Show Alpha", "play_count": 3, "media_type": "tv"}],
+            "adjacent_genres": ["Adventure"],
+            "operator_notes": "Prefer high-conviction Sci-Fi.",
+        },
+    )
+
+    assert payload["profile_state"] == "ready"
+    assert payload["summary_block"].startswith("[VANGUARR_PROFILE_SUMMARY_V1]")
+    assert "Operator note: Prefer high-conviction Sci-Fi." in payload["summary_block"]
+
+
+def test_profile_store_writes_json_and_summary(tmp_path) -> None:
+    store = ProfileStore(tmp_path)
+    payload = VanguarrService._normalize_saved_profile_payload(
+        "alice",
+        {
+            "history_count": 2,
+            "unique_titles": 1,
+            "primary_genres": ["Sci-Fi"],
+            "top_genres": ["Sci-Fi"],
+            "ranked_genres": [{"genre": "Sci-Fi", "raw_count": 2, "recent_count": 1, "weighted_score": 2.75}],
+            "top_titles": [{"title": "Show Alpha", "play_count": 2, "media_type": "tv"}],
+        },
+    )
+
+    json_path, summary_path = store.write_payload("alice", payload)
+
+    assert json_path.exists()
+    assert summary_path.exists()
+    assert "\"profile_version\": \"v5\"" in json_path.read_text(encoding="utf-8")
+    assert "[VANGUARR_PROFILE_SUMMARY_V1]" in summary_path.read_text(encoding="utf-8")
+
+
+def test_diversify_candidates_caps_one_lane_before_backfill() -> None:
+    candidates = []
+    for idx in range(5):
+        candidates.append(
+            {
+                "media_type": "tv",
+                "media_id": 500 + idx,
+                "title": f"Candidate {idx}",
+                "genres": ["Sci-Fi"],
+                "sources": ["recommended:Show Alpha"],
+                "recommendation_features": {
+                    "deterministic_score": 0.9 - (idx * 0.05),
+                    "lane_tags": ["because_you_watched"],
+                    "dominant_genre": "Sci-Fi",
+                },
+            }
+        )
+
+    diversified = VanguarrService._diversify_candidates(candidates, limit=3)
+
+    assert len(diversified) == 3

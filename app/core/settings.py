@@ -39,8 +39,10 @@ class Settings(BaseSettings):
     profile_architect_recent_momentum_limit: int = 5
     profile_llm_enrichment_enabled: bool = True
     profile_llm_enrichment_max_output_tokens: int = 120
-    candidate_limit: int = 25
-    recommendation_seed_limit: int = 3
+    candidate_limit: int = 160
+    trending_candidate_limit: int = 100
+    decision_shortlist_limit: int = 15
+    recommendation_seed_limit: int = 6
     decision_page_size: int = 100
 
     jellyfin_base_url: str | None = None

@@ -7,11 +7,12 @@ AI-driven proactive media curation for the Arr stack.
 Vanguarr is a Dockerized FastAPI service that:
 
 - pulls Jellyfin playback history for each user
-- builds a persistent V3 viewing profile from grouped watch behavior, genre overlap, format bias, and recent momentum
+- builds a persistent JSON viewing manifest from grouped watch behavior, ranked genres, format bias, repeat viewing, and recent momentum
 - optionally asks the LLM for a few adjacent discovery lanes instead of delegating the whole profile
-- pulls trending and recommendation candidates from Overseerr or Jellyseerr
-- fuzzes each payload against the viewing profile plus global exclusions
-- requests only the media that penetrates user interest above the configured confidence threshold
+- pulls blended candidate pools from Seer recommendations seeded by top, repeat-watch, recent, and genre-anchor titles plus a trending pool
+- ranks those candidates in code using ranked-genre affinity, source-lane affinity, format fit, freshness, quality, explicit feedback, and diversity controls
+- uses the LLM as a light final adjustment and explanation layer instead of the primary ranker
+- requests only the media that clears the configured confidence threshold
 
 The system is security-minded by design: user interests are treated as the target surface, candidate metadata is treated as the fuzzer payload, and all provider credentials are sourced from environment variables.
 
@@ -29,33 +30,34 @@ Vanguarr currently reads watched history from Jellyfin's standard item APIs.
 
 - cadence: weekly cron
 - source: Jellyfin playback history
-- output: `/app/data/profiles/{username}.txt`
-- logic: deterministic profile synthesis from watch counts, grouped titles, genre weighting, repeat viewing, and recent momentum
+- output: `/app/data/profiles/{username}.json` plus `/app/data/profiles/{username}.txt`
+- logic: deterministic profile synthesis from watch counts, ranked genres, grouped titles, repeat viewing, and recent momentum
 - optional LLM use: suggest a few adjacent discovery lanes
-- goal: keep a compact V3 profile block under 500 words
+- goal: keep a canonical JSON manifest and a compact derived summary under 500 words
 
 ### Decision Engine
 
 - cadence: daily cron
-- source: Seer trending plus recommendation endpoints
-- logic: profile block + candidate payload + global exclusions
-- action: POST a Seer request when `decision == REQUEST` and confidence clears the configured threshold
+- source: Seer recommendation endpoints plus trending
+- logic: build seed lanes from top, repeat-watch, recent, and genre-anchor behavior, fetch Seer recommendations plus trending, score the pool in code, diversify the shortlist, then apply a light LLM adjustment and explanation pass
+- action: POST a Seer request when the hybrid confidence clears the configured threshold
 
 ## Mounted Data
 
 Mount `./data` into the container if you want direct access to the raw runtime artifacts.
 
 - SQLite decision history: `./data/vanguarr.db`
-- user persona files: `./data/profiles/*.txt`
+- user profile manifests: `./data/profiles/*.json`
+- derived profile summaries: `./data/profiles/*.txt`
 - app log file: `./data/logs/vanguarr.log`
 
-Those files are safe to inspect from the host. The War Room UI reads from the SQLite database, and the Manifest Editor reads the profile text files from the same mounted data path.
+Those files are safe to inspect from the host. The War Room UI reads from the SQLite database, and the Manifest Editor reads and writes the JSON manifests while previewing the derived summary files from the same mounted data path.
 
 ## Web Interface
 
 - `/` dashboard with live health lights, manual triggers, scheduler view, and recent decisions
 - `/logs` war room with searchable reasoning history
-- `/manifest` editor for raw profile block files
+- `/manifest` editor for JSON profile manifests with derived summary preview
 - `/healthz` lightweight container health endpoint
 - `/api/health` cached JSON health snapshot for Jellyfin, Seer, and the active LLM provider
 
@@ -82,7 +84,7 @@ http://localhost:8000
 
 ## Example Docker Compose
 
-Each example below mounts `./data` so you can inspect the raw SQLite database, profile text files, and the rotating app log from the host.
+Each example below mounts `./data` so you can inspect the raw SQLite database, profile JSON manifests, derived summary files, and the rotating app log from the host.
 
 ### Ollama
 
@@ -206,6 +208,10 @@ services:
 - `PROFILE_ARCHITECT_RECENT_MOMENTUM_LIMIT`
 - `PROFILE_LLM_ENRICHMENT_ENABLED`
 - `PROFILE_LLM_ENRICHMENT_MAX_OUTPUT_TOKENS`
+- `CANDIDATE_LIMIT`
+- `TRENDING_CANDIDATE_LIMIT`
+- `DECISION_SHORTLIST_LIMIT`
+- `RECOMMENDATION_SEED_LIMIT`
 - `LLM_PROVIDER`
 - `LLM_MODEL`
 - `LLM_TIMEOUT_SECONDS`
@@ -250,7 +256,9 @@ Local Ollama models can take longer than hosted APIs to finish profile-enrichmen
 - `LLM_MODEL` can be either a bare Ollama tag like `glm-4.7-flash:latest` or an explicit LiteLLM form like `ollama/glm-4.7-flash:latest`.
 - If `LLM_TIMEOUT_SECONDS` is left blank, Vanguarr defaults to `180` seconds for Ollama and `45` seconds for hosted providers.
 - If your Ollama model still times out, set `LLM_TIMEOUT_SECONDS=240` or `300` in your `.env` or compose file.
-- Profile Architect now builds the durable profile in code and only uses the model for lightweight adjacent-lane suggestions when enabled.
+- Profile Architect now builds the durable profile in code, stores it as JSON, and only uses the model for lightweight adjacent-lane suggestions when enabled.
 - `PROFILE_LLM_ENRICHMENT_MAX_OUTPUT_TOKENS=120` keeps that optional profile-side LLM assist small.
-- Profile Architect groups episode watches into show-level counts and weights both durable history and recent momentum by default.
+- Decision Engine now builds a larger blended pool with `CANDIDATE_LIMIT=160`, includes up to `TRENDING_CANDIDATE_LIMIT=100` discovery titles, and cuts it down to a diversified `DECISION_SHORTLIST_LIMIT=15` before calling the LLM.
+- `RECOMMENDATION_SEED_LIMIT=6` controls how many top, repeat-watch, recent, and genre-anchor titles become Seer seed lanes per user.
+- Profile Architect groups episode watches into show-level counts, emits ranked genres, and weights both durable history and recent momentum by default.
 - Larger local models may also benefit from lowering `PROFILE_HISTORY_LIMIT` or switching to a faster quantization.

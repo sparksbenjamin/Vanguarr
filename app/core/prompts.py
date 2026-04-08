@@ -33,7 +33,9 @@ Your goal is to decide whether the payload meaningfully penetrates the user's in
 
 Evaluation guidance:
 - Score the candidate primarily against the user's observed viewing history and top watched content.
-- Use the profile block as a compact summary of enduring taste, not as a substitute for the history evidence.
+- Treat the profile manifest JSON as the canonical persisted taste model.
+- Use the summary block as a compact human-readable view of enduring taste, not as a substitute for the history evidence.
+- Treat the code-derived recommendation features as a strong prior; only push against them when there is a clear mismatch.
 - A strong match should connect to specific profile signals, not vague popularity.
 - Respect explicit exclusions first.
 - Be skeptical of weak genre overlap without thematic or tonal alignment.
@@ -73,11 +75,17 @@ Return compact JSON only.""",
 def build_decision_messages(
     *,
     username: str,
-    profile_block: str,
+    profile_payload: dict[str, Any],
     viewing_history: dict[str, Any],
     candidate: dict[str, Any],
     global_exclusions: list[str],
 ) -> list[dict[str, str]]:
+    summary_block = str(profile_payload.get("summary_block") or "").strip()
+    profile_manifest = {
+        key: value
+        for key, value in profile_payload.items()
+        if key != "summary_block"
+    }
     payload = {
         "media_type": candidate.get("media_type"),
         "media_id": candidate.get("media_id"),
@@ -90,28 +98,33 @@ def build_decision_messages(
         "release_date": candidate.get("release_date"),
         "sources": candidate.get("sources"),
         "media_info": candidate.get("media_info"),
+        "recommendation_features": candidate.get("recommendation_features"),
     }
     constraints_blob = json.dumps(global_exclusions, ensure_ascii=True)
     viewing_history_blob = json.dumps(viewing_history, indent=2, ensure_ascii=True)
+    profile_blob = json.dumps(profile_manifest, indent=2, ensure_ascii=True)
     payload_blob = json.dumps(payload, indent=2, ensure_ascii=True)
 
     return [
         {"role": "system", "content": DECISION_ENGINE_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": f"""Block 1 (Target): User Profile
+            "content": f"""Block 1 (Target): Canonical User Profile JSON
 User: {username}
-{profile_block}
+{profile_blob}
 
-Block 2 (Observed Signals): User Viewing History
+Block 2 (Target Summary): Derived Profile Summary
+{summary_block}
+
+Block 3 (Observed Signals): User Viewing History
 {viewing_history_blob}
 
-Block 3 (Payload): Candidate Media Metadata
+Block 4 (Payload): Candidate Media Metadata
 {payload_blob}
 
-Block 4 (Constraints): Global Exclusions
+Block 5 (Constraints): Global Exclusions
 {constraints_blob}
 
-Decide whether this candidate should be requested. Base the score on the viewing history first, then use the profile block to reinforce or challenge the match.""",
+Decide whether this candidate should be requested. Base the score on the viewing history and code-derived recommendation features first, then use the profile manifest and summary to reinforce or challenge the match.""",
         },
     ]

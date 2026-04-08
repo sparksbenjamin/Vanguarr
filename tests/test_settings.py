@@ -39,3 +39,12 @@ def test_profile_llm_enrichment_defaults() -> None:
 
     assert settings.profile_llm_enrichment_enabled is True
     assert settings.profile_llm_enrichment_max_output_tokens == 120
+
+
+def test_decision_funnel_defaults() -> None:
+    settings = Settings()
+
+    assert settings.candidate_limit == 160
+    assert settings.trending_candidate_limit == 100
+    assert settings.decision_shortlist_limit == 15
+    assert settings.recommendation_seed_limit == 6

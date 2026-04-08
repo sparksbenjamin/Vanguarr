@@ -84,8 +84,10 @@ class SeerClient(BaseAPIClient):
         seed_items: list[dict[str, Any]],
         *,
         limit: int | None = None,
+        trending_limit: int | None = None,
     ) -> list[dict[str, Any]]:
         max_candidates = limit or self.settings.candidate_limit
+        max_trending = trending_limit or self.settings.trending_candidate_limit
 
         movie_genres = await self.get_genre_map("movie")
         tv_genres = await self.get_genre_map("tv")
@@ -93,8 +95,8 @@ class SeerClient(BaseAPIClient):
         candidates: list[dict[str, Any]] = []
         seen: dict[tuple[str, int], dict[str, Any]] = {}
 
-        def add_candidate(item: dict[str, Any], source: str) -> None:
-            candidate = self._normalize_candidate(item, movie_genres, tv_genres, source)
+        def add_candidate(item: dict[str, Any], source: str, source_lanes: list[str]) -> None:
+            candidate = self._normalize_candidate(item, movie_genres, tv_genres, source, source_lanes)
             if not candidate:
                 return
 
@@ -103,30 +105,52 @@ class SeerClient(BaseAPIClient):
             if existing:
                 if source not in existing["sources"]:
                     existing["sources"].append(source)
+                for lane in source_lanes:
+                    if lane not in existing["source_lanes"]:
+                        existing["source_lanes"].append(lane)
                 return
 
             seen[key] = candidate
             candidates.append(candidate)
 
+        per_seed_limit = max(8, min(20, max_candidates // max(1, len(seed_items) or 1)))
         for seed in seed_items:
             media_id = seed.get("media_id")
             media_type = seed.get("media_type")
             seed_title = seed.get("title") or "seed"
+            seed_lanes = [
+                str(lane).strip()
+                for lane in seed.get("seed_lanes", [])
+                if str(lane).strip()
+            ] or ["top_seed"]
             if media_type not in {"movie", "tv"} or media_id is None:
                 continue
 
+            added_for_seed = 0
             for item in await self.get_recommendations(media_type, int(media_id)):
-                add_candidate(item, f"recommended:{seed_title}")
+                add_candidate(item, f"recommended:{seed_title}", seed_lanes)
+                added_for_seed += 1
                 if len(candidates) >= max_candidates:
                     return candidates
+                if added_for_seed >= per_seed_limit:
+                    break
 
-        if candidates:
-            return candidates
+        page = 1
+        trending_added = 0
+        while len(candidates) < max_candidates:
+            trending_results = await self.get_trending(page=page)
+            if not trending_results:
+                break
 
-        for item in await self.get_trending():
-            add_candidate(item, "trending-fallback")
-            if len(candidates) >= max_candidates:
-                return candidates
+            for item in trending_results:
+                add_candidate(item, "trending", ["trending_lane"])
+                trending_added += 1
+                if len(candidates) >= max_candidates:
+                    return candidates
+                if trending_added >= max_trending:
+                    return candidates
+
+            page += 1
 
         return candidates
 
@@ -183,6 +207,7 @@ class SeerClient(BaseAPIClient):
         movie_genres: dict[int, str],
         tv_genres: dict[int, str],
         source: str,
+        source_lanes: list[str],
     ) -> dict[str, Any] | None:
         media_type = item.get("mediaType")
         if media_type not in {"movie", "tv"}:
@@ -217,4 +242,5 @@ class SeerClient(BaseAPIClient):
             "backdrop_path": item.get("backdropPath"),
             "media_info": item.get("mediaInfo", {}),
             "sources": [source],
+            "source_lanes": list(source_lanes),
         }

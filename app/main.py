@@ -1,3 +1,4 @@
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -129,7 +130,9 @@ async def manifest(request: Request, username: str = "") -> HTMLResponse:
     profiles = service.list_profiles()
     selected_user = username or (profiles[0] if profiles else "")
     profile_content = service.read_profile(selected_user) if selected_user else ""
-    profile_path = service.profile_store.path_for(selected_user) if selected_user else None
+    profile_summary = service.read_profile_summary(selected_user) if selected_user else ""
+    profile_json_path = service.profile_store.json_path_for(selected_user) if selected_user else None
+    profile_summary_path = service.profile_store.summary_path_for(selected_user) if selected_user else None
     return templates.TemplateResponse(
         request=request,
         name="manifest.html",
@@ -140,7 +143,9 @@ async def manifest(request: Request, username: str = "") -> HTMLResponse:
             "profiles": profiles,
             "selected_user": selected_user,
             "profile_content": profile_content,
-            "profile_path": profile_path,
+            "profile_summary": profile_summary,
+            "profile_json_path": profile_json_path,
+            "profile_summary_path": profile_summary_path,
         },
     )
 
@@ -156,8 +161,14 @@ async def manifest_save(
     if not cleaned_username:
         return redirect_with_toast("/manifest", "A username is required before saving a manifest.")
 
-    service.save_profile(cleaned_username, content)
-    return redirect_with_toast("/manifest", f"Saved profile block for {cleaned_username}.", username=cleaned_username)
+    try:
+        service.save_profile(cleaned_username, content)
+    except json.JSONDecodeError:
+        return redirect_with_toast("/manifest", "Profile manifest must be valid JSON.", username=cleaned_username)
+    except ValueError as exc:
+        return redirect_with_toast("/manifest", str(exc), username=cleaned_username)
+
+    return redirect_with_toast("/manifest", f"Saved profile manifest for {cleaned_username}.", username=cleaned_username)
 
 
 @app.post("/actions/profile-architect")
