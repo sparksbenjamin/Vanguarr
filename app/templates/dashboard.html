@@ -2,221 +2,218 @@
 
 {% block content %}
 <section class="space-y-5">
-  <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-    <div>
-      <p class="panel-kicker">System Overview</p>
-      <h1 class="mt-2 text-3xl font-semibold tracking-tight">Dashboard</h1>
-      <p class="mt-2 max-w-3xl text-sm text-[var(--text-soft)]">
-        Keep the important signals in one place: upstream health, automation cadence, recent engine activity, and the latest request decisions.
-      </p>
-    </div>
-    <div class="grid gap-3 sm:grid-cols-2 xl:min-w-[420px] xl:grid-cols-4">
-      <div class="shell-card rounded-2xl px-4 py-3">
-        <p class="panel-kicker">System</p>
-        <p class="mt-2 text-lg font-semibold">{{ "Healthy" if health.overall_ok else "Attention" }}</p>
-        <p class="mt-1 text-sm text-[var(--text-soft)]">Connection board status</p>
+  <section class="surface page-hero rounded-[1.6rem] px-5 py-5 lg:px-6">
+    <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+      <div class="max-w-3xl">
+        <p class="panel-kicker">System Overview</p>
+        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Dashboard</h1>
+        <p class="mt-3 text-sm leading-6 text-[var(--text-soft)] sm:text-[0.96rem]">
+          Watch the upstream connections, launch the two engine passes, and inspect the latest request decisions without bouncing between pages.
+        </p>
       </div>
-      <div class="shell-card rounded-2xl px-4 py-3">
-        <p class="panel-kicker">Profiles</p>
-        <p class="mt-2 text-lg font-semibold">{{ profiles|length }}</p>
-        <p class="mt-1 text-sm text-[var(--text-soft)]">Saved profile blocks</p>
-      </div>
-      <div class="shell-card rounded-2xl px-4 py-3">
-        <p class="panel-kicker">Scheduler</p>
-        <p class="mt-2 text-lg font-semibold">{{ scheduler_jobs|length }}</p>
-        <p class="mt-1 text-sm text-[var(--text-soft)]">Registered jobs</p>
-      </div>
-      <div class="shell-card rounded-2xl px-4 py-3">
-        <p class="panel-kicker">Threshold</p>
-        <p class="mt-2 text-lg font-semibold">{{ "%.2f"|format(settings.request_threshold) }}</p>
-        <p class="mt-1 text-sm text-[var(--text-soft)]">Decision request cutoff</p>
+      <div class="flex flex-wrap gap-3">
+        <a class="button button-ghost" href="/logs">Open War Room</a>
+        <a class="button button-primary" href="/manifest">Open Profiles</a>
       </div>
     </div>
+
+    <div class="mt-5 flex flex-wrap gap-2 text-xs text-[var(--text-soft)]">
+      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Health polling every {{ settings.health_cache_seconds }}s</span>
+      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Request threshold {{ "%.2f"|format(settings.request_threshold) }}</span>
+      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Mounted runtime data under ./data</span>
+    </div>
+  </section>
+
+  <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <article class="metric-card">
+      <p class="panel-kicker">System</p>
+      <div class="mt-3 flex items-end justify-between gap-4">
+        <p class="text-2xl font-semibold">{{ "Healthy" if health.overall_ok else "Attention" }}</p>
+        <span class="status-pill {{ 'status-good' if health.overall_ok else 'status-warn' }}">
+          {{ "Online" if health.overall_ok else "Review" }}
+        </span>
+      </div>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Current connection board state</p>
+    </article>
+    <article class="metric-card">
+      <p class="panel-kicker">Profiles</p>
+      <p class="mt-3 text-2xl font-semibold">{{ profiles|length }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Stored persona blocks on disk</p>
+    </article>
+    <article class="metric-card">
+      <p class="panel-kicker">Automation</p>
+      <p class="mt-3 text-2xl font-semibold">{{ scheduler_jobs|length }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Registered scheduler jobs</p>
+    </article>
+    <article class="metric-card">
+      <p class="panel-kicker">Decision Feed</p>
+      <p class="mt-3 text-2xl font-semibold">{{ recent_logs|length }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Recent LLM decisions in view</p>
+    </article>
   </div>
 
-  <div class="grid gap-5 2xl:grid-cols-[1.45fr_0.95fr]">
+  <div class="grid gap-5 2xl:grid-cols-[1.5fr_0.95fr]">
     <div class="space-y-5">
-      <section class="shell-card rounded-[1.4rem]">
+      <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <div class="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p class="panel-kicker">Connection Board</p>
-              <h2 class="mt-2 panel-title">Live service status</h2>
+              <h2 class="mt-2 panel-title">Upstream health</h2>
             </div>
             <p class="mono text-xs text-[var(--text-dim)]">
-              Refreshed every {{ settings.health_cache_seconds }}s
-              <span class="text-[var(--text-soft)]">Last snapshot: <span id="health-generated-at">{{ health.generated_at }}</span></span>
+              Last snapshot <span id="health-generated-at" class="text-[var(--text-soft)]">{{ health.generated_at }}</span>
             </p>
           </div>
         </div>
-        <div class="overflow-x-auto">
-          <table class="data-table min-w-full">
-            <thead>
-              <tr>
-                <th>Service</th>
-                <th>Status</th>
-                <th>Detail</th>
-                <th>Metadata</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for key, label in [("jellyfin", "Jellyfin"), ("seer", "Seer"), ("llm", "LLM")] %}
-              {% set item = health.services[key] %}
-              <tr data-health-row="{{ key }}">
-                <td class="w-[180px]">
-                  <div class="flex items-center gap-3">
-                    <span
-                      class="h-2.5 w-2.5 rounded-full"
-                      data-health-dot="{{ key }}"
-                      style="background-color: {{ '#4dd38a' if item.ok else '#ff6d6d' }};"
-                    ></span>
-                    <div>
-                      <p class="font-medium">{{ label }}</p>
-                      <p class="mono mt-1 text-xs text-[var(--text-dim)]">{{ key }}</p>
-                    </div>
-                  </div>
-                </td>
-                <td class="w-[160px]">
-                  <span
-                    data-health-badge="{{ key }}"
-                    class="status-pill {{ 'status-good' if item.ok else 'status-bad' }}"
-                  >
-                    {{ "Healthy" if item.ok else "Down" }}
-                  </span>
-                </td>
-                <td>
-                  <p class="text-sm text-[var(--text-soft)]" data-health-detail="{{ key }}">{{ item.detail }}</p>
-                </td>
-                <td class="min-w-[280px]">
-                  <pre class="overflow-x-auto rounded-2xl bg-black/20 p-3 text-xs text-[var(--text-soft)]" data-health-meta="{{ key }}">{{ item.meta | tojson(indent=2) }}</pre>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+        <div class="grid gap-4 px-5 py-5 md:grid-cols-3">
+          {% for key, label in [("jellyfin", "Jellyfin"), ("seer", "Seer"), ("llm", "LLM")] %}
+          {% set item = health.services[key] %}
+          <article class="surface rounded-[1.25rem] bg-[rgba(255,255,255,0.02)] px-4 py-4" data-health-row="{{ key }}">
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex items-center gap-3">
+                <span
+                  class="h-3 w-3 rounded-full"
+                  data-health-dot="{{ key }}"
+                  style="background-color: {{ '#5ad99e' if item.ok else '#ff7f7f' }};"
+                ></span>
+                <div>
+                  <p class="font-medium">{{ label }}</p>
+                  <p class="mono mt-1 text-[11px] uppercase tracking-[0.2em] text-[var(--text-dim)]">{{ key }}</p>
+                </div>
+              </div>
+              <span data-health-badge="{{ key }}" class="status-pill {{ 'status-good' if item.ok else 'status-bad' }}">
+                {{ "Healthy" if item.ok else "Down" }}
+              </span>
+            </div>
+            <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]" data-health-detail="{{ key }}">{{ item.detail }}</p>
+            <pre class="mt-4 overflow-x-auto rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/20 p-3 text-xs text-[var(--text-soft)]" data-health-meta="{{ key }}">{{ item.meta | tojson(indent=2) }}</pre>
+          </article>
+          {% endfor %}
         </div>
       </section>
 
-      <section class="shell-card rounded-[1.4rem]">
+      <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <p class="panel-kicker">Execution History</p>
           <h2 class="mt-2 panel-title">Recent engine runs</h2>
         </div>
-        <div class="overflow-x-auto">
-          <table class="data-table min-w-full">
-            <thead>
-              <tr>
-                <th>Engine</th>
-                <th>Status</th>
-                <th>Started</th>
-                <th>Summary</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for run in task_runs %}
-              <tr>
-                <td>
-                  <p class="font-medium">{{ run.engine.replace("_", " ").title() }}</p>
-                  <p class="mono mt-1 text-xs text-[var(--text-dim)]">task-{{ run.id }}</p>
-                </td>
-                <td>
-                  <span
-                    class="status-pill {{ 'status-good' if run.status == 'success' else 'status-warn' if run.status == 'partial' or run.status == 'running' else 'status-bad' }}"
-                  >
-                    {{ run.status }}
-                  </span>
-                </td>
-                <td class="mono text-xs text-[var(--text-soft)]">
-                  <div>{{ run.started_at }}</div>
-                  {% if run.finished_at %}
-                  <div class="mt-2 text-[var(--text-dim)]">finished {{ run.finished_at }}</div>
-                  {% endif %}
-                </td>
-                <td class="text-sm text-[var(--text-soft)]">{{ run.summary }}</td>
-              </tr>
-              {% else %}
-              <tr>
-                <td colspan="4" class="text-sm text-[var(--text-soft)]">No task runs recorded yet.</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+        <div class="px-5 py-5">
+          <div class="table-wrap overflow-x-auto">
+            <table class="data-table min-w-full">
+              <thead>
+                <tr>
+                  <th>Engine</th>
+                  <th>Status</th>
+                  <th>Started</th>
+                  <th>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for run in task_runs %}
+                <tr>
+                  <td>
+                    <p class="font-medium">{{ run.engine.replace("_", " ").title() }}</p>
+                    <p class="mono mt-1 text-xs text-[var(--text-dim)]">task-{{ run.id }}</p>
+                  </td>
+                  <td>
+                    <span class="status-pill {{ 'status-good' if run.status == 'success' else 'status-warn' if run.status == 'partial' or run.status == 'running' else 'status-bad' }}">
+                      {{ run.status }}
+                    </span>
+                  </td>
+                  <td class="mono text-xs text-[var(--text-soft)]">
+                    <div>{{ run.started_at }}</div>
+                    {% if run.finished_at %}
+                    <div class="mt-2 text-[var(--text-dim)]">finished {{ run.finished_at }}</div>
+                    {% endif %}
+                  </td>
+                  <td class="text-sm leading-6 text-[var(--text-soft)]">{{ run.summary }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                  <td colspan="4">
+                    <div class="empty-state">No task runs recorded yet.</div>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
-      <section class="shell-card rounded-[1.4rem]">
+      <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <div class="flex items-center justify-between gap-4">
             <div>
               <p class="panel-kicker">Decision Feed</p>
               <h2 class="mt-2 panel-title">Latest LLM decisions</h2>
             </div>
-            <a class="button button-ghost" href="/logs">Open War Room</a>
+            <a class="button button-ghost" href="/logs">Open Full Log</a>
           </div>
         </div>
-        <div class="overflow-x-auto">
-          <table class="data-table min-w-full">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>User</th>
-                <th>Title</th>
-                <th>Decision</th>
-                <th>Reasoning</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for log in recent_logs %}
-              <tr>
-                <td class="mono text-xs text-[var(--text-soft)]">{{ log.created_at }}</td>
-                <td class="text-sm">{{ log.username }}</td>
-                <td>
-                  <p class="font-medium">{{ log.media_title }}</p>
-                  <p class="mt-1 text-xs text-[var(--text-dim)]">{{ log.media_type }} / {{ log.source }}</p>
-                </td>
-                <td>
-                  <span class="status-pill {{ 'status-good' if log.decision == 'REQUEST' else 'status-neutral' }}">
-                    {{ log.decision }}
-                  </span>
-                  <p class="mono mt-2 text-xs text-[var(--text-dim)]">
-                    conf={{ "%.2f"|format(log.confidence) }} threshold={{ "%.2f"|format(log.threshold) }}
-                  </p>
-                </td>
-                <td class="text-sm text-[var(--text-soft)]">
-                  <p>{{ log.reasoning[:240] }}{% if log.reasoning|length > 240 %}...{% endif %}</p>
-                  <p class="mt-2 text-xs text-[var(--text-dim)]">requested={{ "yes" if log.requested else "no" }}</p>
-                </td>
-              </tr>
-              {% else %}
-              <tr>
-                <td colspan="5" class="text-sm text-[var(--text-soft)]">No decisions have been recorded yet.</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+        <div class="px-5 py-5">
+          <div class="table-wrap overflow-x-auto">
+            <table class="data-table min-w-full">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>User</th>
+                  <th>Title</th>
+                  <th>Decision</th>
+                  <th>Reasoning</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for log in recent_logs %}
+                <tr>
+                  <td class="mono text-xs text-[var(--text-soft)]">{{ log.created_at }}</td>
+                  <td class="text-sm">{{ log.username }}</td>
+                  <td>
+                    <p class="font-medium">{{ log.media_title }}</p>
+                    <p class="mt-1 text-xs text-[var(--text-dim)]">{{ log.media_type }} / {{ log.source }}</p>
+                  </td>
+                  <td>
+                    <span class="status-pill {{ 'status-good' if log.decision == 'REQUEST' else 'status-neutral' }}">
+                      {{ log.decision }}
+                    </span>
+                    <p class="mono mt-2 text-xs text-[var(--text-dim)]">
+                      conf={{ "%.2f"|format(log.confidence) }} threshold={{ "%.2f"|format(log.threshold) }}
+                    </p>
+                  </td>
+                  <td class="text-sm leading-6 text-[var(--text-soft)]">
+                    <p>{{ log.reasoning[:220] }}{% if log.reasoning|length > 220 %}...{% endif %}</p>
+                    <p class="mt-2 text-xs text-[var(--text-dim)]">requested={{ "yes" if log.requested else "no" }}</p>
+                  </td>
+                </tr>
+                {% else %}
+                <tr>
+                  <td colspan="5">
+                    <div class="empty-state">No decisions have been recorded yet.</div>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     </div>
 
     <div class="space-y-5">
-      <section class="shell-card rounded-[1.4rem]">
+      <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <p class="panel-kicker">Manual Operations</p>
           <h2 class="mt-2 panel-title">Trigger the engines</h2>
-          <p class="mt-2 text-sm text-[var(--text-soft)]">
-            Leave the username empty to process every reachable Jellyfin user.
+          <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+            Run either stroke manually. Leave the username blank to process every reachable Jellyfin user.
           </p>
         </div>
         <div class="space-y-5 px-5 py-5">
           <form class="space-y-3" method="post" action="/actions/profile-architect">
             <div>
               <label class="mb-2 block text-sm font-medium" for="profile-architect-user">Profile Architect target</label>
-              <input
-                id="profile-architect-user"
-                name="username"
-                placeholder="all users"
-                class="field-input text-sm"
-              />
+              <input id="profile-architect-user" name="username" placeholder="all users" class="field-input text-sm" />
             </div>
             <button class="button button-primary w-full" type="submit">Run Profile Architect</button>
           </form>
@@ -226,26 +223,21 @@
           <form class="space-y-3" method="post" action="/actions/decision-engine">
             <div>
               <label class="mb-2 block text-sm font-medium" for="decision-engine-user">Decision Engine target</label>
-              <input
-                id="decision-engine-user"
-                name="username"
-                placeholder="all users"
-                class="field-input text-sm"
-              />
+              <input id="decision-engine-user" name="username" placeholder="all users" class="field-input text-sm" />
             </div>
             <button class="button button-amber w-full" type="submit">Run Decision Engine</button>
           </form>
         </div>
       </section>
 
-      <section class="shell-card rounded-[1.4rem]">
+      <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <p class="panel-kicker">Automation</p>
           <h2 class="mt-2 panel-title">Scheduler queue</h2>
         </div>
-        <div class="divide-y divide-white/5">
+        <div class="space-y-3 px-5 py-5">
           {% for job in scheduler_jobs %}
-          <article class="px-5 py-4">
+          <article class="surface rounded-[1.2rem] bg-[rgba(255,255,255,0.02)] px-4 py-4">
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="font-medium">{{ job.name }}</p>
@@ -255,16 +247,16 @@
                 {{ "Enabled" if settings.scheduler_enabled else "Disabled" }}
               </span>
             </div>
-            <p class="mt-3 text-sm text-[var(--text-soft)]">{{ job.trigger }}</p>
+            <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">{{ job.trigger }}</p>
             <p class="mono mt-3 text-xs text-[var(--text-dim)]">Next run: {{ job.next_run_time or "Not scheduled" }}</p>
           </article>
           {% else %}
-          <div class="px-5 py-5 text-sm text-[var(--text-soft)]">No scheduler jobs are registered.</div>
+          <div class="empty-state">No scheduler jobs are registered.</div>
           {% endfor %}
         </div>
       </section>
 
-      <section class="shell-card rounded-[1.4rem]">
+      <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <div class="flex items-center justify-between gap-4">
             <div>
@@ -274,14 +266,17 @@
             <a class="button button-ghost" href="/manifest">Open Editor</a>
           </div>
         </div>
-        <div class="divide-y divide-white/5">
+        <div class="space-y-2 px-5 py-5">
           {% for profile in profiles %}
-          <a href="/manifest?username={{ profile }}" class="flex items-center justify-between gap-4 px-5 py-4 text-sm text-[var(--text-soft)] transition hover:bg-white/5 hover:text-white">
+          <a
+            href="/manifest?username={{ profile }}"
+            class="flex items-center justify-between gap-4 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-3 text-sm text-[var(--text-soft)] transition hover:border-[rgba(84,180,255,0.18)] hover:bg-[var(--accent-soft)] hover:text-white"
+          >
             <span>{{ profile }}</span>
             <span class="mono text-xs text-[var(--text-dim)]">profile</span>
           </a>
           {% else %}
-          <div class="px-5 py-5 text-sm text-[var(--text-soft)]">No saved profiles yet.</div>
+          <div class="empty-state">No saved profiles yet.</div>
           {% endfor %}
         </div>
       </section>
@@ -314,7 +309,7 @@
       const meta = document.querySelector(`[data-health-meta="${key}"]`);
 
       if (dot) {
-        dot.style.backgroundColor = service.ok ? "#4dd38a" : "#ff6d6d";
+        dot.style.backgroundColor = service.ok ? "#5ad99e" : "#ff7f7f";
       }
 
       if (badge) {

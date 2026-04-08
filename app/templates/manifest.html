@@ -2,24 +2,26 @@
 
 {% block content %}
 <section class="space-y-5">
-  <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-    <div>
-      <p class="panel-kicker">Profiles</p>
-      <h1 class="mt-2 text-3xl font-semibold tracking-tight">Manifest editor</h1>
-      <p class="mt-2 max-w-3xl text-sm text-[var(--text-soft)]">
-        Load a stored profile block, review the raw v3 persona text, and make a manual adjustment when the automated profile compression needs a nudge.
-      </p>
+  <section class="surface page-hero rounded-[1.6rem] px-5 py-5 lg:px-6">
+    <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+      <div class="max-w-3xl">
+        <p class="panel-kicker">Profiles</p>
+        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Manifest editor</h1>
+        <p class="mt-3 text-sm leading-6 text-[var(--text-soft)] sm:text-[0.96rem]">
+          Review the raw v3 persona block, make a manual correction when needed, and keep the stored taste model grounded in what users actually watch.
+        </p>
+      </div>
+      <div class="surface rounded-[1.25rem] bg-[rgba(255,255,255,0.03)] px-4 py-4 xl:min-w-[320px]">
+        <p class="panel-kicker">Mounted Path</p>
+        <p class="mt-2 mono text-sm text-white">./data/profiles</p>
+        <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">The editor writes directly to the same host-visible files operators can inspect outside the UI.</p>
+      </div>
     </div>
-    <div class="shell-card rounded-2xl px-4 py-3 xl:min-w-[320px]">
-      <p class="panel-kicker">Mounted Path</p>
-      <p class="mt-2 mono text-sm text-white">./data/profiles</p>
-      <p class="mt-1 text-sm text-[var(--text-soft)]">Users can inspect the generated text files directly on the host.</p>
-    </div>
-  </div>
+  </section>
 
-  <div class="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+  <div class="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
     <aside class="space-y-5">
-      <section class="shell-card rounded-[1.4rem] overflow-hidden">
+      <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <p class="panel-kicker">Profile Loader</p>
           <h2 class="mt-2 panel-title">Open or create a profile</h2>
@@ -28,52 +30,46 @@
           <form class="space-y-3" method="get" action="/manifest">
             <div>
               <label class="mb-2 block text-sm font-medium" for="manifest-user">Username</label>
-              <input
-                id="manifest-user"
-                name="username"
-                value="{{ selected_user }}"
-                placeholder="username"
-                class="field-input text-sm"
-              />
+              <input id="manifest-user" name="username" value="{{ selected_user }}" placeholder="username" class="field-input text-sm" />
             </div>
             <button class="button button-primary w-full" type="submit">Load Profile</button>
           </form>
-          <p class="mt-4 text-sm text-[var(--text-soft)]">
-            Enter an existing Jellyfin username to open a profile, or type a new one to generate the default profile scaffold.
+          <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">
+            Use an existing Jellyfin username to inspect a live profile, or enter a new one to create a fresh scaffold.
           </p>
         </div>
       </section>
 
-      <section class="shell-card rounded-[1.4rem] overflow-hidden">
+      <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <p class="panel-kicker">Profile Files</p>
           <h2 class="mt-2 panel-title">Available manifests</h2>
         </div>
-        <div class="max-h-[560px] overflow-y-auto divide-y divide-white/5">
-          {% for profile in profiles %}
-          <a
-            href="/manifest?username={{ profile }}"
-            class="block px-5 py-4 text-sm transition {{ 'bg-[var(--accent-soft)] text-white' if profile == selected_user else 'text-[var(--text-soft)] hover:bg-white/5 hover:text-white' }}"
-          >
-            <div class="flex items-center justify-between gap-3">
+        <div class="max-h-[620px] overflow-y-auto px-4 py-4">
+          <div class="space-y-2">
+            {% for profile in profiles %}
+            <a
+              href="/manifest?username={{ profile }}"
+              class="flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm transition {{ 'border-[rgba(84,180,255,0.3)] bg-[var(--accent-soft)] text-white' if profile == selected_user else 'border-[rgba(160,182,207,0.08)] bg-white/5 text-[var(--text-soft)] hover:border-[rgba(84,180,255,0.16)] hover:bg-white/[0.08] hover:text-white' }}"
+            >
               <span>{{ profile }}</span>
               {% if profile == selected_user %}
               <span class="status-pill status-good">Open</span>
               {% else %}
               <span class="mono text-xs text-[var(--text-dim)]">profile</span>
               {% endif %}
-            </div>
-          </a>
-          {% else %}
-          <div class="px-5 py-5 text-sm text-[var(--text-soft)]">No profile files have been generated yet.</div>
-          {% endfor %}
+            </a>
+            {% else %}
+            <div class="empty-state">No profile files have been generated yet.</div>
+            {% endfor %}
+          </div>
         </div>
       </section>
     </aside>
 
-    <section class="shell-card rounded-[1.4rem] overflow-hidden">
+    <section class="surface rounded-[1.45rem] overflow-hidden">
       <div class="border-b border-white/5 px-5 py-4">
-        <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p class="panel-kicker">Raw Profile Block</p>
             <h2 class="mt-2 panel-title">{{ selected_user or "Choose a profile" }}</h2>
@@ -83,8 +79,8 @@
             <p class="mt-2 text-sm text-[var(--text-soft)]">Select a profile from the left rail or type a username to start a new block.</p>
             {% endif %}
           </div>
-          <div class="text-sm text-[var(--text-soft)]">
-            Keep the final block compact and focused on core interests, recent momentum, and guardrails.
+          <div class="max-w-md rounded-2xl border border-[rgba(160,182,207,0.1)] bg-white/5 px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
+            Keep the block compact: long-term interests, recent momentum, taste signals, avoidances, and request bias.
           </div>
         </div>
       </div>
@@ -97,14 +93,10 @@
           placeholder="Load or create a profile block to edit it here."
         >{{ profile_content }}</textarea>
         <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <p class="text-sm text-[var(--text-soft)]">
-            Saved changes write back to the mounted profile file so the host can inspect the raw text directly.
+          <p class="text-sm leading-6 text-[var(--text-soft)]">
+            Saved changes write back to the mounted profile file so the raw manifest stays visible both in the UI and on disk.
           </p>
-          <button
-            class="button button-amber lg:min-w-[180px]"
-            type="submit"
-            {% if not selected_user %}disabled{% endif %}
-          >
+          <button class="button button-amber lg:min-w-[180px]" type="submit" {% if not selected_user %}disabled{% endif %}>
             Save Manifest
           </button>
         </div>
