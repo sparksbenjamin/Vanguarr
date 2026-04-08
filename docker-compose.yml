@@ -1,0 +1,70 @@
+services:
+  vanguarr:
+    build:
+      context: .
+    container_name: vanguarr
+    restart: unless-stopped
+    ports:
+      - "${VANGUARR_PORT:-8000}:8000"
+    environment:
+      APP_NAME: "${APP_NAME:-Vanguarr}"
+      APP_ENV: "${APP_ENV:-production}"
+      APP_HOST: "${APP_HOST:-0.0.0.0}"
+      APP_PORT: "8000"
+      TZ: "${TZ:-America/New_York}"
+      DATABASE_URL: "${DATABASE_URL:-sqlite:////app/config/vanguarr.db}"
+      PROFILES_DIR: "${PROFILES_DIR:-/app/config/profiles}"
+      GLOBAL_EXCLUSIONS: "${GLOBAL_EXCLUSIONS:-No Horror,No Reality TV}"
+      REQUEST_THRESHOLD: "${REQUEST_THRESHOLD:-0.72}"
+      SCHEDULER_ENABLED: "${SCHEDULER_ENABLED:-true}"
+      PROFILE_CRON: "${PROFILE_CRON:-0 3 * * 0}"
+      DECISION_CRON: "${DECISION_CRON:-0 4 * * *}"
+      HEALTH_CACHE_SECONDS: "${HEALTH_CACHE_SECONDS:-30}"
+      PROFILE_HISTORY_LIMIT: "${PROFILE_HISTORY_LIMIT:-40}"
+      CANDIDATE_LIMIT: "${CANDIDATE_LIMIT:-25}"
+      RECOMMENDATION_SEED_LIMIT: "${RECOMMENDATION_SEED_LIMIT:-3}"
+      JELLYFIN_BASE_URL: "${JELLYFIN_BASE_URL:-}"
+      JELLYFIN_API_KEY: "${JELLYFIN_API_KEY:-}"
+      SEER_BASE_URL: "${SEER_BASE_URL:-}"
+      SEER_API_KEY: "${SEER_API_KEY:-}"
+      SEER_REQUEST_USER_ID: "${SEER_REQUEST_USER_ID:-}"
+      LLM_PROVIDER: "${LLM_PROVIDER:-ollama}"
+      LLM_MODEL: "${LLM_MODEL:-ollama/llama3.1:8b}"
+      LLM_TEMPERATURE: "${LLM_TEMPERATURE:-0.2}"
+      LLM_MAX_OUTPUT_TOKENS: "${LLM_MAX_OUTPUT_TOKENS:-700}"
+      LLM_TIMEOUT_SECONDS: "${LLM_TIMEOUT_SECONDS:-45}"
+      OLLAMA_API_BASE: "${OLLAMA_API_BASE:-http://ollama:11434}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_API_BASE: "${OPENAI_API_BASE:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_API_BASE: "${ANTHROPIC_API_BASE:-}"
+    volumes:
+      - ./config:/app/config
+    depends_on:
+      ollama:
+        condition: service_started
+        required: false
+
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: vanguarr-ollama
+    restart: unless-stopped
+    profiles:
+      - local-llm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    security_opt:
+      - seccomp=unconfined
+    group_add:
+      - video
+    environment:
+      TZ: "${TZ:-America/New_York}"
+      OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-5m}"
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+
+volumes:
+  ollama-data:

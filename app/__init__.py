@@ -1,0 +1,1 @@
+"""Vanguarr application package."""
