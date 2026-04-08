@@ -129,14 +129,14 @@ class LLMClient:
         temperature: float | None,
         timeout_seconds: int | None,
     ) -> dict[str, Any]:
+        provider = self.settings.llm_provider.lower()
         kwargs: dict[str, Any] = {
-            "model": self.settings.llm_model,
+            "model": self._resolve_model_name(),
             "timeout": timeout_seconds or self.settings.effective_llm_timeout_seconds,
             "max_tokens": max_tokens or self.settings.llm_max_output_tokens,
             "temperature": self.settings.llm_temperature if temperature is None else temperature,
         }
 
-        provider = self.settings.llm_provider.lower()
         if provider == "ollama":
             kwargs["api_base"] = self.settings.ollama_api_base
         elif provider == "openai":
@@ -149,6 +149,13 @@ class LLMClient:
                 kwargs["api_base"] = self.settings.anthropic_api_base
 
         return kwargs
+
+    def _resolve_model_name(self) -> str:
+        provider = self.settings.llm_provider.lower()
+        model = self.settings.llm_model.strip()
+        if provider == "ollama" and "/" not in model:
+            return f"ollama/{model}"
+        return model
 
     async def _ping_ollama(self) -> dict[str, Any]:
         async with httpx.AsyncClient(
