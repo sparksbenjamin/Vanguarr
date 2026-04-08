@@ -198,6 +198,7 @@ services:
 - `SEER_BASE_URL`
 - `SEER_API_KEY`
 - `SEER_REQUEST_USER_ID`
+- `PROFILE_ARCHITECT_MAX_OUTPUT_TOKENS`
 - `LLM_PROVIDER`
 - `LLM_MODEL`
 - `LLM_TIMEOUT_SECONDS`
@@ -242,4 +243,5 @@ Local Ollama models can take longer than hosted APIs to finish profile-compressi
 - `LLM_MODEL` can be either a bare Ollama tag like `glm-4.7-flash:latest` or an explicit LiteLLM form like `ollama/glm-4.7-flash:latest`.
 - If `LLM_TIMEOUT_SECONDS` is left blank, Vanguarr defaults to `180` seconds for Ollama and `45` seconds for hosted providers.
 - If your Ollama model still times out, set `LLM_TIMEOUT_SECONDS=240` or `300` in your `.env` or compose file.
+- Profile Architect uses a smaller dedicated output budget by default via `PROFILE_ARCHITECT_MAX_OUTPUT_TOKENS=384` to keep local summarization runs practical.
 - Larger local models may also benefit from lowering `PROFILE_HISTORY_LIMIT` or switching to a faster quantization.

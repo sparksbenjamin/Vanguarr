@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     decision_cron: str = "0 4 * * *"
     health_cache_seconds: int = 30
     profile_history_limit: int = 40
+    profile_architect_max_output_tokens: int = 384
     candidate_limit: int = 25
     recommendation_seed_limit: int = 3
     decision_page_size: int = 100

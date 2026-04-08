@@ -19,3 +19,9 @@ def test_hosted_timeout_defaults_to_45_when_blank() -> None:
 
     assert settings.llm_timeout_seconds is None
     assert settings.effective_llm_timeout_seconds == 45
+
+
+def test_profile_architect_max_tokens_default() -> None:
+    settings = Settings()
+
+    assert settings.profile_architect_max_output_tokens == 384

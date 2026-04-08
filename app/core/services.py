@@ -145,7 +145,7 @@ class VanguarrService:
                 current_username = user.get("Name", "unknown")
                 try:
                     history = await self.jellyfin.get_playback_history(user["Id"], self.settings.profile_history_limit)
-                    compact_history = self._compact_history(history)
+                    compact_history = self._build_profile_history_context(history)
                     prompt = build_profile_architect_user_prompt(
                         current_username,
                         compact_history,
@@ -154,7 +154,7 @@ class VanguarrService:
                     new_profile = await self.llm.generate_text(
                         system_prompt=PROFILE_ARCHITECT_SYSTEM_PROMPT,
                         user_prompt=prompt,
-                        max_tokens=self.settings.llm_max_output_tokens,
+                        max_tokens=self.settings.profile_architect_max_output_tokens,
                         temperature=0.1,
                     )
                     bounded_profile = self._limit_words(new_profile, max_words=500)
@@ -382,22 +382,83 @@ class VanguarrService:
         )
         return session.scalar(stmt) is not None
 
-    @staticmethod
-    def _compact_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        compacted: list[dict[str, Any]] = []
-        for item in history[:30]:
-            compacted.append(
+    @classmethod
+    def _build_profile_history_context(
+        cls,
+        history: list[dict[str, Any]],
+        *,
+        top_limit: int = 10,
+        recent_limit: int = 8,
+    ) -> dict[str, Any]:
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        genre_counts: Counter[str] = Counter()
+        recent_plays: list[dict[str, Any]] = []
+
+        for item in history:
+            title = cls._seed_title(item, cls._map_history_media_type(item.get("Type")) or "movie")
+            item_type = item.get("Type") or "Unknown"
+            key = (title, item_type)
+            grouped_entry = grouped.setdefault(
+                key,
                 {
-                    "name": item.get("Name"),
-                    "type": item.get("Type"),
-                    "overview": item.get("Overview", "")[:500],
-                    "genres": item.get("Genres", []),
+                    "title": title,
+                    "type": item_type,
+                    "play_count": 0,
+                    "genres": [],
                     "community_rating": item.get("CommunityRating"),
-                    "date_played": item.get("UserData", {}).get("LastPlayedDate"),
-                    "provider_ids": item.get("ProviderIds", {}),
+                    "last_played": None,
+                    "_last_played_score": 0.0,
+                },
+            )
+
+            grouped_entry["play_count"] += 1
+            grouped_entry["genres"] = cls._merge_unique_strings(grouped_entry["genres"], item.get("Genres", [])[:4])
+
+            if grouped_entry.get("community_rating") is None and item.get("CommunityRating") is not None:
+                grouped_entry["community_rating"] = item.get("CommunityRating")
+
+            last_played = item.get("UserData", {}).get("LastPlayedDate")
+            last_played_score = cls._to_timestamp(last_played)
+            if last_played_score >= grouped_entry["_last_played_score"]:
+                grouped_entry["last_played"] = last_played
+                grouped_entry["_last_played_score"] = last_played_score
+
+            for genre in item.get("Genres", []):
+                if genre:
+                    genre_counts[str(genre)] += 1
+
+        for item in history[:recent_limit]:
+            recent_plays.append(
+                {
+                    "title": cls._seed_title(item, cls._map_history_media_type(item.get("Type")) or "movie"),
+                    "type": item.get("Type"),
+                    "genres": item.get("Genres", [])[:3],
+                    "community_rating": item.get("CommunityRating"),
+                    "last_played": item.get("UserData", {}).get("LastPlayedDate"),
                 }
             )
-        return compacted
+
+        top_titles = list(grouped.values())
+        top_titles.sort(
+            key=lambda item: (
+                -int(item.get("play_count") or 0),
+                -float(item.get("_last_played_score") or 0.0),
+                str(item.get("title") or "").lower(),
+            )
+        )
+
+        normalized_top_titles: list[dict[str, Any]] = []
+        for item in top_titles[:top_limit]:
+            cleaned = dict(item)
+            cleaned.pop("_last_played_score", None)
+            normalized_top_titles.append(cleaned)
+
+        return {
+            "history_count": len(history),
+            "top_titles": normalized_top_titles,
+            "top_genres": [genre for genre, _count in genre_counts.most_common(8)],
+            "recent_plays": recent_plays,
+        }
 
     @classmethod
     def _select_recommendation_seeds(

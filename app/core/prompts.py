@@ -60,19 +60,20 @@ Return only JSON with this schema:
 
 def build_profile_architect_user_prompt(
     username: str,
-    history_entries: list[dict[str, Any]],
+    history_summary: dict[str, Any],
     current_profile: str,
 ) -> str:
-    history_blob = json.dumps(history_entries, indent=2, ensure_ascii=True)
+    history_blob = json.dumps(history_summary, indent=2, ensure_ascii=True)
     return f"""Refresh the persona for user "{username}".
 
 Current profile block:
 {current_profile or "[No existing profile yet]"}
 
-Recent Jellyfin playback history:
+Observed Jellyfin viewing summary:
 {history_blob}
 
 Update the profile while keeping it compact, structured, and under 500 words.
+Use repeated titles and top genres as durable taste signals, and recent plays as momentum.
 """
 
 

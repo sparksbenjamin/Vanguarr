@@ -1,4 +1,4 @@
-from app.core.prompts import build_decision_messages
+from app.core.prompts import build_decision_messages, build_profile_architect_user_prompt
 from app.core.services import VanguarrService
 
 
@@ -71,3 +71,56 @@ def test_decision_prompt_includes_viewing_history_block() -> None:
     assert "Block 2 (Observed Signals): User Viewing History" in prompt
     assert "Movie Alpha" in prompt
     assert "Base the score on the viewing history first" in prompt
+
+
+def test_profile_history_context_compacts_repeated_titles() -> None:
+    history = [
+        {
+            "Name": "Episode 1",
+            "SeriesName": "Show Alpha",
+            "Type": "Episode",
+            "Genres": ["Sci-Fi", "Drama"],
+            "CommunityRating": 8.1,
+            "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+        },
+        {
+            "Name": "Episode 2",
+            "SeriesName": "Show Alpha",
+            "Type": "Episode",
+            "Genres": ["Sci-Fi"],
+            "CommunityRating": 8.1,
+            "UserData": {"LastPlayedDate": "2026-04-07T10:00:00Z"},
+        },
+        {
+            "Name": "Movie Beta",
+            "Type": "Movie",
+            "Genres": ["Drama"],
+            "CommunityRating": 7.4,
+            "UserData": {"LastPlayedDate": "2026-04-06T10:00:00Z"},
+        },
+    ]
+
+    summary = VanguarrService._build_profile_history_context(history, top_limit=5, recent_limit=3)
+
+    assert summary["history_count"] == 3
+    assert summary["top_titles"][0]["title"] == "Show Alpha"
+    assert summary["top_titles"][0]["play_count"] == 2
+    assert "Sci-Fi" in summary["top_genres"]
+    assert len(summary["recent_plays"]) == 3
+
+
+def test_profile_architect_prompt_uses_viewing_summary() -> None:
+    prompt = build_profile_architect_user_prompt(
+        "alice",
+        {
+            "history_count": 12,
+            "top_titles": [{"title": "Show Alpha", "play_count": 4}],
+            "top_genres": ["Sci-Fi"],
+            "recent_plays": [{"title": "Show Alpha"}],
+        },
+        "[VANGUARR_PROFILE_V3]\nUser: alice",
+    )
+
+    assert "Observed Jellyfin viewing summary" in prompt
+    assert "Show Alpha" in prompt
+    assert "Use repeated titles and top genres as durable taste signals" in prompt
