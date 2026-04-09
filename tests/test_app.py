@@ -21,6 +21,7 @@ def test_dashboard_renders() -> None:
 
     assert response.status_code == 200
     assert "Vanguarr" in response.text
+    assert "Suggested For You" in response.text
 
 
 def test_startup_recovers_interrupted_tasks(monkeypatch) -> None:
@@ -229,3 +230,133 @@ def test_decision_engine_action_reports_existing_background_run(monkeypatch) -> 
     assert response.status_code == 303
     assert response.headers["location"] == "/?toast=Decision+Engine+is+already+running."
     assert launches == [None]
+
+
+def test_suggested_for_you_action_redirects_immediately_with_background_toast(monkeypatch) -> None:
+    with TestClient(app) as client:
+        launches: list[str | None] = []
+
+        def fake_launch(username: str | None) -> tuple[bool, str]:
+            launches.append(username)
+            return True, "Suggested For You started in the background for admin."
+
+        monkeypatch.setattr(client.app.state.background_runner, "launch_suggested_for_you", fake_launch)
+
+        response = client.post(
+            "/actions/suggested-for-you",
+            data={"username": "admin"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?toast=Suggested+For+You+started+in+the+background+for+admin."
+    assert launches == ["admin"]
+
+
+def test_jellyfin_suggestions_api_requires_bearer_token(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.settings,
+            "snapshot",
+            lambda force=False: SimpleNamespace(suggestions_api_key="top-secret"),
+        )
+
+        response = client.get("/api/jellyfin/suggestions?username=alice")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid suggestions API token."
+
+
+def test_jellyfin_suggestions_api_returns_ranked_items(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.settings,
+            "snapshot",
+            lambda force=False: SimpleNamespace(suggestions_api_key="top-secret"),
+        )
+
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_suggestions",
+            lambda username=None, jellyfin_user_id=None, limit=None: [
+                SimpleNamespace(
+                    username="alice",
+                    jellyfin_user_id="user-123",
+                    rank=1,
+                    media_type="movie",
+                    title="Arrival",
+                    overview="First contact drama.",
+                    production_year=2016,
+                    score=0.91,
+                    reasoning="Matches sci-fi preference.",
+                    state="available",
+                    tmdb_id=329865,
+                    tvdb_id=None,
+                    imdb_id="tt2543164",
+                )
+            ],
+        )
+
+        response = client.get(
+            "/api/jellyfin/suggestions?username=alice&user_id=user-123&limit=5",
+            headers={"Authorization": "Bearer top-secret"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["username"] == "alice"
+    assert payload["jellyfin_user_id"] == "user-123"
+    assert payload["count"] == 1
+    assert payload["items"][0]["title"] == "Arrival"
+    assert payload["items"][0]["external_ids"] == {
+        "tmdb": 329865,
+        "imdb": "tt2543164",
+    }
+
+
+def test_seer_webhook_requires_bearer_token(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.settings,
+            "snapshot",
+            lambda force=False: SimpleNamespace(seer_webhook_token="hook-secret"),
+        )
+
+        response = client.post("/api/webhooks/seer", json={"notification_type": "MEDIA_AVAILABLE"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid Seer webhook token."
+
+
+def test_seer_webhook_accepts_payload_and_calls_service(monkeypatch) -> None:
+    received: dict[str, object] = {}
+
+    async def fake_ingest(payload: dict[str, object]) -> dict[str, object]:
+        received["payload"] = payload
+        return {"status": "accepted", "refreshed_suggestions": True}
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.settings,
+            "snapshot",
+            lambda force=False: SimpleNamespace(seer_webhook_token="hook-secret"),
+        )
+        monkeypatch.setattr(client.app.state.vanguarr, "ingest_seer_webhook", fake_ingest)
+
+        response = client.post(
+            "/api/webhooks/seer",
+            headers={"Authorization": "Bearer hook-secret"},
+            json={
+                "notification_type": "MEDIA_AVAILABLE",
+                "requested_by": "alice",
+                "media_tmdbid": 329865,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "accepted", "refreshed_suggestions": True}
+    assert received["payload"] == {
+        "notification_type": "MEDIA_AVAILABLE",
+        "requested_by": "alice",
+        "media_tmdbid": 329865,
+    }

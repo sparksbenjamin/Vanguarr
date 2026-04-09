@@ -33,6 +33,14 @@ class BackgroundEngineRunner:
             job_factory=lambda: self.service.run_decision_engine(username),
         )
 
+    def launch_suggested_for_you(self, username: str | None = None) -> tuple[bool, str]:
+        return self._launch(
+            engine_name="suggested_for_you",
+            label="Suggested For You",
+            target=username,
+            job_factory=lambda: self.service.run_suggested_for_you(username),
+        )
+
     def is_running(self, engine_name: str) -> bool:
         task = self._tasks.get(engine_name)
         return bool(task and not task.done())

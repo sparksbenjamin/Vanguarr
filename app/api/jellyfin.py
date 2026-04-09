@@ -108,3 +108,63 @@ class JellyfinClient(BaseAPIClient):
             },
         )
         return payload.get("Items", []) if isinstance(payload, dict) else []
+
+    async def get_library_items(
+        self,
+        *,
+        user_id: str | None = None,
+        limit: int | None = None,
+        search_term: str | None = None,
+        media_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        settings = self._refresh_connection()
+        if not settings.jellyfin_api_key:
+            raise ClientConfigError("JELLYFIN_API_KEY is required to query library items.")
+
+        include_item_types = "Movie,Series"
+        if media_type == "movie":
+            include_item_types = "Movie"
+        elif media_type == "tv":
+            include_item_types = "Series"
+
+        page_size = min(limit or 200, 200)
+        items: list[dict[str, Any]] = []
+        start_index = 0
+
+        while True:
+            params: dict[str, Any] = {
+                "limit": page_size,
+                "startIndex": start_index,
+                "recursive": "true",
+                "includeItemTypes": include_item_types,
+                "sortBy": "SortName",
+                "sortOrder": "Ascending",
+                "fields": (
+                    "Overview,Genres,CommunityRating,ProviderIds,ProductionYear,"
+                    "PremiereDate,Taglines,ImageTags"
+                ),
+            }
+            if user_id:
+                params["userId"] = user_id
+            if search_term:
+                params["searchTerm"] = search_term
+
+            payload = await self._request("GET", "/Items", params=params)
+            batch = payload.get("Items", []) if isinstance(payload, dict) else []
+            items.extend(batch)
+
+            total_record_count = int(payload.get("TotalRecordCount") or 0) if isinstance(payload, dict) else 0
+            if not batch:
+                break
+            if limit is not None and len(items) >= limit:
+                break
+            if len(batch) < page_size:
+                break
+            if total_record_count and len(items) >= total_record_count:
+                break
+
+            start_index += len(batch)
+
+        if limit is not None:
+            return items[:limit]
+        return items

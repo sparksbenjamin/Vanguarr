@@ -56,6 +56,54 @@ class TaskRun(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
 
 
+class SuggestedMedia(Base):
+    __tablename__ = "suggested_media"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        index=True,
+    )
+    jellyfin_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    username: Mapped[str] = mapped_column(String(255), index=True)
+    rank: Mapped[int] = mapped_column(Integer, index=True)
+    media_type: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(String(255), index=True)
+    overview: Mapped[str] = mapped_column(Text, default="")
+    production_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    reasoning: Mapped[str] = mapped_column(Text, default="")
+    state: Mapped[str] = mapped_column(String(32), default="available", index=True)
+    tmdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    tvdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class SeerWebhookEvent(Base):
+    __tablename__ = "seer_webhook_events"
+    __table_args__ = (
+        UniqueConstraint("delivery_key", name="uq_seer_webhook_delivery_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    delivery_key: Mapped[str] = mapped_column(String(255), index=True)
+    notification_type: Mapped[str] = mapped_column(String(64), index=True)
+    event_name: Mapped[str] = mapped_column(String(255), default="")
+    request_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    requested_by_username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    media_type: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    media_status: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    tmdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    tvdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    subject: Mapped[str] = mapped_column(String(255), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class AppSetting(Base):
     __tablename__ = "app_settings"
 

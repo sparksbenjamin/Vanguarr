@@ -1,5 +1,6 @@
 import json
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -121,6 +122,25 @@ def redirect_with_toast(path: str, message: str, **params: str) -> RedirectRespo
     payload = {key: value for key, value in params.items() if value}
     payload["toast"] = message
     return RedirectResponse(f"{path}?{urlencode(payload)}", status_code=303)
+
+
+def _extract_bearer_token(header_value: str | None) -> str | None:
+    raw = str(header_value or "").strip()
+    if not raw:
+        return None
+    if raw.lower().startswith("bearer "):
+        return raw[7:].strip() or None
+    return raw
+
+
+def require_bearer_token(request: Request, expected_token: str | None, *, purpose: str) -> None:
+    configured_token = str(expected_token or "").strip()
+    if not configured_token:
+        raise HTTPException(status_code=503, detail=f"{purpose} token is not configured.")
+
+    supplied_token = _extract_bearer_token(request.headers.get("Authorization"))
+    if not supplied_token or not secrets.compare_digest(supplied_token, configured_token):
+        raise HTTPException(status_code=401, detail=f"Invalid {purpose} token.")
 
 
 def current_settings(app: FastAPI, *, force: bool = False) -> Settings:
@@ -345,6 +365,68 @@ async def api_health(request: Request, force: bool = False) -> dict[str, object]
     return await request.app.state.health_monitor.snapshot(force=force)
 
 
+@app.get("/api/jellyfin/suggestions")
+async def jellyfin_suggestions_api(
+    request: Request,
+    username: str = "",
+    user_id: str = "",
+    limit: int | None = None,
+) -> dict[str, object]:
+    settings = current_settings(request.app, force=True)
+    require_bearer_token(request, settings.suggestions_api_key, purpose="suggestions API")
+
+    service: VanguarrService = request.app.state.vanguarr
+    normalized_username = username.strip() or None
+    normalized_user_id = user_id.strip() or None
+    suggestions = service.get_suggestions(
+        username=normalized_username,
+        jellyfin_user_id=normalized_user_id,
+        limit=limit,
+    )
+
+    return {
+        "username": normalized_username or (suggestions[0].username if suggestions else ""),
+        "jellyfin_user_id": normalized_user_id or (suggestions[0].jellyfin_user_id if suggestions else ""),
+        "count": len(suggestions),
+        "items": [
+            {
+                "rank": item.rank,
+                "media_type": item.media_type,
+                "title": item.title,
+                "overview": item.overview,
+                "production_year": item.production_year,
+                "score": item.score,
+                "reasoning": item.reasoning,
+                "state": item.state,
+                "external_ids": {
+                    key: value
+                    for key, value in {
+                        "tmdb": item.tmdb_id,
+                        "tvdb": item.tvdb_id,
+                        "imdb": item.imdb_id,
+                    }.items()
+                    if value not in (None, "")
+                },
+            }
+            for item in suggestions
+        ],
+    }
+
+
+@app.post("/api/webhooks/seer")
+async def seer_webhook(request: Request) -> JSONResponse:
+    settings = current_settings(request.app, force=True)
+    require_bearer_token(request, settings.seer_webhook_token, purpose="Seer webhook")
+
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Seer webhook payload must be a JSON object.")
+
+    service: VanguarrService = request.app.state.vanguarr
+    result = await service.ingest_seer_webhook(payload)
+    return JSONResponse(result)
+
+
 @app.get("/logs", response_class=HTMLResponse)
 async def logs(request: Request, q: str = "") -> HTMLResponse:
     service: VanguarrService = request.app.state.vanguarr
@@ -542,4 +624,14 @@ async def action_decision_engine(
 ) -> RedirectResponse:
     cleaned_username = username.strip() or None
     _started, message = request.app.state.background_runner.launch_decision_engine(cleaned_username)
+    return redirect_with_toast("/", message)
+
+
+@app.post("/actions/suggested-for-you")
+async def action_suggested_for_you(
+    request: Request,
+    username: str = Form(""),
+) -> RedirectResponse:
+    cleaned_username = username.strip() or None
+    _started, message = request.app.state.background_runner.launch_suggested_for_you(cleaned_username)
     return redirect_with_toast("/", message)

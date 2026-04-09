@@ -27,6 +27,7 @@ Vanguarr is relevant if you're searching for any of these:
 - Learns from real media-server watch history, not generic popularity.
 - Builds persistent user manifests you can inspect, edit, and tune.
 - Pulls candidates from Seer-compatible request stacks such as Jellyseerr and scores them in code.
+- Can sync per-user `Suggested for You` Jellyfin playlists through the companion `Vanguarr` plugin without per-user libraries or symlink trees.
 - Uses optional TMDb enrichment and optional LLM assistance without surrendering control.
 - Gives operators a dashboard, a War Room log, and a manifest editor out of the box.
 
@@ -83,6 +84,7 @@ flowchart LR
 - Searchable decision log with stored reasoning and request outcomes
 - Editable manifest workflow for operator overrides and explicit feedback
 - Database-backed runtime settings with a live Settings page and prioritized LLM failover
+- Optional Jellyfin companion plugin that syncs per-user `Suggested for You` playlists from Vanguarr snapshots
 
 ## Web Interface And Endpoints
 
@@ -95,8 +97,11 @@ flowchart LR
 | `/manifest` | Profile manifest editor with live summary preview |
 | `/healthz` | Lightweight container health probe |
 | `/api/health` | Cached JSON health snapshot for the active media server, Seer, TMDb, and the active LLM provider |
+| `/api/jellyfin/suggestions` | Bearer-protected API the Jellyfin `Vanguarr` plugin uses to fetch per-user suggestion snapshots |
+| `/api/webhooks/seer` | Bearer-protected webhook endpoint for Seer availability updates that should refresh user suggestions |
 | `/actions/profile-architect` | Manual Profile Architect trigger |
 | `/actions/decision-engine` | Manual Decision Engine trigger |
+| `/actions/suggested-for-you` | Manual Suggested For You snapshot rebuild for Jellyfin users |
 | `/manifest/save` | Saves the canonical JSON manifest and regenerates its summary block |
 
 ## Quick Start
@@ -135,6 +140,8 @@ http://localhost:8000
 7. From the dashboard, run `Profile Architect` once to generate manifests, then run `Decision Engine` to score candidates immediately instead of waiting for the scheduled jobs.
 
 The included [`docker-compose.yml`](docker-compose.yml) mounts `./data` into `/data`, which means profiles, logs, and the SQLite database stay visible on the host.
+
+If you want the Jellyfin-side install flow for per-user playlists, follow [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
 If you want the shortest possible summary for sharing the repo, it is this: Vanguarr is the service that scouts what your media-server users are most likely to want next and quietly files the right requests into the ARR stack.
 
@@ -193,6 +200,8 @@ The trimmed [`.env.example`](.env.example) includes the most common first-start 
 | `SEER_BASE_URL` | Yes | Base URL for a Seer-compatible request service. A trailing `/api/v1` is accepted and normalized away. |
 | `SEER_API_KEY` | Yes | Needed for discovery and request creation |
 | `SEER_REQUEST_USER_ID` | No | Optional request owner override |
+| `SEER_WEBHOOK_TOKEN` | No | Bearer token expected on Seer webhook deliveries to `/api/webhooks/seer` |
+| `SUGGESTIONS_API_KEY` | No | Bearer token the Jellyfin `Vanguarr` plugin uses to fetch per-user suggestion snapshots |
 
 ### Optional Enrichment
 
@@ -228,6 +237,8 @@ Important behavior:
 | `SCHEDULER_ENABLED` | `true` | Enables the built-in APScheduler jobs |
 | `PROFILE_CRON` | `0 3 * * 0` | Weekly Profile Architect run in the configured timezone |
 | `DECISION_CRON` | `0 4 * * *` | Daily Decision Engine run in the configured timezone |
+| `SUGGESTIONS_ENABLED` | `true` | Enables per-user Suggested For You snapshot generation for Jellyfin |
+| `SUGGESTIONS_LIMIT` | `20` | Number of ranked available titles stored per user for the Jellyfin plugin |
 | `REQUEST_THRESHOLD` | `0.72` | Minimum hybrid confidence required to request media |
 | `PROFILE_HISTORY_LIMIT` | `40` | Number of playback history items used per user |
 | `CANDIDATE_LIMIT` | `160` | Maximum pre-rank candidate pool size |
@@ -322,6 +333,8 @@ This layout is what powers the dashboard, War Room, and manifest editor.
 - Vanguarr reads watched history through Jellyfin's normal item APIs.
 - It uses played-state filters and `DatePlayed` sorting on `/Items`.
 - The Jellyfin Playback Reporting plugin is not required.
+- The companion `Vanguarr` Jellyfin plugin syncs per-user `Suggested for You` playlists from Vanguarr's stored suggestion snapshots.
+- Plugin install and webhook setup instructions live in [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
 #### Plex
 

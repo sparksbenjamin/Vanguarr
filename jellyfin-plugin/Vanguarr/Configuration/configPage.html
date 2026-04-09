@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Vanguarr</title>
+</head>
+<body>
+    <div id="VanguarrConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="VanguarrConfigForm">
+                    <div class="sectionTitleContainer flex align-items-center">
+                        <h2 class="sectionTitle">Vanguarr</h2>
+                    </div>
+
+                    <div class="verticalSection">
+                        <div class="fieldDescription">
+                            This plugin syncs a per-user Jellyfin playlist from Vanguarr's Suggested for You API. Vanguarr handles ranking and Seerr webhook updates; Jellyfin handles the user-facing playlist.
+                        </div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="VanguarrBaseUrl">Vanguarr Base URL</label>
+                        <input id="VanguarrBaseUrl" name="VanguarrBaseUrl" type="text" is="emby-input" />
+                        <div class="fieldDescription">Base URL of your Vanguarr server, for example <code>http://vanguarr:8000</code>.</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SuggestionsApiKey">Suggestions API Key</label>
+                        <input id="SuggestionsApiKey" name="SuggestionsApiKey" type="password" is="emby-input" />
+                        <div class="fieldDescription">Bearer token configured in Vanguarr under Settings -> Integrations -> Suggestions API Key.</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SyncIntervalMinutes">Sync Interval (minutes)</label>
+                        <input id="SyncIntervalMinutes" name="SyncIntervalMinutes" type="number" min="1" is="emby-input" />
+                        <div class="fieldDescription">How often Jellyfin should refresh user playlists from Vanguarr.</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SuggestionLimit">Suggestion Limit</label>
+                        <input id="SuggestionLimit" name="SuggestionLimit" type="number" min="1" is="emby-input" />
+                        <div class="fieldDescription">Maximum number of titles to keep in each user's Suggested for You playlist.</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PlaylistName">Playlist Name</label>
+                        <input id="PlaylistName" name="PlaylistName" type="text" is="emby-input" />
+                        <div class="fieldDescription">Name of the per-user playlist that will appear in Jellyfin.</div>
+                    </div>
+
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <script type="text/javascript">
+            var VanguarrConfig = {
+                pluginUniqueId: '7d7e8c4f-0fbe-48d0-95a9-8ca4c7d7c5e8'
+            };
+
+            document.querySelector('#VanguarrConfigPage')
+                .addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(VanguarrConfig.pluginUniqueId).then(function (config) {
+                        document.querySelector('#VanguarrBaseUrl').value = config.VanguarrBaseUrl || '';
+                        document.querySelector('#SuggestionsApiKey').value = config.SuggestionsApiKey || '';
+                        document.querySelector('#SyncIntervalMinutes').value = config.SyncIntervalMinutes || 15;
+                        document.querySelector('#SuggestionLimit').value = config.SuggestionLimit || 20;
+                        document.querySelector('#PlaylistName').value = config.PlaylistName || 'Suggested for You';
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+            document.querySelector('#VanguarrConfigForm')
+                .addEventListener('submit', function (e) {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(VanguarrConfig.pluginUniqueId).then(function (config) {
+                        config.VanguarrBaseUrl = document.querySelector('#VanguarrBaseUrl').value.trim();
+                        config.SuggestionsApiKey = document.querySelector('#SuggestionsApiKey').value.trim();
+                        config.SyncIntervalMinutes = parseInt(document.querySelector('#SyncIntervalMinutes').value || '15', 10);
+                        config.SuggestionLimit = parseInt(document.querySelector('#SuggestionLimit').value || '20', 10);
+                        config.PlaylistName = document.querySelector('#PlaylistName').value.trim() || 'Suggested for You';
+                        ApiClient.updatePluginConfiguration(VanguarrConfig.pluginUniqueId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                        });
+                    });
+
+                    e.preventDefault();
+                    return false;
+                });
+        </script>
+    </div>
+</body>
+</html>

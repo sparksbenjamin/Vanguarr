@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from collections import Counter
@@ -13,11 +14,12 @@ from urllib.parse import quote, unquote
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.jellyfin import JellyfinClient
 from app.api.llm import LLMClient
 from app.api.media_server import MediaServerClientProtocol
 from app.api.seer import SeerClient
 from app.api.tmdb import TMDbClient
-from app.core.models import DecisionLog, RequestedMedia, TaskRun
+from app.core.models import DecisionLog, RequestedMedia, SeerWebhookEvent, SuggestedMedia, TaskRun
 from app.core.prompts import (
     build_decision_messages,
     build_profile_enrichment_messages,
@@ -273,6 +275,25 @@ class VanguarrService:
     def get_recent_requests(self, limit: int = 8) -> list[RequestedMedia]:
         with self.session_scope() as session:
             stmt = select(RequestedMedia).order_by(desc(RequestedMedia.created_at)).limit(limit)
+            return list(session.scalars(stmt))
+
+    def get_suggestions(
+        self,
+        *,
+        username: str | None = None,
+        jellyfin_user_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[SuggestedMedia]:
+        with self.session_scope() as session:
+            stmt = select(SuggestedMedia).order_by(SuggestedMedia.rank.asc(), SuggestedMedia.score.desc())
+            if jellyfin_user_id:
+                stmt = stmt.where(SuggestedMedia.jellyfin_user_id == jellyfin_user_id)
+            elif username:
+                stmt = stmt.where(SuggestedMedia.username == username)
+            else:
+                return []
+            if limit is not None:
+                stmt = stmt.limit(limit)
             return list(session.scalars(stmt))
 
     def get_profile_cards(self, limit: int = 6) -> list[dict[str, Any]]:
@@ -690,6 +711,264 @@ class VanguarrService:
             "skipped": skipped,
             "errors": errors,
         }
+
+    async def run_suggested_for_you(self, username: str | None = None) -> dict[str, Any]:
+        logger.info("Suggested For You refresh started for target=%s", username or "all-users")
+        with self.session_scope() as session:
+            task = self._start_task(session, "suggested_for_you")
+
+        refreshed_users: list[str] = []
+        stored = 0
+        scored = 0
+        errors: list[str] = []
+
+        try:
+            if not self.settings.suggestions_enabled:
+                status = "success"
+                summary = "Suggested For You is disabled in runtime settings."
+            else:
+                users = await self.media_server.list_users()
+                if username:
+                    users = [user for user in users if user.get("Name") == username]
+
+                for user in users:
+                    current_username = str(user.get("Name") or "unknown")
+                    try:
+                        result = await self._refresh_user_suggestions(user)
+                        refreshed_users.append(current_username)
+                        stored += int(result.get("stored") or 0)
+                        scored += int(result.get("scored") or 0)
+                    except Exception as exc:
+                        errors.append(f"{current_username}: {exc}")
+                        logger.exception("Suggested For You refresh failed for user=%s", current_username)
+
+                if not users:
+                    status = "error"
+                    summary = f"No {self.settings.media_server_label} users matched the requested target."
+                elif errors:
+                    status = "partial"
+                    summary = (
+                        f"Refreshed {len(refreshed_users)} user playlist snapshot(s), "
+                        f"stored {stored} suggestion(s), scored {scored} available item(s), errors {len(errors)}."
+                    )
+                else:
+                    status = "success"
+                    summary = (
+                        f"Refreshed {len(refreshed_users)} user playlist snapshot(s), "
+                        f"stored {stored} suggestion(s), scored {scored} available item(s)."
+                    )
+        except Exception as exc:
+            status = "error"
+            summary = f"Suggested For You refresh failed: {exc}"
+            errors.append(str(exc))
+
+        with self.session_scope() as session:
+            self._finish_task(session, task.id, status=status, summary=summary)
+
+        logger.info("Suggested For You refresh finished status=%s summary=%s", status, summary)
+
+        return {
+            "engine": "suggested_for_you",
+            "status": status,
+            "summary": summary,
+            "refreshed_users": refreshed_users,
+            "stored": stored,
+            "scored": scored,
+            "errors": errors,
+        }
+
+    async def ingest_seer_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
+        notification_type = str(
+            payload.get("notification_type")
+            or payload.get("notificationType")
+            or ""
+        ).strip()
+        event_name = str(payload.get("event") or "").strip()
+        request_id = self._coerce_int(payload.get("request_id") or payload.get("requestId"))
+        requested_by_username = str(
+            payload.get("requested_by")
+            or payload.get("requestedBy_username")
+            or ""
+        ).strip() or None
+        media_type = str(payload.get("media_type") or "").strip().lower() or None
+        media_status = str(payload.get("media_status") or "").strip().upper() or None
+        tmdb_id = self._coerce_int(payload.get("media_tmdbid"))
+        tvdb_id = self._coerce_int(payload.get("media_tvdbid"))
+        subject = str(payload.get("subject") or "").strip()
+        delivery_key = "|".join(
+            [
+                notification_type or "unknown",
+                str(request_id or 0),
+                requested_by_username or "unknown",
+                media_type or "unknown",
+                str(tmdb_id or 0),
+                str(tvdb_id or 0),
+                media_status or "unknown",
+            ]
+        )
+
+        created = False
+        with self.session_scope() as session:
+            existing = session.scalar(
+                select(SeerWebhookEvent).where(SeerWebhookEvent.delivery_key == delivery_key)
+            )
+            if existing is None:
+                session.add(
+                    SeerWebhookEvent(
+                        delivery_key=delivery_key,
+                        notification_type=notification_type or "unknown",
+                        event_name=event_name,
+                        request_id=request_id,
+                        requested_by_username=requested_by_username,
+                        media_type=media_type,
+                        media_status=media_status,
+                        tmdb_id=tmdb_id,
+                        tvdb_id=tvdb_id,
+                        subject=subject,
+                        payload_json=json.dumps(payload, ensure_ascii=True),
+                    )
+                )
+                created = True
+
+        if not created:
+            return {
+                "status": "duplicate",
+                "delivery_key": delivery_key,
+                "notification_type": notification_type or "unknown",
+            }
+
+        refreshed = False
+        if (
+            self.settings.suggestions_enabled
+            and requested_by_username
+            and media_status in {"AVAILABLE", "PARTIALLY_AVAILABLE"}
+        ):
+            users = await self.media_server.list_users()
+            target_user = next(
+                (user for user in users if user.get("Name") == requested_by_username),
+                None,
+            )
+            if target_user is not None:
+                await self._refresh_user_suggestions(target_user)
+                refreshed = True
+
+        return {
+            "status": "accepted",
+            "delivery_key": delivery_key,
+            "notification_type": notification_type or "unknown",
+            "requested_by_username": requested_by_username,
+            "refreshed_suggestions": refreshed,
+        }
+
+    def _jellyfin_client(self) -> JellyfinClient:
+        if isinstance(self.media_server, JellyfinClient):
+            return self.media_server
+        client = getattr(self.media_server, "jellyfin", None)
+        if isinstance(client, JellyfinClient):
+            return client
+        raise RuntimeError("Suggested For You requires a Jellyfin media server client.")
+
+    async def _refresh_user_suggestions(self, user: dict[str, Any]) -> dict[str, Any]:
+        current_username = str(user.get("Name") or "unknown")
+        jellyfin_user_id = str(user.get("Id") or "").strip()
+        if not jellyfin_user_id:
+            raise ValueError("Jellyfin user id is required for suggestion refresh.")
+
+        history = await self.media_server.get_playback_history(
+            jellyfin_user_id,
+            self.settings.profile_history_limit,
+        )
+        stored_profile = self.profile_store.read_payload(current_username)
+        history_summary = self._build_profile_history_context(
+            history,
+            top_limit=self.settings.profile_architect_top_titles_limit,
+            recent_limit=self.settings.profile_architect_recent_momentum_limit,
+        )
+        recommendation_seeds = self._build_recommendation_seed_pool(
+            history,
+            profile_summary=history_summary,
+            limit=self.settings.recommendation_seed_limit,
+        )
+        history_summary = await self._enrich_profile_summary_with_tmdb(
+            history_summary,
+            recommendation_seeds=recommendation_seeds,
+        )
+        profile_payload = self._build_profile_payload(
+            current_username,
+            history_summary,
+            enrichment={
+                "adjacent_genres": stored_profile.get("adjacent_genres", []),
+                "adjacent_themes": stored_profile.get("adjacent_themes", []),
+            },
+            existing_payload=stored_profile,
+        )
+        if not ProfileStore.is_structured_payload(stored_profile) and int(
+            profile_payload.get("history_count") or 0
+        ) > 0:
+            self.profile_store.write_payload(current_username, profile_payload)
+
+        available_candidates = await self._build_available_library_candidates(jellyfin_user_id)
+        watched_external_keys = self._build_watched_external_keys(history)
+        filtered_candidates = [
+            candidate
+            for candidate in available_candidates
+            if not self._candidate_matches_external_keys(candidate, watched_external_keys)
+        ]
+        ranked_candidates = self._rank_candidate_pool(
+            filtered_candidates,
+            profile_summary=profile_payload,
+        )
+        selected_candidates = self._diversify_candidates(
+            ranked_candidates,
+            limit=max(1, int(self.settings.suggestions_limit)),
+        )
+
+        with self.session_scope() as session:
+            for existing in session.scalars(
+                select(SuggestedMedia).where(SuggestedMedia.jellyfin_user_id == jellyfin_user_id)
+            ):
+                session.delete(existing)
+
+            for index, candidate in enumerate(selected_candidates, start=1):
+                features = candidate.get("recommendation_features", {})
+                reasoning = (
+                    f"Score {float(features.get('deterministic_score') or 0.0):.2f}. "
+                    f"{str(features.get('analysis_summary') or 'Limited alignment signals.').strip()}"
+                ).strip()
+                external_ids = candidate.get("external_ids", {}) if isinstance(candidate.get("external_ids"), dict) else {}
+                session.add(
+                    SuggestedMedia(
+                        jellyfin_user_id=jellyfin_user_id,
+                        username=current_username,
+                        rank=index,
+                        media_type=str(candidate.get("media_type") or "unknown"),
+                        title=str(candidate.get("title") or "Unknown"),
+                        overview=str(candidate.get("overview") or ""),
+                        production_year=self._parse_release_year(candidate.get("release_date")),
+                        score=float(features.get("deterministic_score") or 0.0),
+                        reasoning=reasoning,
+                        state="available",
+                        tmdb_id=self._coerce_int(external_ids.get("tmdb")),
+                        tvdb_id=self._coerce_int(external_ids.get("tvdb")),
+                        imdb_id=str(external_ids.get("imdb") or "").strip() or None,
+                        payload_json=json.dumps(candidate, ensure_ascii=True),
+                    )
+                )
+
+        return {
+            "username": current_username,
+            "stored": len(selected_candidates),
+            "scored": len(filtered_candidates),
+        }
+
+    async def _build_available_library_candidates(self, jellyfin_user_id: str) -> list[dict[str, Any]]:
+        items = await self._jellyfin_client().get_library_items(user_id=jellyfin_user_id)
+        candidates: list[dict[str, Any]] = []
+        for item in items:
+            candidate = self._library_item_to_candidate(item)
+            if candidate is not None:
+                candidates.append(candidate)
+        return candidates
 
     def _start_task(self, session: Session, engine_name: str) -> TaskRun:
         task = TaskRun(engine=engine_name, status="running", summary="Task started.")
@@ -2629,6 +2908,73 @@ class VanguarrService:
             return 0.0
 
     @staticmethod
+    def _coerce_int(value: Any) -> int | None:
+        if value in ("", None):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _library_item_to_candidate(cls, item: dict[str, Any]) -> dict[str, Any] | None:
+        media_type = cls._map_history_media_type(item.get("Type"))
+        if media_type not in {"movie", "tv"}:
+            return None
+
+        title = cls._seed_title(item, media_type).strip()
+        if not title:
+            return None
+
+        external_ids = cls._extract_external_ids(item)
+        if not external_ids:
+            return None
+
+        release_date = item.get("PremiereDate")
+        if not release_date and item.get("ProductionYear") is not None:
+            release_date = str(item.get("ProductionYear"))
+
+        return {
+            "media_type": media_type,
+            "media_id": cls._stable_candidate_media_id(media_type, title, external_ids, release_date),
+            "title": title,
+            "overview": item.get("Overview", ""),
+            "genres": cls._normalize_genres(item.get("Genres", []), limit=6),
+            "rating": item.get("CommunityRating"),
+            "vote_count": 0,
+            "popularity": 0,
+            "release_date": release_date,
+            "sources": ["library:available"],
+            "source_lanes": ["available_library"],
+            "media_info": {"status": "available"},
+            "external_ids": external_ids,
+        }
+
+    @classmethod
+    def _build_watched_external_keys(cls, history: list[dict[str, Any]]) -> set[tuple[str, str, str]]:
+        watched: set[tuple[str, str, str]] = set()
+        for item in history:
+            media_type = cls._map_history_media_type(item.get("Type"))
+            if media_type not in {"movie", "tv"}:
+                continue
+            external_ids = cls._extract_external_ids(item)
+            for provider_key, provider_id in external_ids.items():
+                watched.add((media_type, provider_key, provider_id))
+        return watched
+
+    @staticmethod
+    def _candidate_matches_external_keys(
+        candidate: dict[str, Any],
+        watched_external_keys: set[tuple[str, str, str]],
+    ) -> bool:
+        media_type = str(candidate.get("media_type") or "")
+        external_ids = candidate.get("external_ids", {}) if isinstance(candidate.get("external_ids"), dict) else {}
+        for provider_key, provider_id in external_ids.items():
+            if (media_type, str(provider_key), str(provider_id)) in watched_external_keys:
+                return True
+        return False
+
+    @staticmethod
     def _extract_tmdb_id(item: dict[str, Any]) -> int | None:
         provider_ids = item.get("ProviderIds", {})
         raw_tmdb = provider_ids.get("Tmdb") or provider_ids.get("TMDB") or provider_ids.get("tmdb")
@@ -2639,6 +2985,67 @@ class VanguarrService:
             return int(raw_tmdb)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _extract_tvdb_id(item: dict[str, Any]) -> int | None:
+        provider_ids = item.get("ProviderIds", {})
+        raw_tvdb = provider_ids.get("Tvdb") or provider_ids.get("TVDB") or provider_ids.get("tvdb")
+        if raw_tvdb is None:
+            return None
+
+        try:
+            return int(raw_tvdb)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_imdb_id(item: dict[str, Any]) -> str | None:
+        provider_ids = item.get("ProviderIds", {})
+        raw_imdb = provider_ids.get("Imdb") or provider_ids.get("IMDB") or provider_ids.get("imdb")
+        value = str(raw_imdb or "").strip()
+        return value or None
+
+    @classmethod
+    def _extract_external_ids(cls, item: dict[str, Any]) -> dict[str, str]:
+        external_ids: dict[str, str] = {}
+        tmdb_id = cls._extract_tmdb_id(item)
+        tvdb_id = cls._extract_tvdb_id(item)
+        imdb_id = cls._extract_imdb_id(item)
+        if tmdb_id is not None:
+            external_ids["tmdb"] = str(tmdb_id)
+        if tvdb_id is not None:
+            external_ids["tvdb"] = str(tvdb_id)
+        if imdb_id:
+            external_ids["imdb"] = imdb_id
+        return external_ids
+
+    @staticmethod
+    def _stable_candidate_media_id(
+        media_type: str,
+        title: str,
+        external_ids: dict[str, str],
+        release_date: Any,
+    ) -> int:
+        if "tmdb" in external_ids:
+            try:
+                return int(external_ids["tmdb"])
+            except (TypeError, ValueError):
+                pass
+        if "tvdb" in external_ids:
+            try:
+                return 1_000_000_000 + int(external_ids["tvdb"])
+            except (TypeError, ValueError):
+                pass
+
+        seed = "|".join(
+            [
+                media_type,
+                title.lower(),
+                str(release_date or ""),
+                external_ids.get("imdb", ""),
+            ]
+        )
+        return int(hashlib.md5(seed.encode("utf-8")).hexdigest()[:8], 16)
 
     @staticmethod
     def _map_history_media_type(item_type: str | None) -> str | None:

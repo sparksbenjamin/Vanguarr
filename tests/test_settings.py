@@ -54,6 +54,13 @@ def test_decision_funnel_defaults() -> None:
     assert settings.tmdb_candidate_enrichment_limit == 30
 
 
+def test_suggested_for_you_defaults() -> None:
+    settings = Settings()
+
+    assert settings.suggestions_enabled is True
+    assert settings.suggestions_limit == 20
+
+
 def test_tmdb_defaults() -> None:
     settings = Settings()
 
@@ -67,6 +74,13 @@ def test_blank_tmdb_credentials_become_none() -> None:
 
     assert settings.tmdb_api_read_access_token is None
     assert settings.tmdb_api_key is None
+
+
+def test_blank_suggestion_tokens_become_none() -> None:
+    settings = Settings(SEER_WEBHOOK_TOKEN="", SUGGESTIONS_API_KEY="")
+
+    assert settings.seer_webhook_token is None
+    assert settings.suggestions_api_key is None
 
 
 def test_provider_role_selection_supports_separate_chains() -> None:

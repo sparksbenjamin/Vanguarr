@@ -327,6 +327,15 @@
             <button class="button button-amber w-full" type="submit">Run Decision Engine</button>
           </form>
 
+          <form class="insight-card space-y-3" method="post" action="/actions/suggested-for-you">
+            <div>
+              <p class="panel-kicker">Suggested For You</p>
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Build per-user available-title snapshots for the Jellyfin Vanguarr plugin and synced playlists.</p>
+            </div>
+            <input id="suggested-for-you-user" name="username" placeholder="all users" class="field-input text-sm" />
+            <button class="button button-primary w-full" type="submit">Refresh Suggested For You</button>
+          </form>
+
           <div class="insight-card">
             <p class="panel-kicker">Scheduler</p>
             <div class="mt-3 space-y-3">

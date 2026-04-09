@@ -117,6 +117,8 @@ class Settings(BaseSettings):
     tmdb_seed_enrichment_limit: int = 6
     tmdb_candidate_enrichment_limit: int = 30
     decision_page_size: int = 100
+    suggestions_enabled: bool = True
+    suggestions_limit: int = 20
 
     media_server_provider: str = "jellyfin"
     jellyfin_base_url: str | None = None
@@ -127,6 +129,8 @@ class Settings(BaseSettings):
     seer_base_url: str | None = None
     seer_api_key: str | None = None
     seer_request_user_id: int | None = None
+    seer_webhook_token: str | None = None
+    suggestions_api_key: str | None = None
     tmdb_base_url: str = "https://api.themoviedb.org/3"
     tmdb_api_read_access_token: str | None = None
     tmdb_api_key: str | None = None
@@ -204,6 +208,8 @@ class Settings(BaseSettings):
         "plex_api_token",
         "seer_base_url",
         "seer_api_key",
+        "seer_webhook_token",
+        "suggestions_api_key",
         "tmdb_api_read_access_token",
         "tmdb_api_key",
         "openai_api_key",
@@ -459,6 +465,20 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         input_type="number",
     ),
     SettingFieldDefinition(
+        key="seer_webhook_token",
+        label="Seer Webhook Token",
+        group="Integrations",
+        description="Bearer token expected on Seer webhook deliveries.",
+        input_type="password",
+    ),
+    SettingFieldDefinition(
+        key="suggestions_api_key",
+        label="Suggestions API Key",
+        group="Integrations",
+        description="Bearer token the Jellyfin Vanguarr plugin uses when fetching per-user suggestions.",
+        input_type="password",
+    ),
+    SettingFieldDefinition(
         key="tmdb_base_url",
         label="TMDb Base URL",
         group="TMDb",
@@ -628,6 +648,20 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         label="Decision Page Size",
         group="Tuning",
         description="Maximum decision rows shown in the War Room.",
+        input_type="number",
+    ),
+    SettingFieldDefinition(
+        key="suggestions_enabled",
+        label="Suggested For You Enabled",
+        group="Tuning",
+        description="Toggle per-user suggested playlist generation for Jellyfin.",
+        input_type="checkbox",
+    ),
+    SettingFieldDefinition(
+        key="suggestions_limit",
+        label="Suggested For You Limit",
+        group="Tuning",
+        description="How many ranked available titles are stored per user for the Jellyfin plugin.",
         input_type="number",
     ),
     SettingFieldDefinition(
