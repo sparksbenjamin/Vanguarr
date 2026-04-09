@@ -10,18 +10,15 @@ public sealed class VanguarrSuggestedViewsRegistrar
 {
     private readonly IApplicationPaths _applicationPaths;
     private readonly ILibraryManager _libraryManager;
-    private readonly VanguarrSuggestionCatalogService _catalogService;
     private readonly ILogger<VanguarrSuggestedViewsRegistrar> _logger;
 
     public VanguarrSuggestedViewsRegistrar(
         IApplicationPaths applicationPaths,
         ILibraryManager libraryManager,
-        VanguarrSuggestionCatalogService catalogService,
         ILogger<VanguarrSuggestedViewsRegistrar> logger)
     {
         _applicationPaths = applicationPaths;
         _libraryManager = libraryManager;
-        _catalogService = catalogService;
         _logger = logger;
     }
 
@@ -61,14 +58,12 @@ public sealed class VanguarrSuggestedViewsRegistrar
         if (existingFolder is null)
         {
             var info = new DirectoryInfo(folderPath);
-            var folder = new TFolder
-            {
-                Path = folderPath,
-                Name = displayName,
-                DateCreated = info.CreationTimeUtc,
-                DateModified = info.LastWriteTimeUtc,
-                ParentId = userRoot.Id,
-            };
+            var folder = new TFolder();
+            folder.Path = folderPath;
+            folder.Name = displayName;
+            folder.DateCreated = info.CreationTimeUtc;
+            folder.DateModified = info.LastWriteTimeUtc;
+            folder.ParentId = userRoot.Id;
 
             userRoot.AddChild(folder);
             _logger.LogInformation(

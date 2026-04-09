@@ -8,10 +8,8 @@ using Vanguarr.Jellyfin.Services;
 
 namespace Vanguarr.Jellyfin.Folders;
 
-public abstract class VanguarrSuggestedLibraryFolder : BasePluginFolder, ISupportsUserSpecificView
+public abstract class VanguarrSuggestedLibraryFolder : BasePluginFolder
 {
-    public bool EnableUserSpecificView => true;
-
     [JsonIgnore]
     public override bool IsHidden => false;
 
@@ -25,6 +23,11 @@ public abstract class VanguarrSuggestedLibraryFolder : BasePluginFolder, ISuppor
     public override bool SupportsPlayedStatus => false;
 
     protected abstract string SuggestedMediaType { get; }
+
+    public override string GetClientTypeName()
+    {
+        return "CollectionFolder";
+    }
 
     protected override QueryResult<BaseItem> GetItemsInternal(InternalItemsQuery query)
     {
