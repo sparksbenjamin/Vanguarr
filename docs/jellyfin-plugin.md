@@ -32,12 +32,12 @@ https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/m
 7. Install the `Vanguarr` plugin.
 8. Restart Jellyfin after the install finishes.
 
-The repository URL above assumes these files are pushed to GitHub. If you are testing from a local checkout first, host [`jellyfin-plugin/manifest.json`](../jellyfin-plugin/manifest.json) and [`jellyfin-plugin/dist/vanguarr-1.1.0.0.zip`](../jellyfin-plugin/dist/vanguarr-1.1.0.0.zip) somewhere Jellyfin can reach over HTTP, or update the URLs to match your own Git hosting.
+The repository URL above assumes these files are pushed to GitHub. If you are testing from a local checkout first, host [`jellyfin-plugin/manifest.json`](../jellyfin-plugin/manifest.json) and [`jellyfin-plugin/dist/vanguarr-1.1.1.0.zip`](../jellyfin-plugin/dist/vanguarr-1.1.1.0.zip) somewhere Jellyfin can reach over HTTP, or update the URLs to match your own Git hosting.
 
 If you want to inspect or sideload the package manually, the plugin zip is published in the repo at:
 
 ```text
-https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.1.0.0.zip
+https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.1.1.0.zip
 ```
 
 ## Configure Vanguarr
@@ -68,14 +68,13 @@ After Jellyfin restarts:
 6. Keep the channel name as `Suggested for You` or rename it if you want a different label in Jellyfin.
 7. Save the plugin settings.
 
-The plugin creates one Jellyfin channel per user at Jellyfin startup and only shows each channel to its matching user. The channel is user-specific even if every account sees the same plugin configuration page.
+The plugin registers a single `Suggested for You` Jellyfin channel, but its contents are personalized for the currently signed-in Jellyfin user. The configuration page is shared because the plugin settings are server-wide.
 
 That means:
 
 - the `Suggested for You` entry shows up in Jellyfin as its own channel-like library surface
 - opening it shows the current user's ranked suggested movies and shows
 - suggested shows can be browsed into seasons and episodes
-- if you add a brand-new Jellyfin user later, restart Jellyfin once so the plugin can register that user's channel
 - if you rename the channel in plugin settings, restart Jellyfin once so the new name is registered cleanly
 
 ## Configure The Seerr Webhook

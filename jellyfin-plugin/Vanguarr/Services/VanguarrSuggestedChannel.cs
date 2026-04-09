@@ -12,38 +12,32 @@ using Microsoft.Extensions.Logging;
 
 namespace Vanguarr.Jellyfin.Services;
 
-public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia
+public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia, IHasCacheKey
 {
     private const string MoviePrefix = "movie";
     private const string SeriesPrefix = "series";
     private const string SeasonPrefix = "season";
     private const string EpisodePrefix = "episode";
 
-    private readonly Guid _jellyfinUserId;
-    private readonly string _jellyfinUserName;
-    private readonly string _channelName;
     private readonly IUserManager _userManager;
     private readonly VanguarrSuggestionCatalogService _catalogService;
     private readonly ILogger<VanguarrSuggestedChannel> _logger;
+    private readonly string _channelName;
 
     public VanguarrSuggestedChannel(
-        Guid jellyfinUserId,
-        string jellyfinUserName,
         IUserManager userManager,
         VanguarrSuggestionCatalogService catalogService,
         ILogger<VanguarrSuggestedChannel> logger)
     {
-        _jellyfinUserId = jellyfinUserId;
-        _jellyfinUserName = string.IsNullOrWhiteSpace(jellyfinUserName) ? jellyfinUserId.ToString("N", CultureInfo.InvariantCulture) : jellyfinUserName;
-        _channelName = $"{GetConfiguredChannelLabel()} - {_jellyfinUserName}";
         _userManager = userManager;
         _catalogService = catalogService;
         _logger = logger;
+        _channelName = GetConfiguredChannelLabel();
     }
 
     public string Name => _channelName;
 
-    public string Description => $"Personalized Vanguarr suggestions for {_jellyfinUserName}.";
+    public string Description => "Personalized Vanguarr suggestions for the active Jellyfin user.";
 
     public string DataVersion
     {
@@ -75,30 +69,21 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia
         };
     }
 
-    public bool IsEnabledFor(string userId)
-    {
-        if (Guid.TryParse(userId, out var parsedGuid))
-        {
-            return parsedGuid == _jellyfinUserId;
-        }
+    public bool IsEnabledFor(string userId) => TryGetUser(userId) is not null;
 
-        return string.Equals(
-            userId,
-            _jellyfinUserId.ToString("N", CultureInfo.InvariantCulture),
-            StringComparison.OrdinalIgnoreCase);
+    public string? GetCacheKey(string? userId)
+    {
+        return TryNormalizeUserId(userId, out var normalizedUserId)
+            ? "-user-" + normalizedUserId.ToString("N", CultureInfo.InvariantCulture)
+            : "-anonymous";
     }
 
     public async Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
     {
-        if (!IsEnabledFor(query.UserId.ToString("N", CultureInfo.InvariantCulture)))
-        {
-            return new ChannelItemResult();
-        }
-
-        var user = _userManager.GetUserById(_jellyfinUserId);
+        var user = _userManager.GetUserById(query.UserId);
         if (user is null)
         {
-            _logger.LogWarning("Unable to load Jellyfin user {UserId} for Vanguarr channel.", _jellyfinUserId);
+            _logger.LogWarning("Unable to load Jellyfin user {UserId} for Vanguarr channel.", query.UserId);
             return new ChannelItemResult();
         }
 
@@ -120,12 +105,7 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia
 
     public async Task<IEnumerable<ChannelItemInfo>> GetLatestMedia(ChannelLatestMediaSearch request, CancellationToken cancellationToken)
     {
-        if (!IsEnabledFor(request.UserId))
-        {
-            return [];
-        }
-
-        var user = _userManager.GetUserById(_jellyfinUserId);
+        var user = TryGetUser(request.UserId);
         if (user is null)
         {
             return [];
@@ -159,7 +139,7 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia
 
     private List<ChannelItemInfo> GetFolderItems(User user, string folderId)
     {
-        var parentItem = ResolveExternalItem(folderId);
+        var parentItem = ResolveExternalItem(user, folderId);
         if (parentItem is null)
         {
             return [];
@@ -181,20 +161,20 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia
     {
         if (item is Series)
         {
-            return BuildFolderItem(item, SeriesPrefix, ChannelFolderType.Series);
+            return BuildFolderItem(user, item, SeriesPrefix, ChannelFolderType.Series);
         }
 
         if (item is Season)
         {
-            return BuildFolderItem(item, SeasonPrefix, ChannelFolderType.Season);
+            return BuildFolderItem(user, item, SeasonPrefix, ChannelFolderType.Season);
         }
 
         return BuildMediaItem(user, item);
     }
 
-    private ChannelItemInfo BuildFolderItem(BaseItem item, string prefix, ChannelFolderType folderType)
+    private ChannelItemInfo BuildFolderItem(User user, BaseItem item, string prefix, ChannelFolderType folderType)
     {
-        var channelItem = CreateCommonChannelItem(item, BuildExternalId(prefix, item.Id));
+        var channelItem = CreateCommonChannelItem(item, BuildExternalId(user, prefix, item.Id));
         channelItem.Type = ChannelItemType.Folder;
         channelItem.FolderType = folderType;
         channelItem.MediaType = ChannelMediaType.Video;
@@ -206,7 +186,7 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia
         var prefix = item is Episode ? EpisodePrefix : MoviePrefix;
         var contentType = item is Episode ? ChannelMediaContentType.Episode : ChannelMediaContentType.Movie;
 
-        var channelItem = CreateCommonChannelItem(item, BuildExternalId(prefix, item.Id));
+        var channelItem = CreateCommonChannelItem(item, BuildExternalId(user, prefix, item.Id));
         channelItem.Type = ChannelItemType.Media;
         channelItem.MediaType = ChannelMediaType.Video;
         channelItem.ContentType = contentType;
@@ -241,9 +221,14 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia
         };
     }
 
-    private BaseItem? ResolveExternalItem(string externalId)
+    private BaseItem? ResolveExternalItem(User user, string externalId)
     {
-        if (!TryParseExternalId(externalId, out var itemId))
+        if (!TryParseExternalId(externalId, out var ownerUserId, out var itemId))
+        {
+            return null;
+        }
+
+        if (ownerUserId != user.Id)
         {
             return null;
         }
@@ -251,32 +236,52 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia
         return _catalogService.GetLibraryItem(itemId);
     }
 
-    private static string BuildExternalId(string prefix, Guid itemId)
+    private static string BuildExternalId(User user, string prefix, Guid itemId)
     {
-        return $"{prefix}:{itemId:N}";
+        return $"{prefix}:{user.Id:N}:{itemId:N}";
     }
 
-    private static bool TryParseExternalId(string? externalId, out Guid itemId)
+    private static bool TryParseExternalId(string? externalId, out Guid userId, out Guid itemId)
     {
+        userId = Guid.Empty;
         itemId = Guid.Empty;
         if (string.IsNullOrWhiteSpace(externalId))
         {
             return false;
         }
 
-        var separatorIndex = externalId.IndexOf(':');
-        if (separatorIndex < 0 || separatorIndex == externalId.Length - 1)
+        var parts = externalId.Split(':', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3)
         {
             return false;
         }
 
-        return Guid.TryParseExact(externalId[(separatorIndex + 1)..], "N", out itemId)
-            || Guid.TryParse(externalId[(separatorIndex + 1)..], out itemId);
+        return TryNormalizeUserId(parts[1], out userId)
+            && (Guid.TryParseExact(parts[2], "N", out itemId) || Guid.TryParse(parts[2], out itemId));
     }
 
     private static string GetConfiguredChannelLabel()
     {
         var configuredName = Plugin.Instance?.Configuration?.PlaylistName?.Trim();
         return string.IsNullOrWhiteSpace(configuredName) ? "Suggested for You" : configuredName;
+    }
+
+    private User? TryGetUser(string? userId)
+    {
+        return TryNormalizeUserId(userId, out var normalizedUserId)
+            ? _userManager.GetUserById(normalizedUserId)
+            : null;
+    }
+
+    private static bool TryNormalizeUserId(string? userId, out Guid normalizedUserId)
+    {
+        normalizedUserId = Guid.Empty;
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return false;
+        }
+
+        return Guid.TryParse(userId, out normalizedUserId)
+            || Guid.TryParseExact(userId, "N", out normalizedUserId);
     }
 }

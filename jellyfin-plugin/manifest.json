@@ -8,12 +8,12 @@
     "category": "General",
     "versions": [
       {
-        "version": "1.1.0.0",
-        "changelog": "- Replaces the playlist sync with per-user Suggested for You Jellyfin channels.\n- Suggested shows can now be browsed into seasons and episodes from the plugin surface.\n- Updates the config page and docs to match the new channel-based UX.\n",
+        "version": "1.1.1.0",
+        "changelog": "- Fixes Jellyfin startup registration so the plugin settings page loads correctly.\n- Keeps the Suggested for You channel shared at the server level while isolating items and cache per active user.\n- Retains the channel-based UX with browseable suggested shows.\n",
         "targetAbi": "10.11.0",
-        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.1.0.0.zip",
-        "checksum": "1a7ba4b4c8ba2e07cc7627f5d4a8e2b5",
-        "timestamp": "2026-04-09T20:33:13Z"
+        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.1.1.0.zip",
+        "checksum": "4dbac484aa9a3ed6c278d7431fa05c84",
+        "timestamp": "2026-04-09T20:56:55Z"
       }
     ]
   }
