@@ -19,6 +19,14 @@ class LLMClient:
             return self.settings.snapshot()
         return self.settings
 
+    async def test_provider(self, provider: LLMProviderSettings) -> ConnectionCheck:
+        settings = self._current_settings()
+        return await self._test_provider_connection(settings, provider, failover_count=0)
+
+    async def list_ollama_models(self, provider: LLMProviderSettings) -> list[str]:
+        settings = self._current_settings()
+        return await self._list_ollama_models(settings, provider)
+
     async def test_connection(self) -> ConnectionCheck:
         settings = self._current_settings()
         providers = settings.active_llm_providers
@@ -34,46 +42,10 @@ class LLMClient:
         try:
             for provider in providers:
                 try:
-                    self._validate_provider_config(settings, provider)
-                    if provider.provider.lower() == "ollama":
-                        payload = await self._ping_ollama(settings, provider)
-                        models = [item.get("name") for item in payload.get("models", [])[:5]]
-                        return ConnectionCheck(
-                            service="LLM",
-                            ok=True,
-                            detail=f"{provider.name} is reachable for model {provider.model}.",
-                            meta={
-                                "provider": provider.provider,
-                                "provider_name": provider.name,
-                                "model": provider.model,
-                                "priority": provider.priority,
-                                "models": models,
-                                "failover_count": max(0, len(providers) - 1),
-                            },
-                        )
-
-                    reply = await self._generate_messages_with_provider(
-                        settings=settings,
-                        provider=provider,
-                        messages=[
-                            {"role": "system", "content": "You are a health check. Reply with OK."},
-                            {"role": "user", "content": "Respond with OK."},
-                        ],
-                        max_tokens=8,
-                        temperature=0,
-                        timeout_seconds=min(self._effective_timeout_seconds(settings, provider), 8),
-                    )
-                    return ConnectionCheck(
-                        service="LLM",
-                        ok="OK" in reply.upper(),
-                        detail=f"{provider.name} responded for model {provider.model}.",
-                        meta={
-                            "provider": provider.provider,
-                            "provider_name": provider.name,
-                            "model": provider.model,
-                            "priority": provider.priority,
-                            "failover_count": max(0, len(providers) - 1),
-                        },
+                    return await self._test_provider_connection(
+                        settings,
+                        provider,
+                        failover_count=max(0, len(providers) - 1),
                     )
                 except (ClientConfigError, ExternalServiceError) as exc:
                     errors.append(f"{provider.name}: {exc}")
@@ -254,6 +226,78 @@ class LLMClient:
                 raise ExternalServiceError(f"Ollama request failed: {exc}") from exc
 
         return response.json()
+
+    async def _test_provider_connection(
+        self,
+        settings: Settings,
+        provider: LLMProviderSettings,
+        *,
+        failover_count: int,
+    ) -> ConnectionCheck:
+        self._validate_provider_config(settings, provider)
+        if provider.provider.lower() == "ollama":
+            models = await self._list_ollama_models(settings, provider)
+            return ConnectionCheck(
+                service="LLM",
+                ok=True,
+                detail=f"{provider.name} is reachable for model {provider.model}.",
+                meta={
+                    "provider": provider.provider,
+                    "provider_name": provider.name,
+                    "model": provider.model,
+                    "priority": provider.priority,
+                    "models": models[:5],
+                    "failover_count": failover_count,
+                },
+            )
+
+        reply = await self._generate_messages_with_provider(
+            settings=settings,
+            provider=provider,
+            messages=[
+                {"role": "system", "content": "You are a health check. Reply with OK."},
+                {"role": "user", "content": "Respond with OK."},
+            ],
+            max_tokens=8,
+            temperature=0,
+            timeout_seconds=min(self._effective_timeout_seconds(settings, provider), 8),
+        )
+        return ConnectionCheck(
+            service="LLM",
+            ok="OK" in reply.upper(),
+            detail=f"{provider.name} responded for model {provider.model}.",
+            meta={
+                "provider": provider.provider,
+                "provider_name": provider.name,
+                "model": provider.model,
+                "priority": provider.priority,
+                "failover_count": failover_count,
+            },
+        )
+
+    async def _list_ollama_models(self, settings: Settings, provider: LLMProviderSettings) -> list[str]:
+        if provider.provider.lower() != "ollama":
+            raise ClientConfigError("Model listing is only available for Ollama providers.")
+
+        api_base = self._provider_api_base(settings, provider)
+        if not api_base:
+            raise ClientConfigError("OLLAMA_API_BASE is required when provider=ollama.")
+
+        payload = await self._ping_ollama(settings, provider)
+        models: list[str] = []
+        seen: set[str] = set()
+        for item in payload.get("models", []):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            lowered = name.lower()
+            if lowered in seen:
+                continue
+            models.append(name)
+            seen.add(lowered)
+        return models
 
     @staticmethod
     def _provider_api_key(settings: Settings, provider: LLMProviderSettings) -> str | None:

@@ -455,6 +455,42 @@
         border: 1px solid rgba(160, 182, 207, 0.08);
       }
 
+      .settings-subnav-link {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        border-radius: 0.95rem;
+        border: 1px solid transparent;
+        padding: 0.58rem 0.82rem;
+        font-size: 0.82rem;
+        transition:
+          border-color 0.18s ease,
+          background-color 0.18s ease,
+          color 0.18s ease,
+          transform 0.18s ease;
+      }
+
+      .settings-subnav-link:hover {
+        transform: translateX(2px);
+      }
+
+      .settings-subnav-link-active {
+        border-color: rgba(84, 180, 255, 0.24);
+        background: rgba(84, 180, 255, 0.12);
+        color: white;
+      }
+
+      .settings-subnav-link-idle {
+        color: var(--text-soft);
+      }
+
+      .settings-subnav-link-idle:hover {
+        border-color: rgba(160, 182, 207, 0.1);
+        background: rgba(255, 255, 255, 0.035);
+        color: var(--text);
+      }
+
       .table-wrap {
         border-radius: 1.2rem;
         border: 1px solid rgba(160, 182, 207, 0.08);
@@ -551,7 +587,7 @@
                 <span class="mono text-[11px] uppercase tracking-[0.18em]">Editor</span>
               </a>
               <a
-                href="/settings"
+                href="/settings/general"
                 class="nav-link {{ 'nav-link-active' if path.startswith('/settings') else 'nav-link-idle' }}"
               >
                 <span class="flex items-center gap-3">
@@ -572,6 +608,19 @@
                 </span>
                 <span class="mono text-[11px] uppercase tracking-[0.18em]">Runtime</span>
               </a>
+              {% if path.startswith('/settings') and settings_nav_items %}
+              <div class="space-y-1 pl-4">
+                {% for item in settings_nav_items %}
+                <a
+                  href="{{ item.href }}"
+                  class="settings-subnav-link {{ 'settings-subnav-link-active' if active_settings_slug is defined and active_settings_slug == item.slug else 'settings-subnav-link-idle' }}"
+                >
+                  <span>{{ item.title }}</span>
+                  <span class="mono text-[10px] uppercase tracking-[0.18em]">{{ "chain" if item.kind == "providers" else "section" }}</span>
+                </a>
+                {% endfor %}
+              </div>
+              {% endif %}
             </nav>
           </div>
 
