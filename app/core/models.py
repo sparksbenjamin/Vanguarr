@@ -54,6 +54,10 @@ class TaskRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     summary: Mapped[str] = mapped_column(Text, default="")
+    progress_current: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    progress_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    current_label: Mapped[str] = mapped_column(String(255), default="")
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
 class SuggestedMedia(Base):

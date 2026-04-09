@@ -125,6 +125,7 @@ class JellyfinClient(BaseAPIClient):
         limit: int | None = None,
         search_term: str | None = None,
         media_type: str | None = None,
+        parent_id: str | None = None,
     ) -> list[dict[str, Any]]:
         settings = self._refresh_connection()
         if not settings.jellyfin_api_key:
@@ -157,6 +158,8 @@ class JellyfinClient(BaseAPIClient):
                 params["userId"] = user_id
             if search_term:
                 params["searchTerm"] = search_term
+            if parent_id:
+                params["parentId"] = parent_id
 
             payload = await self._request("GET", "/Items", params=params)
             batch = payload.get("Items", []) if isinstance(payload, dict) else []
@@ -177,6 +180,15 @@ class JellyfinClient(BaseAPIClient):
         if limit is not None:
             return items[:limit]
         return items
+
+    async def get_library_folders(self) -> list[dict[str, Any]]:
+        settings = self._refresh_connection()
+        if not settings.jellyfin_api_key:
+            raise ClientConfigError("JELLYFIN_API_KEY is required to query Jellyfin libraries.")
+
+        payload = await self._request("GET", "/Library/VirtualFolders")
+        folders = payload if isinstance(payload, list) else payload.get("Items", [])
+        return [item for item in folders if isinstance(item, dict)]
 
     async def get_repositories(self) -> list[dict[str, Any]]:
         settings = self._refresh_connection()

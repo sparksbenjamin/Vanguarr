@@ -27,22 +27,32 @@ def init_db() -> None:
 
 def _migrate_runtime_schema() -> None:
     inspector = inspect(engine)
-    if "llm_provider_configs" not in inspector.get_table_names():
-        return
-
-    columns = {column["name"] for column in inspector.get_columns("llm_provider_configs")}
+    table_names = set(inspector.get_table_names())
     statements: list[str] = []
 
-    if "max_output_tokens" not in columns:
-        statements.append("ALTER TABLE llm_provider_configs ADD COLUMN max_output_tokens INTEGER")
-    if "use_for_decision" not in columns:
-        statements.append(
-            "ALTER TABLE llm_provider_configs ADD COLUMN use_for_decision BOOLEAN NOT NULL DEFAULT 1"
-        )
-    if "use_for_profile_enrichment" not in columns:
-        statements.append(
-            "ALTER TABLE llm_provider_configs ADD COLUMN use_for_profile_enrichment BOOLEAN NOT NULL DEFAULT 1"
-        )
+    if "llm_provider_configs" in table_names:
+        columns = {column["name"] for column in inspector.get_columns("llm_provider_configs")}
+        if "max_output_tokens" not in columns:
+            statements.append("ALTER TABLE llm_provider_configs ADD COLUMN max_output_tokens INTEGER")
+        if "use_for_decision" not in columns:
+            statements.append(
+                "ALTER TABLE llm_provider_configs ADD COLUMN use_for_decision BOOLEAN NOT NULL DEFAULT 1"
+            )
+        if "use_for_profile_enrichment" not in columns:
+            statements.append(
+                "ALTER TABLE llm_provider_configs ADD COLUMN use_for_profile_enrichment BOOLEAN NOT NULL DEFAULT 1"
+            )
+
+    if "task_runs" in table_names:
+        task_columns = {column["name"] for column in inspector.get_columns("task_runs")}
+        if "progress_current" not in task_columns:
+            statements.append("ALTER TABLE task_runs ADD COLUMN progress_current INTEGER")
+        if "progress_total" not in task_columns:
+            statements.append("ALTER TABLE task_runs ADD COLUMN progress_total INTEGER")
+        if "current_label" not in task_columns:
+            statements.append("ALTER TABLE task_runs ADD COLUMN current_label VARCHAR(255) NOT NULL DEFAULT ''")
+        if "detail_json" not in task_columns:
+            statements.append("ALTER TABLE task_runs ADD COLUMN detail_json TEXT NOT NULL DEFAULT '{}'")
 
     if not statements:
         return

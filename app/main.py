@@ -604,6 +604,27 @@ async def run_library_sync_now(request: Request) -> JSONResponse:
     )
 
 
+@app.get("/api/settings/scheduling/library-sync/status")
+async def library_sync_status(request: Request) -> JSONResponse:
+    snapshot = request.app.state.vanguarr.get_library_sync_snapshot()
+    task_snapshot = request.app.state.vanguarr.get_task_snapshot("library_sync")
+    return JSONResponse(
+        {
+            "ok": True,
+            "task": task_snapshot,
+            "snapshot": {
+                "total_items": snapshot["total_items"],
+                "available_items": snapshot["available_items"],
+                "removed_items": snapshot["removed_items"],
+                "movies": snapshot["movies"],
+                "series": snapshot["series"],
+                "last_seen_at": snapshot["last_seen_at"].isoformat() if snapshot["last_seen_at"] else None,
+                "last_task": task_snapshot,
+            },
+        }
+    )
+
+
 @app.get("/manifest", response_class=HTMLResponse)
 async def manifest(request: Request, username: str = "") -> HTMLResponse:
     service: VanguarrService = request.app.state.vanguarr

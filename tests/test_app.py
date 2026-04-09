@@ -83,6 +83,9 @@ def test_scheduling_settings_page_shows_library_sync_box() -> None:
     assert "Library Sync Cron" in response.text
     assert "Keep Suggested For You aligned with the real library" in response.text
     assert "/api/settings/scheduling/library-sync/run" in response.text
+    assert "/api/settings/scheduling/library-sync/status" in response.text
+    assert "Current Sync Status" in response.text
+    assert "Suggestion refresh" in response.text
 
 
 def test_settings_root_redirects_to_general() -> None:
@@ -457,4 +460,91 @@ def test_run_library_sync_endpoint_requires_jellyfin(monkeypatch) -> None:
     assert response.json() == {
         "ok": False,
         "detail": "Library Sync currently requires Jellyfin as the active media server.",
+    }
+
+
+def test_library_sync_status_endpoint_returns_snapshot(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_task_snapshot",
+            lambda engine_name: {
+                "id": 21,
+                "engine": engine_name,
+                "status": "running",
+                "summary": "Indexing Movies.",
+                "started_at": "2026-04-09T22:15:00",
+                "finished_at": None,
+                "progress_current": 1,
+                "progress_total": 3,
+                "percent": 33.3,
+                "current_label": "Movies",
+                "detail": {
+                    "phase": "indexing",
+                    "libraries": [{"name": "Movies", "state": "running"}],
+                    "suggestion_refresh": {"state": "pending", "completed_users": 0, "total_users": 5},
+                },
+            },
+        )
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_library_sync_snapshot",
+            lambda: {
+                "total_items": 1200,
+                "available_items": 1190,
+                "removed_items": 10,
+                "movies": 700,
+                "series": 490,
+                "last_seen_at": None,
+                "last_task": None,
+            },
+        )
+
+        response = client.get("/api/settings/scheduling/library-sync/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "task": {
+            "id": 21,
+            "engine": "library_sync",
+            "status": "running",
+            "summary": "Indexing Movies.",
+            "started_at": "2026-04-09T22:15:00",
+            "finished_at": None,
+            "progress_current": 1,
+            "progress_total": 3,
+            "percent": 33.3,
+            "current_label": "Movies",
+            "detail": {
+                "phase": "indexing",
+                "libraries": [{"name": "Movies", "state": "running"}],
+                "suggestion_refresh": {"state": "pending", "completed_users": 0, "total_users": 5},
+            },
+        },
+        "snapshot": {
+            "total_items": 1200,
+            "available_items": 1190,
+            "removed_items": 10,
+            "movies": 700,
+            "series": 490,
+            "last_seen_at": None,
+            "last_task": {
+                "id": 21,
+                "engine": "library_sync",
+                "status": "running",
+                "summary": "Indexing Movies.",
+                "started_at": "2026-04-09T22:15:00",
+                "finished_at": None,
+                "progress_current": 1,
+                "progress_total": 3,
+                "percent": 33.3,
+                "current_label": "Movies",
+                "detail": {
+                    "phase": "indexing",
+                    "libraries": [{"name": "Movies", "state": "running"}],
+                    "suggestion_refresh": {"state": "pending", "completed_users": 0, "total_users": 5},
+                },
+            },
+        },
     }

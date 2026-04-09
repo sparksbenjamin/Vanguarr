@@ -353,7 +353,18 @@ class VanguarrService:
             "series": series,
             "last_seen_at": last_seen_at,
             "last_task": last_task,
+            "task_status": self.get_task_snapshot("library_sync"),
         }
+
+    def get_task_snapshot(self, engine_name: str) -> dict[str, Any]:
+        with self.session_scope() as session:
+            task = session.scalar(
+                select(TaskRun)
+                .where(TaskRun.engine == engine_name)
+                .order_by(desc(TaskRun.started_at))
+                .limit(1)
+            )
+        return self._serialize_task_run(task)
 
     async def install_jellyfin_plugin(self) -> dict[str, Any]:
         if self.settings.normalized_media_server_provider != "jellyfin":
@@ -880,20 +891,135 @@ class VanguarrService:
         skipped = 0
         refreshed_users: list[str] = []
         errors: list[str] = []
+        sync_libraries: list[dict[str, Any]] = []
+        suggestion_refresh: dict[str, Any] = {
+            "state": "pending",
+            "completed_users": 0,
+            "total_users": 0,
+        }
 
         try:
-            items = await self._jellyfin_client().get_library_items()
+            client = self._jellyfin_client()
+            allow_removals = True
+            now = datetime.utcnow()
             now = datetime.utcnow()
             seen_ids: set[str] = set()
             normalized_payloads: list[dict[str, Any]] = []
+            raw_folders: list[dict[str, Any]] = []
 
-            for item in items:
-                payload = self._library_item_to_sync_payload(item)
-                if payload is None:
-                    skipped += 1
-                    continue
-                seen_ids.add(str(payload["media_server_id"]))
-                normalized_payloads.append(payload)
+            try:
+                raw_folders = await client.get_library_folders()
+            except Exception as exc:
+                allow_removals = False
+                errors.append(f"Could not enumerate Jellyfin libraries: {exc}")
+                logger.exception("Library Sync could not enumerate Jellyfin libraries.")
+
+            normalized_folders = [
+                folder
+                for folder in (self._normalize_library_folder(item) for item in raw_folders)
+                if folder is not None
+            ]
+
+            if normalized_folders:
+                sync_libraries = [
+                    {
+                        **folder,
+                        "state": "pending",
+                        "items_discovered": 0,
+                        "indexed": 0,
+                        "skipped": 0,
+                        "error": "",
+                    }
+                    for folder in normalized_folders
+                ]
+            else:
+                sync_libraries = [
+                    {
+                        "id": "all-libraries",
+                        "item_id": None,
+                        "name": "All Libraries",
+                        "collection_type": "mixed",
+                        "state": "pending",
+                        "items_discovered": 0,
+                        "indexed": 0,
+                        "skipped": 0,
+                        "error": "",
+                    }
+                ]
+
+            total_progress_steps = len(sync_libraries) + (1 if self.settings.suggestions_enabled else 0)
+            self._update_task(
+                task.id,
+                status="running",
+                summary=f"Starting Jellyfin library sync across {len(sync_libraries)} librar{'y' if len(sync_libraries) == 1 else 'ies'}.",
+                progress_current=0,
+                progress_total=total_progress_steps,
+                current_label="Preparing library sync",
+                detail_payload={
+                    "phase": "indexing",
+                    "libraries": sync_libraries,
+                    "suggestion_refresh": suggestion_refresh,
+                },
+            )
+
+            for index, library in enumerate(sync_libraries):
+                library["state"] = "running"
+                self._update_task(
+                    task.id,
+                    status="running",
+                    summary=f"Indexing {library['name']} ({index + 1}/{len(sync_libraries)}).",
+                    progress_current=index,
+                    progress_total=total_progress_steps,
+                    current_label=str(library["name"]),
+                    detail_payload={
+                        "phase": "indexing",
+                        "libraries": sync_libraries,
+                        "suggestion_refresh": suggestion_refresh,
+                    },
+                )
+
+                try:
+                    items = await client.get_library_items(parent_id=library.get("item_id"))
+                    library["items_discovered"] = len(items)
+                    library_indexed = 0
+                    library_skipped = 0
+
+                    for item in items:
+                        payload = self._library_item_to_sync_payload(item)
+                        if payload is None:
+                            skipped += 1
+                            library_skipped += 1
+                            continue
+                        seen_ids.add(str(payload["media_server_id"]))
+                        normalized_payloads.append(payload)
+                        library_indexed += 1
+
+                    library["indexed"] = library_indexed
+                    library["skipped"] = library_skipped
+                    library["state"] = "success"
+                except Exception as exc:
+                    library["state"] = "error"
+                    library["error"] = str(exc)
+                    allow_removals = False
+                    errors.append(f"{library['name']}: {exc}")
+                    logger.exception("Library Sync failed while indexing library=%s", library["name"])
+
+                completed_libraries = sum(
+                    1 for current in sync_libraries if current.get("state") in {"success", "error"}
+                )
+                self._update_task(
+                    task.id,
+                    status="running",
+                    summary=f"Finished {library['name']}. {completed_libraries}/{len(sync_libraries)} libraries processed.",
+                    progress_current=completed_libraries,
+                    progress_total=total_progress_steps,
+                    current_label=str(library["name"]),
+                    detail_payload={
+                        "phase": "indexing",
+                        "libraries": sync_libraries,
+                        "suggestion_refresh": suggestion_refresh,
+                    },
+                )
 
             with self.session_scope() as session:
                 existing_rows = {
@@ -930,14 +1056,31 @@ class VanguarrService:
                     row.payload_json = str(payload["payload_json"])
                     indexed += 1
 
-                for media_server_id, row in existing_rows.items():
-                    if media_server_id in seen_ids or row.state == "removed":
-                        continue
-                    row.state = "removed"
-                    removed += 1
+                if allow_removals:
+                    for media_server_id, row in existing_rows.items():
+                        if media_server_id in seen_ids or row.state == "removed":
+                            continue
+                        row.state = "removed"
+                        removed += 1
 
             if self.settings.suggestions_enabled:
                 users = await self.media_server.list_users()
+                suggestion_refresh["state"] = "running"
+                suggestion_refresh["total_users"] = len(users)
+                processed_users = 0
+                self._update_task(
+                    task.id,
+                    status="running",
+                    summary="Refreshing per-user suggestion snapshots.",
+                    progress_current=len(sync_libraries),
+                    progress_total=total_progress_steps,
+                    current_label="Refreshing suggestions",
+                    detail_payload={
+                        "phase": "refreshing_suggestions",
+                        "libraries": sync_libraries,
+                        "suggestion_refresh": suggestion_refresh,
+                    },
+                )
                 for user in users:
                     current_username = str(user.get("Name") or "unknown")
                     try:
@@ -949,6 +1092,28 @@ class VanguarrService:
                             "Library Sync suggestion refresh failed for user=%s",
                             current_username,
                         )
+                    finally:
+                        processed_users += 1
+                        suggestion_refresh["completed_users"] = processed_users
+                        self._update_task(
+                            task.id,
+                            status="running",
+                            summary=(
+                                f"Refreshing suggestions for {processed_users}/"
+                                f"{suggestion_refresh['total_users']} users."
+                            ),
+                            progress_current=len(sync_libraries),
+                            progress_total=total_progress_steps,
+                            current_label="Refreshing suggestions",
+                            detail_payload={
+                                "phase": "refreshing_suggestions",
+                                "libraries": sync_libraries,
+                                "suggestion_refresh": suggestion_refresh,
+                            },
+                        )
+                suggestion_refresh["state"] = "success" if len(refreshed_users) == len(users) else "partial"
+            else:
+                suggestion_refresh["state"] = "disabled"
 
             if errors:
                 status = "partial"
@@ -968,8 +1133,20 @@ class VanguarrService:
             summary = f"Library Sync failed: {exc}"
             errors.append(str(exc))
 
-        with self.session_scope() as session:
-            self._finish_task(session, task.id, status=status, summary=summary)
+        self._update_task(
+            task.id,
+            status=status,
+            summary=summary,
+            progress_current=total_progress_steps if 'total_progress_steps' in locals() else 0,
+            progress_total=total_progress_steps if 'total_progress_steps' in locals() else 0,
+            current_label="Complete" if status in {"success", "partial"} else "Failed",
+            detail_payload={
+                "phase": "complete" if status in {"success", "partial"} else "error",
+                "libraries": sync_libraries,
+                "suggestion_refresh": suggestion_refresh,
+            },
+            finished=True,
+        )
 
         logger.info("Library Sync finished status=%s summary=%s", status, summary)
 
@@ -1198,7 +1375,15 @@ class VanguarrService:
         return candidates
 
     def _start_task(self, session: Session, engine_name: str) -> TaskRun:
-        task = TaskRun(engine=engine_name, status="running", summary="Task started.")
+        task = TaskRun(
+            engine=engine_name,
+            status="running",
+            summary="Task started.",
+            progress_current=0,
+            progress_total=0,
+            current_label="",
+            detail_json="{}",
+        )
         session.add(task)
         session.commit()
         session.refresh(task)
@@ -1212,6 +1397,83 @@ class VanguarrService:
         task.finished_at = datetime.utcnow()
         task.summary = summary
         session.add(task)
+
+    def _update_task(
+        self,
+        task_id: int,
+        *,
+        status: str | None = None,
+        summary: str | None = None,
+        progress_current: int | None = None,
+        progress_total: int | None = None,
+        current_label: str | None = None,
+        detail_payload: dict[str, Any] | None = None,
+        finished: bool = False,
+    ) -> None:
+        with self.session_scope() as session:
+            task = session.get(TaskRun, task_id)
+            if task is None:
+                return
+            if status is not None:
+                task.status = status
+            if summary is not None:
+                task.summary = summary
+            if progress_current is not None:
+                task.progress_current = max(0, int(progress_current))
+            if progress_total is not None:
+                task.progress_total = max(0, int(progress_total))
+            if current_label is not None:
+                task.current_label = str(current_label)
+            if detail_payload is not None:
+                task.detail_json = json.dumps(detail_payload, ensure_ascii=True)
+            if finished:
+                task.finished_at = datetime.utcnow()
+            session.add(task)
+
+    @staticmethod
+    def _serialize_task_run(task: TaskRun | None) -> dict[str, Any]:
+        if task is None:
+            return {
+                "id": None,
+                "engine": "",
+                "status": "idle",
+                "summary": "No runs yet.",
+                "started_at": None,
+                "finished_at": None,
+                "progress_current": 0,
+                "progress_total": 0,
+                "percent": 0.0,
+                "current_label": "",
+                "detail": {},
+            }
+
+        detail: dict[str, Any] = {}
+        try:
+            parsed = json.loads(task.detail_json or "{}")
+            if isinstance(parsed, dict):
+                detail = parsed
+        except json.JSONDecodeError:
+            detail = {}
+
+        progress_current = int(task.progress_current or 0)
+        progress_total = int(task.progress_total or 0)
+        percent = 0.0
+        if progress_total > 0:
+            percent = round(min(100.0, max(0.0, (progress_current / progress_total) * 100.0)), 1)
+
+        return {
+            "id": task.id,
+            "engine": task.engine,
+            "status": task.status,
+            "summary": task.summary,
+            "started_at": task.started_at.isoformat() if task.started_at else None,
+            "finished_at": task.finished_at.isoformat() if task.finished_at else None,
+            "progress_current": progress_current,
+            "progress_total": progress_total,
+            "percent": percent,
+            "current_label": str(task.current_label or ""),
+            "detail": detail,
+        }
 
     def _already_requested(self, session: Session, username: str, candidate: dict[str, Any]) -> bool:
         stmt = select(RequestedMedia).where(
@@ -3202,6 +3464,20 @@ class VanguarrService:
             "tvdb_id": cls._coerce_int(external_ids.get("tvdb")),
             "imdb_id": str(external_ids.get("imdb") or "").strip() or None,
             "payload_json": json.dumps(item, ensure_ascii=True),
+        }
+
+    @staticmethod
+    def _normalize_library_folder(item: dict[str, Any]) -> dict[str, Any] | None:
+        item_id = str(item.get("ItemId") or item.get("itemId") or item.get("Id") or "").strip() or None
+        name = str(item.get("Name") or item.get("name") or "").strip()
+        if not name:
+            return None
+        return {
+            "id": str(item.get("Guid") or item.get("guid") or item_id or name).strip(),
+            "item_id": item_id,
+            "name": name,
+            "collection_type": str(item.get("CollectionType") or item.get("collectionType") or "mixed").strip()
+            or "mixed",
         }
 
     @classmethod

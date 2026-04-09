@@ -161,45 +161,78 @@
       <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
           <p class="panel-kicker">Available</p>
-          <p class="mt-2 text-2xl font-semibold">{{ library_sync_snapshot.available_items }}</p>
+          <p class="mt-2 text-2xl font-semibold" data-library-sync-available>{{ library_sync_snapshot.available_items }}</p>
           <p class="mt-2 text-sm text-[var(--text-soft)]">indexed titles ready for suggestions</p>
         </div>
         <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
           <p class="panel-kicker">Movies</p>
-          <p class="mt-2 text-2xl font-semibold">{{ library_sync_snapshot.movies }}</p>
+          <p class="mt-2 text-2xl font-semibold" data-library-sync-movies>{{ library_sync_snapshot.movies }}</p>
           <p class="mt-2 text-sm text-[var(--text-soft)]">available movie records</p>
         </div>
         <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
           <p class="panel-kicker">Series</p>
-          <p class="mt-2 text-2xl font-semibold">{{ library_sync_snapshot.series }}</p>
+          <p class="mt-2 text-2xl font-semibold" data-library-sync-series>{{ library_sync_snapshot.series }}</p>
           <p class="mt-2 text-sm text-[var(--text-soft)]">available series records</p>
         </div>
         <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
           <p class="panel-kicker">Removed</p>
-          <p class="mt-2 text-2xl font-semibold">{{ library_sync_snapshot.removed_items }}</p>
+          <p class="mt-2 text-2xl font-semibold" data-library-sync-removed>{{ library_sync_snapshot.removed_items }}</p>
           <p class="mt-2 text-sm text-[var(--text-soft)]">titles kept for cleanup history</p>
         </div>
       </div>
       <div class="rounded-[1.25rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-4">
         <p class="text-sm leading-6 text-[var(--text-soft)]">
           Last indexed item seen:
-          <span class="mono text-white">
+          <span class="mono text-white" data-library-sync-last-seen>
             {{ library_sync_snapshot.last_seen_at.isoformat() if library_sync_snapshot.last_seen_at else "Never" }}
           </span>
         </p>
         <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
           Last sync task:
-          <span class="mono text-white">
+          <span class="mono text-white" data-library-sync-last-started>
             {{ library_sync_snapshot.last_task.started_at.isoformat() if library_sync_snapshot.last_task else "No runs yet" }}
           </span>
         </p>
-        <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+        <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]" data-library-sync-last-summary>
           {% if library_sync_snapshot.last_task %}
           {{ library_sync_snapshot.last_task.summary }}
           {% else %}
           Run Library Sync once after saving your Jellyfin settings so the Suggested For You row has an indexed catalog to score against.
           {% endif %}
         </p>
+      </div>
+      <div class="rounded-[1.25rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-4">
+        <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p class="panel-kicker">Current Sync Status</p>
+            <h3 class="mt-2 text-lg font-semibold" data-library-sync-current-label>Ready</h3>
+            <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]" data-library-sync-current-summary>
+              Waiting for the next run.
+            </p>
+          </div>
+          <span class="status-pill status-neutral" data-library-sync-current-badge>idle</span>
+        </div>
+        <div class="mt-4">
+          <div class="flex items-center justify-between gap-4 text-sm">
+            <span class="text-[var(--text-soft)]" data-library-sync-progress-copy>0 / 0 stages complete</span>
+            <span class="mono text-[var(--text-dim)]" data-library-sync-percent>0%</span>
+          </div>
+          <div class="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+            <div class="h-full rounded-full bg-[var(--accent)] transition-all duration-300" style="width: 0%;" data-library-sync-overall-bar></div>
+          </div>
+        </div>
+        <div class="mt-5 rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+          <div class="flex items-center justify-between gap-4">
+            <p class="text-sm font-medium">Suggestion refresh</p>
+            <span class="mono text-xs text-[var(--text-dim)]" data-library-sync-suggestion-copy>pending</span>
+          </div>
+          <div class="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+            <div class="h-full rounded-full bg-[var(--green)] transition-all duration-300" style="width: 0%;" data-library-sync-suggestion-bar></div>
+          </div>
+        </div>
+        <div class="mt-5 space-y-3" data-library-sync-library-list>
+          <div class="empty-state">Library progress will appear here during the next sync run.</div>
+        </div>
       </div>
       <div class="hidden rounded-2xl border px-4 py-3 text-sm" data-library-sync-status></div>
       <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -453,6 +486,23 @@
   const jellyfinPluginStatus = document.querySelector("[data-jellyfin-plugin-status]");
   const librarySyncButton = document.querySelector("[data-run-library-sync]");
   const librarySyncStatus = document.querySelector("[data-library-sync-status]");
+  const librarySyncAvailable = document.querySelector("[data-library-sync-available]");
+  const librarySyncMovies = document.querySelector("[data-library-sync-movies]");
+  const librarySyncSeries = document.querySelector("[data-library-sync-series]");
+  const librarySyncRemoved = document.querySelector("[data-library-sync-removed]");
+  const librarySyncLastSeen = document.querySelector("[data-library-sync-last-seen]");
+  const librarySyncLastStarted = document.querySelector("[data-library-sync-last-started]");
+  const librarySyncLastSummary = document.querySelector("[data-library-sync-last-summary]");
+  const librarySyncCurrentLabel = document.querySelector("[data-library-sync-current-label]");
+  const librarySyncCurrentSummary = document.querySelector("[data-library-sync-current-summary]");
+  const librarySyncCurrentBadge = document.querySelector("[data-library-sync-current-badge]");
+  const librarySyncProgressCopy = document.querySelector("[data-library-sync-progress-copy]");
+  const librarySyncPercent = document.querySelector("[data-library-sync-percent]");
+  const librarySyncOverallBar = document.querySelector("[data-library-sync-overall-bar]");
+  const librarySyncSuggestionCopy = document.querySelector("[data-library-sync-suggestion-copy]");
+  const librarySyncSuggestionBar = document.querySelector("[data-library-sync-suggestion-bar]");
+  const librarySyncLibraryList = document.querySelector("[data-library-sync-library-list]");
+  let librarySyncPollTimer = null;
 
   function setJellyfinPluginStatus(tone, message) {
     if (!jellyfinPluginStatus) return;
@@ -517,6 +567,149 @@
     librarySyncStatus.textContent = message;
   }
 
+  function formatLibrarySyncTimestamp(value, fallback = "Never") {
+    if (!value) return fallback;
+    return value;
+  }
+
+  function setLibrarySyncBadge(status) {
+    if (!librarySyncCurrentBadge) return;
+
+    const normalized = String(status || "idle").toLowerCase();
+    const tone =
+      normalized === "success" ? "status-good" :
+      normalized === "running" || normalized === "partial" ? "status-warn" :
+      normalized === "idle" ? "status-neutral" :
+      "status-bad";
+
+    librarySyncCurrentBadge.className = `status-pill ${tone}`;
+    librarySyncCurrentBadge.textContent = normalized;
+  }
+
+  function renderLibraryBars(libraries) {
+    if (!librarySyncLibraryList) return;
+
+    const items = Array.isArray(libraries) ? libraries : [];
+    if (!items.length) {
+      librarySyncLibraryList.innerHTML = '<div class="empty-state">Library progress will appear here during the next sync run.</div>';
+      return;
+    }
+
+    const stateToWidth = (state) => {
+      const normalized = String(state || "pending").toLowerCase();
+      if (normalized === "success" || normalized === "partial" || normalized === "error") return 100;
+      if (normalized === "running") return 55;
+      return 0;
+    };
+
+    const stateToTone = (state) => {
+      const normalized = String(state || "pending").toLowerCase();
+      if (normalized === "success") return "bg-[var(--green)]";
+      if (normalized === "error") return "bg-[var(--red)]";
+      if (normalized === "running") return "bg-[var(--amber)] animate-pulse";
+      return "bg-[var(--accent)]";
+    };
+
+    librarySyncLibraryList.innerHTML = items.map((library) => {
+      const state = String(library.state || "pending").toLowerCase();
+      const width = stateToWidth(state);
+      const tone = stateToTone(state);
+      const countCopy = state === "success" || state === "running" || state === "error"
+        ? `${library.indexed || 0} indexed / ${library.items_discovered || 0} seen`
+        : "waiting to start";
+      const detailCopy = library.error
+        ? library.error
+        : `${countCopy}${library.skipped ? ` / ${library.skipped} skipped` : ""}`;
+
+      return `
+        <article class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="font-medium">${library.name || "Library"}</p>
+              <p class="mono mt-1 text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">${library.collection_type || "mixed"}</p>
+            </div>
+            <span class="status-pill ${state === "success" ? "status-good" : state === "running" ? "status-warn" : state === "error" ? "status-bad" : "status-neutral"}">${state}</span>
+          </div>
+          <div class="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+            <div class="h-full rounded-full transition-all duration-300 ${tone}" style="width: ${width}%;"></div>
+          </div>
+          <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">${detailCopy}</p>
+        </article>
+      `;
+    }).join("");
+  }
+
+  function renderLibrarySyncStatus(payload) {
+    const task = payload?.task || {};
+    const snapshot = payload?.snapshot || {};
+    const detail = task?.detail || {};
+    const libraries = Array.isArray(detail.libraries) ? detail.libraries : [];
+    const suggestionRefresh = detail.suggestion_refresh || {};
+    const overallPercent = Number(task.percent || 0);
+    const suggestionTotal = Number(suggestionRefresh.total_users || 0);
+    const suggestionCompleted = Number(suggestionRefresh.completed_users || 0);
+    const suggestionPercent = suggestionTotal > 0 ? Math.max(0, Math.min(100, (suggestionCompleted / suggestionTotal) * 100)) : 0;
+
+    if (librarySyncAvailable) librarySyncAvailable.textContent = String(snapshot.available_items ?? 0);
+    if (librarySyncMovies) librarySyncMovies.textContent = String(snapshot.movies ?? 0);
+    if (librarySyncSeries) librarySyncSeries.textContent = String(snapshot.series ?? 0);
+    if (librarySyncRemoved) librarySyncRemoved.textContent = String(snapshot.removed_items ?? 0);
+    if (librarySyncLastSeen) librarySyncLastSeen.textContent = formatLibrarySyncTimestamp(snapshot.last_seen_at, "Never");
+    if (librarySyncLastStarted) librarySyncLastStarted.textContent = formatLibrarySyncTimestamp(task.started_at || snapshot.last_task?.started_at, "No runs yet");
+    if (librarySyncLastSummary) librarySyncLastSummary.textContent = task.summary || snapshot.last_task?.summary || "No sync runs yet.";
+    if (librarySyncCurrentLabel) librarySyncCurrentLabel.textContent = task.current_label || "Ready";
+    if (librarySyncCurrentSummary) librarySyncCurrentSummary.textContent = task.summary || "Waiting for the next run.";
+    if (librarySyncProgressCopy) {
+      const current = Number(task.progress_current || 0);
+      const total = Number(task.progress_total || 0);
+      librarySyncProgressCopy.textContent = total > 0 ? `${current} / ${total} stages complete` : "0 / 0 stages complete";
+    }
+    if (librarySyncPercent) librarySyncPercent.textContent = `${overallPercent.toFixed(1)}%`;
+    if (librarySyncOverallBar) librarySyncOverallBar.style.width = `${overallPercent}%`;
+    if (librarySyncSuggestionCopy) {
+      const suggestionState = String(suggestionRefresh.state || "pending");
+      librarySyncSuggestionCopy.textContent = suggestionTotal > 0
+        ? `${suggestionCompleted} / ${suggestionTotal} users (${suggestionState})`
+        : suggestionState;
+    }
+    if (librarySyncSuggestionBar) librarySyncSuggestionBar.style.width = `${suggestionPercent}%`;
+
+    setLibrarySyncBadge(task.status || "idle");
+    renderLibraryBars(libraries);
+
+    const isRunning = String(task.status || "").toLowerCase() === "running";
+    if (isRunning && !librarySyncPollTimer) {
+      librarySyncPollTimer = window.setInterval(refreshLibrarySyncStatus, 2000);
+    } else if (!isRunning && librarySyncPollTimer) {
+      window.clearInterval(librarySyncPollTimer);
+      librarySyncPollTimer = null;
+    }
+  }
+
+  async function refreshLibrarySyncStatus() {
+    if (!librarySyncButton) return;
+
+    try {
+      const response = await fetch("/api/settings/scheduling/library-sync/status", {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+        },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.detail || "Could not load Library Sync status.");
+      }
+      renderLibrarySyncStatus(result);
+    } catch (error) {
+      if (librarySyncPollTimer) {
+        window.clearInterval(librarySyncPollTimer);
+        librarySyncPollTimer = null;
+      }
+      setLibrarySyncStatus("error", error.message || "Could not load Library Sync status.");
+    }
+  }
+
   async function runLibrarySync() {
     if (!librarySyncButton) return;
 
@@ -538,6 +731,10 @@
       }
 
       setLibrarySyncStatus(result.started === false ? "info" : "success", result.detail || "Library Sync queued.");
+      await refreshLibrarySyncStatus();
+      if (!librarySyncPollTimer) {
+        librarySyncPollTimer = window.setInterval(refreshLibrarySyncStatus, 2000);
+      }
     } catch (error) {
       setLibrarySyncStatus("error", error.message || "Could not start Library Sync.");
     } finally {
@@ -548,6 +745,7 @@
 
   if (librarySyncButton) {
     librarySyncButton.addEventListener("click", runLibrarySync);
+    refreshLibrarySyncStatus();
   }
 </script>
 {% endif %}
