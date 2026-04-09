@@ -110,6 +110,7 @@ class Settings(BaseSettings):
     profile_llm_enrichment_enabled: bool = True
     profile_llm_enrichment_max_output_tokens: int = 120
     candidate_limit: int = 160
+    genre_candidate_limit: int = 30
     trending_candidate_limit: int = 100
     decision_shortlist_limit: int = 15
     recommendation_seed_limit: int = 6
@@ -578,6 +579,13 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         label="Candidate Limit",
         group="Tuning",
         description="Maximum blended recommendation pool size.",
+        input_type="number",
+    ),
+    SettingFieldDefinition(
+        key="genre_candidate_limit",
+        label="Genre Candidate Limit",
+        group="Tuning",
+        description="Maximum candidates pulled from Seer genre discovery across primary, recent, and adjacent genres.",
         input_type="number",
     ),
     SettingFieldDefinition(

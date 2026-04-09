@@ -46,6 +46,7 @@ def test_decision_funnel_defaults() -> None:
 
     assert settings.decision_ai_weight_percent == 25
     assert settings.candidate_limit == 160
+    assert settings.genre_candidate_limit == 30
     assert settings.trending_candidate_limit == 100
     assert settings.decision_shortlist_limit == 15
     assert settings.recommendation_seed_limit == 6

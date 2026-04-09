@@ -102,12 +102,15 @@ class SeerClient(BaseAPIClient):
         self,
         seed_items: list[dict[str, Any]],
         *,
+        genre_seeds: list[dict[str, Any]] | None = None,
         limit: int | None = None,
+        genre_limit: int | None = None,
         trending_limit: int | None = None,
     ) -> list[dict[str, Any]]:
         settings = self._refresh_connection()
-        max_candidates = limit or settings.candidate_limit
-        max_trending = trending_limit or settings.trending_candidate_limit
+        max_candidates = settings.candidate_limit if limit is None else max(0, int(limit))
+        max_genre = settings.genre_candidate_limit if genre_limit is None else max(0, int(genre_limit))
+        max_trending = settings.trending_candidate_limit if trending_limit is None else max(0, int(trending_limit))
 
         movie_genres = await self.get_genre_map("movie")
         tv_genres = await self.get_genre_map("tv")
@@ -115,10 +118,10 @@ class SeerClient(BaseAPIClient):
         candidates: list[dict[str, Any]] = []
         seen: dict[tuple[str, int], dict[str, Any]] = {}
 
-        def add_candidate(item: dict[str, Any], source: str, source_lanes: list[str]) -> None:
+        def add_candidate(item: dict[str, Any], source: str, source_lanes: list[str]) -> bool:
             candidate = self._normalize_candidate(item, movie_genres, tv_genres, source, source_lanes)
             if not candidate:
-                return
+                return False
 
             key = (candidate["media_type"], candidate["media_id"])
             existing = seen.get(key)
@@ -128,10 +131,11 @@ class SeerClient(BaseAPIClient):
                 for lane in source_lanes:
                     if lane not in existing["source_lanes"]:
                         existing["source_lanes"].append(lane)
-                return
+                return False
 
             seen[key] = candidate
             candidates.append(candidate)
+            return True
 
         per_seed_limit = max(8, min(20, max_candidates // max(1, len(seed_items) or 1)))
         for seed in seed_items:
@@ -148,12 +152,66 @@ class SeerClient(BaseAPIClient):
 
             added_for_seed = 0
             for item in await self.get_recommendations(media_type, int(media_id)):
-                add_candidate(item, f"recommended:{seed_title}", seed_lanes)
-                added_for_seed += 1
+                if add_candidate(item, f"recommended:{seed_title}", seed_lanes):
+                    added_for_seed += 1
                 if len(candidates) >= max_candidates:
                     return candidates
                 if added_for_seed >= per_seed_limit:
                     break
+
+        genre_added = 0
+        prioritized_genre_seeds = genre_seeds or []
+        if prioritized_genre_seeds and max_genre > 0 and len(candidates) < max_candidates:
+            per_genre_limit = max(4, min(10, max_genre // max(1, len(prioritized_genre_seeds))))
+            for genre_seed in prioritized_genre_seeds:
+                genre_name = str(genre_seed.get("genre_name") or "").strip()
+                if not genre_name:
+                    continue
+
+                source = str(genre_seed.get("source") or f"genre:{genre_name}").strip() or f"genre:{genre_name}"
+                source_lanes = [
+                    str(lane).strip()
+                    for lane in genre_seed.get("source_lanes", [])
+                    if str(lane).strip()
+                ] or ["primary_genre_seed"]
+                media_types = [
+                    str(raw).strip().lower()
+                    for raw in genre_seed.get("media_types", [])
+                    if str(raw).strip().lower() in {"movie", "tv"}
+                ] or ["movie", "tv"]
+
+                added_for_seed = 0
+                for media_type in media_types:
+                    genre_id = self._resolve_genre_id(
+                        media_type,
+                        genre_name,
+                        movie_genres=movie_genres,
+                        tv_genres=tv_genres,
+                    )
+                    if genre_id is None:
+                        continue
+
+                    page = 1
+                    while len(candidates) < max_candidates and genre_added < max_genre and added_for_seed < per_genre_limit:
+                        results = await self.get_genre_discover(media_type, genre_id, page=page)
+                        if not results:
+                            break
+
+                        new_results = 0
+                        for item in results:
+                            if add_candidate(item, source, source_lanes):
+                                genre_added += 1
+                                added_for_seed += 1
+                                new_results += 1
+                            if len(candidates) >= max_candidates or genre_added >= max_genre or added_for_seed >= per_genre_limit:
+                                break
+
+                        if new_results == 0:
+                            break
+                        page += 1
+
+                    if len(candidates) >= max_candidates or genre_added >= max_genre or added_for_seed >= per_genre_limit:
+                        break
 
         page = 1
         trending_added = 0
@@ -163,8 +221,8 @@ class SeerClient(BaseAPIClient):
                 break
 
             for item in trending_results:
-                add_candidate(item, "trending", ["trending_lane"])
-                trending_added += 1
+                if add_candidate(item, "trending", ["trending_lane"]):
+                    trending_added += 1
                 if len(candidates) >= max_candidates:
                     return candidates
                 if trending_added >= max_trending:
@@ -173,6 +231,21 @@ class SeerClient(BaseAPIClient):
             page += 1
 
         return candidates
+
+    async def get_genre_discover(self, media_type: str, genre_id: int, *, page: int = 1) -> list[dict[str, Any]]:
+        if media_type == "movie":
+            path = "/api/v1/discover/movies"
+        elif media_type == "tv":
+            path = "/api/v1/discover/tv"
+        else:
+            return []
+
+        payload = await self._request(
+            "GET",
+            path,
+            params={"genre": genre_id, "page": page},
+        )
+        return self._extract_results(payload)
 
     async def get_genre_map(self, media_type: str) -> dict[int, str]:
         self._refresh_connection()
@@ -221,6 +294,47 @@ class SeerClient(BaseAPIClient):
         if item_type in {"Series", "Episode"}:
             return "tv"
         return None
+
+    @staticmethod
+    def _resolve_genre_id(
+        media_type: str,
+        genre_name: str,
+        *,
+        movie_genres: dict[int, str],
+        tv_genres: dict[int, str],
+    ) -> int | None:
+        genre_map = movie_genres if media_type == "movie" else tv_genres
+        target = SeerClient._normalize_genre_lookup_value(genre_name)
+        if not target:
+            return None
+
+        exact_matches: list[int] = []
+        partial_matches: list[int] = []
+        target_tokens = set(target.split())
+        for genre_id, raw_name in genre_map.items():
+            normalized = SeerClient._normalize_genre_lookup_value(raw_name)
+            if normalized == target:
+                exact_matches.append(int(genre_id))
+                continue
+
+            normalized_tokens = set(normalized.split())
+            if target_tokens and target_tokens.issubset(normalized_tokens):
+                partial_matches.append(int(genre_id))
+
+        if exact_matches:
+            return sorted(exact_matches)[0]
+        if partial_matches:
+            return sorted(partial_matches)[0]
+        return None
+
+    @staticmethod
+    def _normalize_genre_lookup_value(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        normalized = normalized.replace("&", " and ")
+        normalized = normalized.replace("/", " ")
+        normalized = normalized.replace("-", " ")
+        normalized = " ".join(normalized.split())
+        return normalized
 
     @staticmethod
     def _normalize_candidate(

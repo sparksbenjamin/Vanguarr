@@ -402,6 +402,23 @@ def test_build_recommendation_seed_pool_blends_behavior_lanes() -> None:
     assert any("recent_seed" in seed["seed_lanes"] for seed in seeds)
 
 
+def test_build_genre_discovery_seeds_prioritizes_primary_recent_then_adjacent() -> None:
+    seeds = VanguarrService._build_genre_discovery_seeds(
+        {
+            "primary_genres": ["Drama", "History"],
+            "recent_genres": ["Drama", "Crime"],
+            "adjacent_genres": ["Mystery", "Thriller"],
+            "format_preference": {"preferred": "tv"},
+        }
+    )
+
+    assert [seed["genre_name"] for seed in seeds] == ["Drama", "History", "Crime", "Mystery", "Thriller"]
+    assert seeds[0]["source_lanes"] == ["primary_genre_seed"]
+    assert seeds[2]["source_lanes"] == ["recent_genre_seed"]
+    assert seeds[3]["source_lanes"] == ["adjacent_genre_seed"]
+    assert all(seed["media_types"] == ["tv", "movie"] for seed in seeds)
+
+
 def test_normalize_saved_profile_payload_regenerates_summary() -> None:
     payload = VanguarrService._normalize_saved_profile_payload(
         "alice",

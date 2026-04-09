@@ -478,9 +478,12 @@ class VanguarrService:
                         recommendation_seeds=recommendation_seeds,
                         profile_summary=profile_payload,
                     )
+                    genre_seeds = self._build_genre_discovery_seeds(profile_payload)
                     candidate_pool = await self.seer.discover_candidates(
                         recommendation_seeds,
+                        genre_seeds=genre_seeds,
                         limit=self.settings.candidate_limit,
+                        genre_limit=self.settings.genre_candidate_limit,
                         trending_limit=self.settings.trending_candidate_limit,
                     )
                     watched_media_keys = self._build_watched_media_keys(history)
@@ -1063,6 +1066,42 @@ class VanguarrService:
             "favorite_collections": summary.get("favorite_collections", [])[:4],
             "recent_plays": recent_plays,
         }
+
+    @classmethod
+    def _build_genre_discovery_seeds(cls, profile_summary: dict[str, Any]) -> list[dict[str, Any]]:
+        primary_genres = cls._normalize_genres(
+            profile_summary.get("primary_genres") or profile_summary.get("top_genres", []),
+            limit=3,
+        )
+        recent_genres = cls._normalize_genres(profile_summary.get("recent_genres", []), limit=2)
+        adjacent_genres = cls._normalize_genres(profile_summary.get("adjacent_genres", []), limit=2)
+        preferred_media_type = str((profile_summary.get("format_preference") or {}).get("preferred") or "balanced")
+        media_types = ["tv", "movie"] if preferred_media_type == "tv" else ["movie", "tv"]
+        if preferred_media_type == "balanced":
+            media_types = ["movie", "tv"]
+
+        seeds: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for genres, lane in (
+            (primary_genres, "primary_genre_seed"),
+            (recent_genres, "recent_genre_seed"),
+            (adjacent_genres, "adjacent_genre_seed"),
+        ):
+            for genre in genres:
+                lowered = genre.lower()
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                seeds.append(
+                    {
+                        "genre_name": genre,
+                        "source": f"genre:{genre}",
+                        "source_lanes": [lane],
+                        "media_types": media_types,
+                    }
+                )
+
+        return seeds
 
     @classmethod
     def _build_watched_media_keys(cls, history: list[dict[str, Any]]) -> set[tuple[str, int]]:
@@ -2212,6 +2251,12 @@ class VanguarrService:
             score += 0.06
         if "genre_anchor_seed" in lane_lookup:
             score += 0.04
+        if "primary_genre_seed" in lane_lookup:
+            score += 0.05
+        if "recent_genre_seed" in lane_lookup:
+            score += 0.04
+        if "adjacent_genre_seed" in lane_lookup:
+            score += 0.02
         if any(str(source).strip().lower().startswith("trending") for source in sources):
             score += 0.04
 
@@ -2449,6 +2494,10 @@ class VanguarrService:
             tags.append("repeat_watch_lane")
         if "genre_anchor_seed" in lane_lookup:
             tags.append("genre_match_lane")
+        if {"primary_genre_seed", "recent_genre_seed"} & lane_lookup:
+            tags.append("genre_discovery_lane")
+        if "adjacent_genre_seed" in lane_lookup:
+            tags.append("adjacent_seed_lane")
         if matched_primary:
             tags.append("top_genre_lane")
         if "recent_seed" in lane_lookup:
