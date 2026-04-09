@@ -14,6 +14,10 @@ It does one job: it asks Vanguarr for the current user's ranked `Suggested for Y
 
 ## Add The Vanguarr Plugin Repo To Jellyfin
 
+If your saved `JELLYFIN_API_KEY` in Vanguarr has elevated admin access, you can start this from `Vanguarr -> Settings -> Integrations -> Install Jellyfin Vanguarr Plugin`. That action adds the repository to Jellyfin and requests installation of the plugin from that repository.
+
+If you prefer to do it directly in Jellyfin, use the manual steps below.
+
 1. Open the Jellyfin admin dashboard.
 2. Go to `Plugins` -> `Catalog` -> `Settings`.
 3. Add this repository URL:

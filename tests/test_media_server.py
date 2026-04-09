@@ -1,3 +1,4 @@
+from app.api.jellyfin import JellyfinClient, VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL
 from app.api.media_server import MediaServerClient
 from app.api.plex import PlexClient
 from app.core.settings import Settings
@@ -55,3 +56,41 @@ def test_plex_history_normalization_preserves_expected_shape() -> None:
     assert normalized["ProviderIds"]["Tmdb"] == "9876"
     assert normalized["ProviderIds"]["Imdb"] == "tt1234567"
     assert normalized["UserData"]["LastPlayedDate"].endswith("Z")
+
+
+def test_jellyfin_repository_upsert_adds_missing_repo() -> None:
+    repositories, added, enabled, changed = JellyfinClient._upsert_repository(
+        [],
+        name="Vanguarr",
+        url=VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
+    )
+
+    assert added is True
+    assert enabled is False
+    assert changed is True
+    assert repositories == [
+        {
+            "Name": "Vanguarr",
+            "Url": VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
+            "Enabled": True,
+        }
+    ]
+
+
+def test_jellyfin_repository_upsert_enables_existing_repo() -> None:
+    repositories, added, enabled, changed = JellyfinClient._upsert_repository(
+        [
+            {
+                "Name": "Vanguarr",
+                "Url": VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
+                "Enabled": False,
+            }
+        ],
+        name="Vanguarr",
+        url=VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
+    )
+
+    assert added is False
+    assert enabled is True
+    assert changed is True
+    assert repositories[0]["Enabled"] is True

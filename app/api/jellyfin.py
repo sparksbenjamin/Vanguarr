@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from app.api.base import BaseAPIClient, ClientConfigError, ConnectionCheck
 from app.core.settings import Settings
+
+
+VANGUARR_JELLYFIN_PLUGIN_NAME = "Vanguarr"
+VANGUARR_JELLYFIN_PLUGIN_GUID = "7d7e8c4f-0fbe-48d0-95a9-8ca4c7d7c5e8"
+VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_NAME = "Vanguarr"
+VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL = (
+    "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/manifest.json"
+)
 
 
 class JellyfinClient(BaseAPIClient):
@@ -168,3 +177,158 @@ class JellyfinClient(BaseAPIClient):
         if limit is not None:
             return items[:limit]
         return items
+
+    async def get_repositories(self) -> list[dict[str, Any]]:
+        settings = self._refresh_connection()
+        if not settings.jellyfin_api_key:
+            raise ClientConfigError("JELLYFIN_API_KEY is required to manage Jellyfin plugin repositories.")
+
+        payload = await self._request("GET", "/Repositories")
+        return payload if isinstance(payload, list) else []
+
+    async def set_repositories(self, repositories: list[dict[str, Any]]) -> None:
+        settings = self._refresh_connection()
+        if not settings.jellyfin_api_key:
+            raise ClientConfigError("JELLYFIN_API_KEY is required to manage Jellyfin plugin repositories.")
+
+        await self._request("POST", "/Repositories", json_body=repositories)
+
+    async def get_plugins(self) -> list[dict[str, Any]]:
+        settings = self._refresh_connection()
+        if not settings.jellyfin_api_key:
+            raise ClientConfigError("JELLYFIN_API_KEY is required to query installed Jellyfin plugins.")
+
+        payload = await self._request("GET", "/Plugins")
+        return payload if isinstance(payload, list) else []
+
+    async def install_package(
+        self,
+        name: str,
+        *,
+        assembly_guid: str | None = None,
+        version: str | None = None,
+        repository_url: str | None = None,
+    ) -> None:
+        settings = self._refresh_connection()
+        if not settings.jellyfin_api_key:
+            raise ClientConfigError("JELLYFIN_API_KEY is required to install Jellyfin plugins.")
+
+        params: dict[str, Any] = {}
+        if assembly_guid:
+            params["assemblyGuid"] = assembly_guid
+        if version:
+            params["version"] = version
+        if repository_url:
+            params["repositoryUrl"] = repository_url
+
+        await self._request(
+            "POST",
+            f"/Packages/Installed/{quote(name, safe='')}",
+            params=params or None,
+        )
+
+    @staticmethod
+    def _normalize_repository(repository: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "Name": str(repository.get("Name") or repository.get("name") or "").strip(),
+            "Url": str(repository.get("Url") or repository.get("url") or "").strip(),
+            "Enabled": bool(
+                repository["Enabled"] if "Enabled" in repository else repository.get("enabled", False)
+            ),
+        }
+
+    @staticmethod
+    def _upsert_repository(
+        repositories: list[dict[str, Any]],
+        *,
+        name: str,
+        url: str,
+    ) -> tuple[list[dict[str, Any]], bool, bool, bool]:
+        normalized_url = url.strip().rstrip("/")
+        updated: list[dict[str, Any]] = []
+        found = False
+        changed = False
+        added = False
+        enabled = False
+
+        for repository in repositories:
+            normalized = JellyfinClient._normalize_repository(repository)
+            repository_url = normalized["Url"].rstrip("/")
+            if repository_url.lower() == normalized_url.lower():
+                found = True
+                if not normalized["Enabled"]:
+                    normalized["Enabled"] = True
+                    enabled = True
+                    changed = True
+                if not normalized["Name"]:
+                    normalized["Name"] = name
+                    changed = True
+            updated.append(normalized)
+
+        if not found:
+            updated.append(
+                {
+                    "Name": name,
+                    "Url": url.strip(),
+                    "Enabled": True,
+                }
+            )
+            added = True
+            changed = True
+
+        return updated, added, enabled, changed
+
+    async def install_vanguarr_plugin(self) -> dict[str, Any]:
+        repositories = await self.get_repositories()
+        updated_repositories, repository_added, repository_enabled, repositories_changed = self._upsert_repository(
+            repositories,
+            name=VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_NAME,
+            url=VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
+        )
+
+        if repositories_changed:
+            await self.set_repositories(updated_repositories)
+
+        plugins = await self.get_plugins()
+        plugin_already_installed = any(
+            str(plugin.get("Id") or plugin.get("id") or "").strip().lower()
+            == VANGUARR_JELLYFIN_PLUGIN_GUID.lower()
+            for plugin in plugins
+            if isinstance(plugin, dict)
+        )
+
+        plugin_install_requested = False
+        if not plugin_already_installed:
+            await self.install_package(
+                VANGUARR_JELLYFIN_PLUGIN_NAME,
+                assembly_guid=VANGUARR_JELLYFIN_PLUGIN_GUID,
+                repository_url=VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
+            )
+            plugin_install_requested = True
+
+        details: list[str] = []
+        if repository_added:
+            details.append("Added the Vanguarr plugin repository to Jellyfin.")
+        elif repository_enabled:
+            details.append("Enabled the existing Vanguarr plugin repository in Jellyfin.")
+        else:
+            details.append("Vanguarr plugin repository was already configured in Jellyfin.")
+
+        if plugin_already_installed:
+            details.append("The Vanguarr Jellyfin plugin is already installed.")
+        else:
+            details.append("Requested Vanguarr plugin installation from the configured Jellyfin repository.")
+            details.append("Restart Jellyfin after the install finishes so the plugin can load.")
+
+        return {
+            "plugin_name": VANGUARR_JELLYFIN_PLUGIN_NAME,
+            "plugin_guid": VANGUARR_JELLYFIN_PLUGIN_GUID,
+            "repository_name": VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_NAME,
+            "repository_url": VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
+            "repository_added": repository_added,
+            "repository_enabled": repository_enabled,
+            "plugin_already_installed": plugin_already_installed,
+            "plugin_install_requested": plugin_install_requested,
+            "restart_required": plugin_install_requested,
+            "detail": " ".join(details),
+        }

@@ -71,7 +71,7 @@ class BaseAPIClient:
         path: str,
         *,
         params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
+        json_body: Any = None,
         headers: dict[str, str] | None = None,
     ) -> Any:
         self._require_base_url()

@@ -109,6 +109,45 @@
       </div>
     </section>
   </form>
+
+  {% if settings_page.slug == "integrations" %}
+  <section class="surface rounded-[1.45rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
+      <p class="panel-kicker">Jellyfin Plugin</p>
+      <h2 class="mt-2 panel-title">Install the {{ jellyfin_plugin_name }} Jellyfin plugin</h2>
+    </div>
+    <div class="space-y-4 px-5 py-5">
+      <p class="text-sm leading-6 text-[var(--text-soft)]">
+        This action adds the Vanguarr plugin repository to Jellyfin so the server can see future plugin updates, then requests installation of the <span class="mono">{{ jellyfin_plugin_name }}</span> plugin from that repository.
+      </p>
+      <p class="text-sm leading-6 text-[var(--text-soft)]">
+        Repository URL:
+        <a class="mono text-[var(--accent)] hover:text-white" href="{{ jellyfin_plugin_repository_url }}" target="_blank" rel="noreferrer">{{ jellyfin_plugin_repository_url }}</a>
+      </p>
+      <p class="text-sm leading-6 text-[var(--text-soft)]">
+        Use a Jellyfin admin API key with elevated access. Jellyfin usually needs a restart after the install finishes before the plugin becomes available in the dashboard.
+      </p>
+      <div class="hidden rounded-2xl border px-4 py-3 text-sm" data-jellyfin-plugin-status></div>
+      <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <button
+          type="button"
+          class="button button-primary w-full md:w-auto"
+          data-install-jellyfin-plugin
+          {% if settings.normalized_media_server_provider != "jellyfin" %}disabled{% endif %}
+        >
+          Install Jellyfin {{ jellyfin_plugin_name }} Plugin
+        </button>
+        <p class="text-sm leading-6 text-[var(--text-soft)]">
+          {% if settings.normalized_media_server_provider == "jellyfin" %}
+          After install, open Jellyfin's plugin settings to confirm the Vanguarr base URL and API key, then restart Jellyfin if prompted.
+          {% else %}
+          Switch the active media server provider to Jellyfin before using this action.
+          {% endif %}
+        </p>
+      </div>
+    </div>
+  </section>
+  {% endif %}
   {% elif settings_page.kind == "providers" %}
   <form class="space-y-5" method="post" action="/settings/save">
     <input type="hidden" name="settings_section_slug" value="{{ settings_page.slug }}" />
@@ -334,6 +373,57 @@
 
     input.addEventListener("input", syncDisplay);
     syncDisplay();
+  }
+
+  const jellyfinPluginInstallButton = document.querySelector("[data-install-jellyfin-plugin]");
+  const jellyfinPluginStatus = document.querySelector("[data-jellyfin-plugin-status]");
+
+  function setJellyfinPluginStatus(tone, message) {
+    if (!jellyfinPluginStatus) return;
+
+    const tones = {
+      info: "border-[rgba(160,182,207,0.12)] bg-[rgba(255,255,255,0.03)] text-[var(--text-soft)]",
+      loading: "border-[rgba(246,189,103,0.18)] bg-[rgba(246,189,103,0.08)] text-[var(--amber)]",
+      success: "border-[rgba(90,217,158,0.18)] bg-[rgba(90,217,158,0.08)] text-[var(--green)]",
+      error: "border-[rgba(255,127,127,0.18)] bg-[rgba(255,127,127,0.08)] text-[var(--red)]",
+    };
+
+    jellyfinPluginStatus.hidden = false;
+    jellyfinPluginStatus.className = `rounded-2xl border px-4 py-3 text-sm ${tones[tone] || tones.info}`;
+    jellyfinPluginStatus.textContent = message;
+  }
+
+  async function installJellyfinPlugin() {
+    if (!jellyfinPluginInstallButton) return;
+
+    const originalLabel = jellyfinPluginInstallButton.textContent;
+    jellyfinPluginInstallButton.disabled = true;
+    setJellyfinPluginStatus("loading", "Installing the Jellyfin plugin repository and requesting plugin installation...");
+
+    try {
+      const response = await fetch("/api/settings/integrations/jellyfin-plugin/install", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+        },
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.detail || "Could not install the Jellyfin plugin.");
+      }
+
+      setJellyfinPluginStatus("success", result.detail || "Jellyfin plugin install request completed.");
+    } catch (error) {
+      setJellyfinPluginStatus("error", error.message || "Could not install the Jellyfin plugin.");
+    } finally {
+      jellyfinPluginInstallButton.disabled = false;
+      jellyfinPluginInstallButton.textContent = originalLabel;
+    }
+  }
+
+  if (jellyfinPluginInstallButton) {
+    jellyfinPluginInstallButton.addEventListener("click", installJellyfinPlugin);
   }
 </script>
 {% endif %}

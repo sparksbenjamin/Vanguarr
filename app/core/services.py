@@ -14,6 +14,7 @@ from urllib.parse import quote, unquote
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.base import ClientConfigError
 from app.api.jellyfin import JellyfinClient
 from app.api.llm import LLMClient
 from app.api.media_server import MediaServerClientProtocol
@@ -295,6 +296,15 @@ class VanguarrService:
             if limit is not None:
                 stmt = stmt.limit(limit)
             return list(session.scalars(stmt))
+
+    async def install_jellyfin_plugin(self) -> dict[str, Any]:
+        if self.settings.normalized_media_server_provider != "jellyfin":
+            raise ClientConfigError(
+                "Jellyfin plugin install is only available when Jellyfin is the active media server."
+            )
+
+        client = self._jellyfin_client()
+        return await client.install_vanguarr_plugin()
 
     def get_profile_cards(self, limit: int = 6) -> list[dict[str, Any]]:
         cards: list[dict[str, Any]] = []

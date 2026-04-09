@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from app.api.base import ConnectionCheck
+from app.api.base import ClientConfigError, ConnectionCheck
 from app.api.llm import LLMClient
 from app.main import app
 
@@ -62,6 +62,16 @@ def test_tuning_settings_page_shows_ai_weight_slider() -> None:
     assert "Genre Candidate Limit" in response.text
     assert 'type="range"' in response.text
     assert "% AI /" in response.text
+
+
+def test_integrations_settings_page_shows_jellyfin_plugin_install_action() -> None:
+    with TestClient(app) as client:
+        response = client.get("/settings/integrations")
+
+    assert response.status_code == 200
+    assert "Install the Vanguarr Jellyfin plugin" in response.text
+    assert "/api/settings/integrations/jellyfin-plugin/install" in response.text
+    assert "jellyfin-plugin/manifest.json" in response.text
 
 
 def test_settings_root_redirects_to_general() -> None:
@@ -359,4 +369,40 @@ def test_seer_webhook_accepts_payload_and_calls_service(monkeypatch) -> None:
         "notification_type": "MEDIA_AVAILABLE",
         "requested_by": "alice",
         "media_tmdbid": 329865,
+    }
+
+
+def test_install_jellyfin_plugin_endpoint_returns_success(monkeypatch) -> None:
+    async def fake_install() -> dict[str, object]:
+        return {
+            "plugin_name": "Vanguarr",
+            "repository_added": True,
+            "plugin_install_requested": True,
+            "restart_required": True,
+            "detail": "Added the Vanguarr plugin repository to Jellyfin. Requested Vanguarr plugin installation from the configured Jellyfin repository. Restart Jellyfin after the install finishes so the plugin can load.",
+        }
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(client.app.state.vanguarr, "install_jellyfin_plugin", fake_install)
+        response = client.post("/api/settings/integrations/jellyfin-plugin/install")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["plugin_name"] == "Vanguarr"
+    assert response.json()["repository_added"] is True
+    assert response.json()["plugin_install_requested"] is True
+
+
+def test_install_jellyfin_plugin_endpoint_returns_validation_error(monkeypatch) -> None:
+    async def fake_install() -> dict[str, object]:
+        raise ClientConfigError("JELLYFIN_API_KEY is required to install Jellyfin plugins.")
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(client.app.state.vanguarr, "install_jellyfin_plugin", fake_install)
+        response = client.post("/api/settings/integrations/jellyfin-plugin/install")
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "ok": False,
+        "detail": "JELLYFIN_API_KEY is required to install Jellyfin plugins.",
     }

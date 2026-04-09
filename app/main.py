@@ -12,6 +12,10 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from app.api.base import ClientConfigError, ExternalServiceError
+from app.api.jellyfin import (
+    VANGUARR_JELLYFIN_PLUGIN_NAME,
+    VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
+)
 from app.api.llm import LLMClient
 from app.api.media_server import MediaServerClient
 from app.api.seer import SeerClient
@@ -465,6 +469,8 @@ async def settings_page(request: Request, section_slug: str) -> HTMLResponse:
             "active_settings_slug": settings_page_def.slug,
             "llm_providers": settings.llm_providers,
             "llm_provider_options": LLM_PROVIDER_OPTIONS,
+            "jellyfin_plugin_name": VANGUARR_JELLYFIN_PLUGIN_NAME,
+            "jellyfin_plugin_repository_url": VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
         },
     )
 
@@ -557,6 +563,21 @@ async def delete_llm_provider(request: Request, provider_id: int) -> JSONRespons
             "providers_remaining": len(updated_settings.llm_providers),
         }
     )
+
+
+@app.post("/api/settings/integrations/jellyfin-plugin/install")
+async def install_jellyfin_plugin(request: Request) -> JSONResponse:
+    try:
+        result = await request.app.state.vanguarr.install_jellyfin_plugin()
+        return JSONResponse({"ok": True, **result})
+    except (ClientConfigError, ExternalServiceError, ValueError) as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "detail": format_validation_error(exc),
+            },
+        )
 
 
 @app.get("/manifest", response_class=HTMLResponse)

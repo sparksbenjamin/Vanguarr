@@ -153,10 +153,11 @@ If you want the Jellyfin `Suggested for You` experience, the shortest working pa
 2. Set `SUGGESTIONS_API_KEY` and `SEER_WEBHOOK_TOKEN` in Vanguarr, or set them from the `/settings` page after first boot.
 3. In Vanguarr, enable `Suggested For You` and choose a `Suggested For You Limit`.
 4. In Seerr or Jellyseerr, add a webhook pointing to `http://your-vanguarr-host:8000/api/webhooks/seer` with header `Authorization: Bearer YOUR_SEER_WEBHOOK_TOKEN`.
-5. In Jellyfin, add the Vanguarr plugin repository URL `https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/manifest.json`.
-6. Install the `Vanguarr` plugin from the Jellyfin plugin catalog and restart Jellyfin.
-7. Open the plugin settings in Jellyfin and set the Vanguarr base URL plus the same `SUGGESTIONS_API_KEY`.
-8. From the Vanguarr dashboard, run `Profile Architect` once and `Suggested For You` once.
+5. In Vanguarr, open `Settings` -> `Integrations` and use `Install Jellyfin Vanguarr Plugin` if your saved Jellyfin API key has elevated admin access. This adds the repo to Jellyfin and requests plugin installation from that repo.
+6. If you prefer the manual route, add the Vanguarr plugin repository URL `https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/manifest.json` in Jellyfin and install the `Vanguarr` plugin from the plugin catalog.
+7. Restart Jellyfin after the plugin install finishes.
+8. Open the plugin settings in Jellyfin and set the Vanguarr base URL plus the same `SUGGESTIONS_API_KEY`.
+9. From the Vanguarr dashboard, run `Profile Architect` once and `Suggested For You` once.
 
 After that, Vanguarr stores per-user suggestion snapshots, Seerr availability webhooks refresh them, and the Jellyfin plugin keeps each user's `Suggested for You` playlist in sync.
 
