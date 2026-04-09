@@ -19,6 +19,8 @@ htmlcov/
 
 build/
 dist/
+!jellyfin-plugin/dist/
+!jellyfin-plugin/dist/*.zip
 *.egg-info/
 
 *.db
