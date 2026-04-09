@@ -8,6 +8,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Dto;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 using Vanguarr.Jellyfin.Models;
 
@@ -207,9 +208,42 @@ public sealed class VanguarrSuggestionCatalogService
             HasAnyProviderId = providerLookup,
         };
 
-        var candidates = _libraryManager.GetItemList(query);
+        var rawCandidates = _libraryManager.GetItemList(query);
+        var candidates = rawCandidates
+            .Where(IsResolvableLibraryItem)
+            .ToList();
+
+        if (rawCandidates.Count > 0 && candidates.Count == 0)
+        {
+            _logger.LogWarning(
+                "Skipping non-library Jellyfin matches for suggested title={Title} user={UserName}. RawCandidates={RawCount}.",
+                suggestion.Title,
+                user.Username,
+                rawCandidates.Count);
+        }
+
         return candidates.FirstOrDefault(item => MatchesSuggestion(item, suggestion))
             ?? candidates.FirstOrDefault();
+    }
+
+    private static bool IsResolvableLibraryItem(BaseItem item)
+    {
+        if (item.ChannelId != Guid.Empty || item.SourceType == SourceType.Channel || item.IsVirtualItem)
+        {
+            return false;
+        }
+
+        if (item.LocationType != LocationType.FileSystem)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.Path))
+        {
+            return true;
+        }
+
+        return item.PhysicalLocations.Any(path => !string.IsNullOrWhiteSpace(path));
     }
 
     private static bool MatchesSuggestion(BaseItem item, VanguarrSuggestionItem suggestion)

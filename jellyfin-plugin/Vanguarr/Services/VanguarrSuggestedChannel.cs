@@ -48,7 +48,7 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia, I
             var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
             var refreshInterval = Math.Max(1, config.SyncIntervalMinutes);
             var refreshBucket = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60 / refreshInterval;
-            return $"2:{refreshInterval}:{Math.Max(1, config.SuggestionLimit)}:{refreshBucket}:{BuildConfigSignature(config)}";
+            return $"3:{refreshInterval}:{Math.Max(1, config.SuggestionLimit)}:{refreshBucket}:{BuildConfigSignature(config)}";
         }
     }
 
