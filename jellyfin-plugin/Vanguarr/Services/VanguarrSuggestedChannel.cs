@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.Entities;
@@ -46,7 +48,7 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia, I
             var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
             var refreshInterval = Math.Max(1, config.SyncIntervalMinutes);
             var refreshBucket = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60 / refreshInterval;
-            return $"{refreshInterval}:{Math.Max(1, config.SuggestionLimit)}:{refreshBucket}";
+            return $"{refreshInterval}:{Math.Max(1, config.SuggestionLimit)}:{refreshBucket}:{BuildConfigSignature(config)}";
         }
     }
 
@@ -80,10 +82,12 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia, I
 
     public async Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
     {
-        var user = _userManager.GetUserById(query.UserId);
+        var user = TryGetUser(query.UserId);
         if (user is null)
         {
-            _logger.LogWarning("Unable to load Jellyfin user {UserId} for Vanguarr channel.", query.UserId);
+            _logger.LogDebug(
+                "Skipping Vanguarr channel request without a concrete Jellyfin user context. queryUserId={UserId}",
+                query.UserId);
             return new ChannelItemResult();
         }
 
@@ -266,11 +270,27 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia, I
         return string.IsNullOrWhiteSpace(configuredName) ? "Suggested for You" : configuredName;
     }
 
+    private static string BuildConfigSignature(PluginConfiguration config)
+    {
+        var signatureSource = string.Join(
+            "|",
+            config.VanguarrBaseUrl?.Trim() ?? string.Empty,
+            config.SuggestionsApiKey?.Trim() ?? string.Empty,
+            config.PlaylistName?.Trim() ?? string.Empty);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(signatureSource));
+        return Convert.ToHexString(hash[..6]);
+    }
+
     private User? TryGetUser(string? userId)
     {
         return TryNormalizeUserId(userId, out var normalizedUserId)
             ? _userManager.GetUserById(normalizedUserId)
             : null;
+    }
+
+    private User? TryGetUser(Guid userId)
+    {
+        return userId == Guid.Empty ? null : _userManager.GetUserById(userId);
     }
 
     private static bool TryNormalizeUserId(string? userId, out Guid normalizedUserId)

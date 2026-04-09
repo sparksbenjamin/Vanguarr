@@ -8,12 +8,12 @@
     "category": "General",
     "versions": [
       {
-        "version": "1.1.1.0",
-        "changelog": "- Fixes Jellyfin startup registration so the plugin settings page loads correctly.\n- Keeps the Suggested for You channel shared at the server level while isolating items and cache per active user.\n- Retains the channel-based UX with browseable suggested shows.\n",
+        "version": "1.1.2.0",
+        "changelog": "- Fixes the blank Suggested for You row caused by Jellyfin requesting latest channel items without a populated user id.\n- Invalidates cached empty results when the Vanguarr base URL, suggestions key, or channel label changes.\n- Adds plugin-side logging for fetched and resolved suggestion counts to speed up troubleshooting.\n",
         "targetAbi": "10.11.0",
-        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.1.1.0.zip",
-        "checksum": "4dbac484aa9a3ed6c278d7431fa05c84",
-        "timestamp": "2026-04-09T20:56:55Z"
+        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.1.2.0.zip",
+        "checksum": "f81664f44efa6a77dc8bd42632f331d9",
+        "timestamp": "2026-04-09T21:56:40Z"
       }
     ]
   }

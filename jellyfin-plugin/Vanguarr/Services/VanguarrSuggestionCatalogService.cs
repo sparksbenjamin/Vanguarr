@@ -52,6 +52,11 @@ public sealed class VanguarrSuggestionCatalogService
             return [];
         }
 
+        _logger.LogInformation(
+            "Vanguarr returned {SuggestionCount} suggestion candidate(s) for user={UserName}.",
+            response.Items.Count,
+            user.Username);
+
         var resolvedSuggestions = new List<ResolvedVanguarrSuggestion>();
         foreach (var suggestion in response.Items.OrderBy(item => item.Rank).Take(Math.Max(1, config.SuggestionLimit)))
         {
@@ -62,6 +67,20 @@ public sealed class VanguarrSuggestionCatalogService
             }
 
             resolvedSuggestions.Add(new ResolvedVanguarrSuggestion(resolvedItem, suggestion));
+        }
+
+        if (response.Items.Count > 0 && resolvedSuggestions.Count == 0)
+        {
+            _logger.LogWarning(
+                "Vanguarr returned suggestions for user={UserName}, but Jellyfin resolved 0 matching library items.",
+                user.Username);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Jellyfin resolved {ResolvedCount} suggestion item(s) for user={UserName}.",
+                resolvedSuggestions.Count,
+                user.Username);
         }
 
         return resolvedSuggestions;
