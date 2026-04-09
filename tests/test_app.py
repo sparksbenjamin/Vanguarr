@@ -352,13 +352,16 @@ def test_jellyfin_suggestions_api_returns_ranked_items(monkeypatch) -> None:
             lambda force=False: SimpleNamespace(suggestions_api_key="top-secret"),
         )
 
-        monkeypatch.setattr(
-            client.app.state.vanguarr,
-            "get_suggestions",
-            lambda username=None, jellyfin_user_id=None, limit=None: [
+        captured: dict[str, object] = {}
+
+        def fake_get_suggestions(username=None, jellyfin_user_id=None, limit=None):
+            captured["username"] = username
+            captured["jellyfin_user_id"] = jellyfin_user_id
+            captured["limit"] = limit
+            return [
                 SimpleNamespace(
                     username="alice",
-                    jellyfin_user_id="user-123",
+                    jellyfin_user_id="66456a3a4cd346e383ce254e99d4b09a",
                     rank=1,
                     media_type="movie",
                     title="Arrival",
@@ -371,18 +374,26 @@ def test_jellyfin_suggestions_api_returns_ranked_items(monkeypatch) -> None:
                     tvdb_id=None,
                     imdb_id="tt2543164",
                 )
-            ],
+            ]
+
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_suggestions",
+            fake_get_suggestions,
         )
 
         response = client.get(
-            "/api/jellyfin/suggestions?username=alice&user_id=user-123&limit=5",
+            "/api/jellyfin/suggestions?username=alice&user_id=66456a3a-4cd3-46e3-83ce-254e99d4b09a&limit=5",
             headers={"Authorization": "Bearer top-secret"},
         )
 
     assert response.status_code == 200
+    assert captured["username"] == "alice"
+    assert captured["jellyfin_user_id"] == "66456a3a4cd346e383ce254e99d4b09a"
+    assert captured["limit"] == 5
     payload = response.json()
     assert payload["username"] == "alice"
-    assert payload["jellyfin_user_id"] == "user-123"
+    assert payload["jellyfin_user_id"] == "66456a3a4cd346e383ce254e99d4b09a"
     assert payload["count"] == 1
     assert payload["items"][0]["title"] == "Arrival"
     assert payload["items"][0]["external_ids"] == {

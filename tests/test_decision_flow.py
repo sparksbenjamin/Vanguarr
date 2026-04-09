@@ -5,10 +5,10 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
-from app.core.models import LibraryMedia, TaskRun
+from app.core.models import LibraryMedia, SuggestedMedia, TaskRun
 from app.core.prompts import build_decision_messages, build_profile_enrichment_messages
 from app.core.settings import Settings
-from app.core.services import ProfileStore, VanguarrService
+from app.core.services import ProfileStore, VanguarrService, normalize_jellyfin_user_id
 
 
 def test_select_recommendation_seeds_prefers_top_watched_titles() -> None:
@@ -590,3 +590,56 @@ def test_compose_decision_reasoning_uses_final_score_wording_and_threshold_conte
     assert reasoning.startswith("Final score 0.67. Code score 0.61.")
     assert "stayed below the request threshold of 0.72" in reasoning
     assert "LLM vote: REQUEST." in reasoning
+
+
+def test_normalize_jellyfin_user_id_compacts_guid_values() -> None:
+    assert normalize_jellyfin_user_id("66456a3a-4cd3-46e3-83ce-254e99d4b09a") == "66456a3a4cd346e383ce254e99d4b09a"
+    assert normalize_jellyfin_user_id("66456a3a4cd346e383ce254e99d4b09a") == "66456a3a4cd346e383ce254e99d4b09a"
+
+
+def test_get_suggestions_matches_hyphenated_jellyfin_user_id(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        session.add(
+            SuggestedMedia(
+                jellyfin_user_id="66456a3a4cd346e383ce254e99d4b09a",
+                username="admin",
+                rank=1,
+                media_type="movie",
+                title="Arrival",
+                overview="First contact drama.",
+                production_year=2016,
+                score=0.91,
+                reasoning="Matches sci-fi preference.",
+                state="available",
+                tmdb_id=329865,
+                imdb_id="tt2543164",
+            )
+        )
+        session.commit()
+
+    results = service.get_suggestions(
+        jellyfin_user_id="66456a3a-4cd3-46e3-83ce-254e99d4b09a",
+        limit=5,
+    )
+
+    assert len(results) == 1
+    assert results[0].title == "Arrival"

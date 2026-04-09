@@ -34,7 +34,7 @@ from app.core.settings import (
     Settings,
     get_settings,
 )
-from app.core.services import VanguarrService
+from app.core.services import VanguarrService, normalize_jellyfin_user_id
 
 
 bootstrap_settings = get_settings()
@@ -381,7 +381,7 @@ async def jellyfin_suggestions_api(
 
     service: VanguarrService = request.app.state.vanguarr
     normalized_username = username.strip() or None
-    normalized_user_id = user_id.strip() or None
+    normalized_user_id = normalize_jellyfin_user_id(user_id)
     suggestions = service.get_suggestions(
         username=normalized_username,
         jellyfin_user_id=normalized_user_id,

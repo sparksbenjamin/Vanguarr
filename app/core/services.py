@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import uuid
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -36,6 +37,17 @@ from app.core.settings import Settings
 
 
 logger = logging.getLogger("vanguarr.service")
+
+
+def normalize_jellyfin_user_id(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(raw).hex
+    except (ValueError, AttributeError):
+        compact = raw.replace("-", "").strip().lower()
+        return compact or None
 
 
 class ProfileStore:
@@ -295,7 +307,13 @@ class VanguarrService:
         with self.session_scope() as session:
             stmt = select(SuggestedMedia).order_by(SuggestedMedia.rank.asc(), SuggestedMedia.score.desc())
             if jellyfin_user_id:
-                stmt = stmt.where(SuggestedMedia.jellyfin_user_id == jellyfin_user_id)
+                normalized_user_id = normalize_jellyfin_user_id(jellyfin_user_id)
+                user_id_candidates = {
+                    candidate
+                    for candidate in {str(jellyfin_user_id).strip(), normalized_user_id}
+                    if candidate
+                }
+                stmt = stmt.where(SuggestedMedia.jellyfin_user_id.in_(sorted(user_id_candidates)))
             elif username:
                 stmt = stmt.where(SuggestedMedia.username == username)
             else:
@@ -1256,7 +1274,7 @@ class VanguarrService:
 
     async def _refresh_user_suggestions(self, user: dict[str, Any]) -> dict[str, Any]:
         current_username = str(user.get("Name") or "unknown")
-        jellyfin_user_id = str(user.get("Id") or "").strip()
+        jellyfin_user_id = normalize_jellyfin_user_id(str(user.get("Id") or ""))
         if not jellyfin_user_id:
             raise ValueError("Jellyfin user id is required for suggestion refresh.")
 
