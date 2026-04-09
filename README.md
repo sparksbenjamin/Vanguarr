@@ -145,6 +145,23 @@ If you want the Jellyfin-side install flow for per-user playlists, follow [`docs
 
 If you want the shortest possible summary for sharing the repo, it is this: Vanguarr is the service that scouts what your media-server users are most likely to want next and quietly files the right requests into the ARR stack.
 
+### Suggested For You Setup
+
+If you want the Jellyfin `Suggested for You` experience, the shortest working path is:
+
+1. Configure Jellyfin in Vanguarr with `JELLYFIN_BASE_URL` and an admin-capable `JELLYFIN_API_KEY`.
+2. Set `SUGGESTIONS_API_KEY` and `SEER_WEBHOOK_TOKEN` in Vanguarr, or set them from the `/settings` page after first boot.
+3. In Vanguarr, enable `Suggested For You` and choose a `Suggested For You Limit`.
+4. In Seerr or Jellyseerr, add a webhook pointing to `http://your-vanguarr-host:8000/api/webhooks/seer` with header `Authorization: Bearer YOUR_SEER_WEBHOOK_TOKEN`.
+5. In Jellyfin, add the Vanguarr plugin repository URL `https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/manifest.json`.
+6. Install the `Vanguarr` plugin from the Jellyfin plugin catalog and restart Jellyfin.
+7. Open the plugin settings in Jellyfin and set the Vanguarr base URL plus the same `SUGGESTIONS_API_KEY`.
+8. From the Vanguarr dashboard, run `Profile Architect` once and `Suggested For You` once.
+
+After that, Vanguarr stores per-user suggestion snapshots, Seerr availability webhooks refresh them, and the Jellyfin plugin keeps each user's `Suggested for You` playlist in sync.
+
+The full step-by-step plugin guide is in [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
+
 ### Run The Published GHCR Image
 
 ```yaml
