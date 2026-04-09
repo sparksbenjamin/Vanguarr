@@ -29,6 +29,9 @@ def test_settings_page_renders() -> None:
     assert "General settings" in response.text
     assert "Save General Settings" in response.text
     assert "/settings/llm-providers" in response.text
+    assert 'data-settings-group' in response.text
+    assert 'data-settings-open="true"' in response.text
+    assert 'href="/manifest"' in response.text
 
 
 def test_settings_root_redirects_to_general() -> None:
@@ -107,3 +110,13 @@ def test_ollama_models_endpoint(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["models"] == ["llama3.1:8b", "qwen3:8b"]
+
+
+def test_manifest_page_shows_profiles_under_settings_group() -> None:
+    with TestClient(app) as client:
+        response = client.get("/manifest")
+
+    assert response.status_code == 200
+    assert 'data-settings-open="true"' in response.text
+    assert 'href="/manifest"' in response.text
+    assert "settings-subnav-link-active" in response.text

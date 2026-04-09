@@ -491,6 +491,23 @@
         color: var(--text);
       }
 
+      .settings-nav-summary {
+        cursor: pointer;
+        list-style: none;
+      }
+
+      .settings-nav-summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .settings-group-chevron {
+        transition: transform 0.18s ease;
+      }
+
+      .settings-nav-group[open] .settings-group-chevron {
+        transform: rotate(90deg);
+      }
+
       .table-wrap {
         border-radius: 1.2rem;
         border: 1px solid rgba(160, 182, 207, 0.08);
@@ -515,6 +532,7 @@
   </head>
   <body class="min-h-screen">
     {% set path = request.url.path %}
+    {% set settings_group_active = path.startswith('/settings') or path.startswith('/manifest') %}
     <div class="min-h-screen lg:grid lg:grid-cols-[288px_minmax(0,1fr)]">
       <aside class="border-b border-white/5 bg-[var(--sidebar)] backdrop-blur-xl lg:min-h-screen lg:border-b-0 lg:border-r lg:border-r-white/5">
         <div class="flex h-full flex-col">
@@ -569,58 +587,58 @@
                 </span>
                 <span class="mono text-[11px] uppercase tracking-[0.18em]">Logs</span>
               </a>
-              <a
-                href="/manifest"
-                class="nav-link {{ 'nav-link-active' if path.startswith('/manifest') else 'nav-link-idle' }}"
+              <details
+                class="settings-nav-group space-y-2"
+                data-settings-group
+                data-settings-open="{{ 'true' if settings_group_active else 'false' }}"
+                {% if settings_group_active %}open{% endif %}
               >
-                <span class="flex items-center gap-3">
-                  <span class="nav-icon">
-                    <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
-                      <path d="M5.5 3.5h6l3 3v10h-9z" />
-                      <path d="M11.5 3.5v3h3" />
-                      <path d="M7.5 10h5" />
-                      <path d="M7.5 13h5" />
+                <summary class="settings-nav-summary nav-link {{ 'nav-link-active' if settings_group_active else 'nav-link-idle' }}" data-settings-toggle>
+                  <span class="flex items-center gap-3">
+                    <span class="nav-icon">
+                      <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+                        <path d="M10 3.5v2.2" />
+                        <path d="M10 14.3v2.2" />
+                        <path d="M3.5 10h2.2" />
+                        <path d="M14.3 10h2.2" />
+                        <path d="m5.4 5.4 1.6 1.6" />
+                        <path d="m13 13 1.6 1.6" />
+                        <path d="m14.6 5.4-1.6 1.6" />
+                        <path d="M7 13 5.4 14.6" />
+                        <circle cx="10" cy="10" r="2.5" />
+                      </svg>
+                    </span>
+                    <span>Settings</span>
+                  </span>
+                  <span class="flex items-center gap-3">
+                    <span class="mono text-[11px] uppercase tracking-[0.18em]">Runtime</span>
+                    <svg class="settings-group-chevron h-3.5 w-3.5 text-[var(--text-dim)]" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+                      <path d="m7 4 6 6-6 6" />
                     </svg>
                   </span>
-                  <span>Profiles</span>
-                </span>
-                <span class="mono text-[11px] uppercase tracking-[0.18em]">Editor</span>
-              </a>
-              <a
-                href="/settings/general"
-                class="nav-link {{ 'nav-link-active' if path.startswith('/settings') else 'nav-link-idle' }}"
-              >
-                <span class="flex items-center gap-3">
-                  <span class="nav-icon">
-                    <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
-                      <path d="M10 3.5v2.2" />
-                      <path d="M10 14.3v2.2" />
-                      <path d="M3.5 10h2.2" />
-                      <path d="M14.3 10h2.2" />
-                      <path d="m5.4 5.4 1.6 1.6" />
-                      <path d="m13 13 1.6 1.6" />
-                      <path d="m14.6 5.4-1.6 1.6" />
-                      <path d="M7 13 5.4 14.6" />
-                      <circle cx="10" cy="10" r="2.5" />
-                    </svg>
-                  </span>
-                  <span>Settings</span>
-                </span>
-                <span class="mono text-[11px] uppercase tracking-[0.18em]">Runtime</span>
-              </a>
-              {% if path.startswith('/settings') and settings_nav_items %}
-              <div class="space-y-1 pl-4">
-                {% for item in settings_nav_items %}
-                <a
-                  href="{{ item.href }}"
-                  class="settings-subnav-link {{ 'settings-subnav-link-active' if active_settings_slug is defined and active_settings_slug == item.slug else 'settings-subnav-link-idle' }}"
-                >
-                  <span>{{ item.title }}</span>
-                  <span class="mono text-[10px] uppercase tracking-[0.18em]">{{ "chain" if item.kind == "providers" else "section" }}</span>
-                </a>
-                {% endfor %}
-              </div>
-              {% endif %}
+                </summary>
+                {% if settings_nav_items %}
+                <div class="space-y-1 pl-4" data-settings-panel>
+                  {% for item in settings_nav_items %}
+                  <a
+                    href="{{ item.href }}"
+                    class="settings-subnav-link {{ 'settings-subnav-link-active' if active_settings_slug is defined and active_settings_slug == item.slug else 'settings-subnav-link-idle' }}"
+                  >
+                    <span>{{ item.title }}</span>
+                    <span class="mono text-[10px] uppercase tracking-[0.18em]">
+                      {% if item.kind == "providers" %}
+                      chain
+                      {% elif item.kind == "editor" %}
+                      editor
+                      {% else %}
+                      section
+                      {% endif %}
+                    </span>
+                  </a>
+                  {% endfor %}
+                </div>
+                {% endif %}
+              </details>
             </nav>
           </div>
 

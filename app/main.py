@@ -97,7 +97,16 @@ def build_settings_pages() -> tuple[SettingsPageDefinition, ...]:
 SETTINGS_PAGES = build_settings_pages()
 SETTINGS_PAGE_MAP = {page.slug: page for page in SETTINGS_PAGES}
 DEFAULT_SETTINGS_PAGE = SETTINGS_PAGE_MAP["general"]
-templates.env.globals["settings_nav_items"] = SETTINGS_PAGES
+SETTINGS_NAV_ITEMS = SETTINGS_PAGES + (
+    SettingsPageDefinition(
+        slug="profiles",
+        title="Profiles",
+        kind="editor",
+        description="Open the manifest editor for live profile documents and summaries.",
+        href="/manifest",
+    ),
+)
+templates.env.globals["settings_nav_items"] = SETTINGS_NAV_ITEMS
 
 
 def get_settings_page_or_404(section_slug: str) -> SettingsPageDefinition:
@@ -446,6 +455,7 @@ async def manifest(request: Request, username: str = "") -> HTMLResponse:
             "request": request,
             "page_title": "Vanguarr Manifest Editor",
             "toast": request.query_params.get("toast"),
+            "active_settings_slug": "profiles",
             "profiles": profiles,
             "selected_user": selected_user,
             "profile_content": profile_content,
