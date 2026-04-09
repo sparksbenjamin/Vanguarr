@@ -148,6 +148,80 @@
     </div>
   </section>
   {% endif %}
+  {% if settings_page.slug == "scheduling" %}
+  <section class="surface rounded-[1.45rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
+      <p class="panel-kicker">Jellyfin Library Sync</p>
+      <h2 class="mt-2 panel-title">Keep Suggested For You aligned with the real library</h2>
+    </div>
+    <div class="space-y-4 px-5 py-5">
+      <p class="text-sm leading-6 text-[var(--text-soft)]">
+        Library Sync builds a durable Jellyfin catalog index inside Vanguarr, marks removed titles as unavailable, and refreshes per-user suggestion snapshots after each successful sync.
+      </p>
+      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
+          <p class="panel-kicker">Available</p>
+          <p class="mt-2 text-2xl font-semibold">{{ library_sync_snapshot.available_items }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">indexed titles ready for suggestions</p>
+        </div>
+        <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
+          <p class="panel-kicker">Movies</p>
+          <p class="mt-2 text-2xl font-semibold">{{ library_sync_snapshot.movies }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">available movie records</p>
+        </div>
+        <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
+          <p class="panel-kicker">Series</p>
+          <p class="mt-2 text-2xl font-semibold">{{ library_sync_snapshot.series }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">available series records</p>
+        </div>
+        <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
+          <p class="panel-kicker">Removed</p>
+          <p class="mt-2 text-2xl font-semibold">{{ library_sync_snapshot.removed_items }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">titles kept for cleanup history</p>
+        </div>
+      </div>
+      <div class="rounded-[1.25rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-4">
+        <p class="text-sm leading-6 text-[var(--text-soft)]">
+          Last indexed item seen:
+          <span class="mono text-white">
+            {{ library_sync_snapshot.last_seen_at.isoformat() if library_sync_snapshot.last_seen_at else "Never" }}
+          </span>
+        </p>
+        <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+          Last sync task:
+          <span class="mono text-white">
+            {{ library_sync_snapshot.last_task.started_at.isoformat() if library_sync_snapshot.last_task else "No runs yet" }}
+          </span>
+        </p>
+        <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+          {% if library_sync_snapshot.last_task %}
+          {{ library_sync_snapshot.last_task.summary }}
+          {% else %}
+          Run Library Sync once after saving your Jellyfin settings so the Suggested For You row has an indexed catalog to score against.
+          {% endif %}
+        </p>
+      </div>
+      <div class="hidden rounded-2xl border px-4 py-3 text-sm" data-library-sync-status></div>
+      <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <button
+          type="button"
+          class="button button-primary w-full md:w-auto"
+          data-run-library-sync
+          {% if settings.normalized_media_server_provider != "jellyfin" %}disabled{% endif %}
+        >
+          Run Library Sync Now
+        </button>
+        <p class="text-sm leading-6 text-[var(--text-soft)]">
+          {% if settings.normalized_media_server_provider == "jellyfin" %}
+          This runs in the background and also refreshes Suggested For You snapshots after the index update finishes.
+          {% else %}
+          Switch the active media server provider to Jellyfin before using Library Sync.
+          {% endif %}
+        </p>
+      </div>
+    </div>
+  </section>
+  {% endif %}
   {% elif settings_page.kind == "providers" %}
   <form class="space-y-5" method="post" action="/settings/save">
     <input type="hidden" name="settings_section_slug" value="{{ settings_page.slug }}" />
@@ -377,6 +451,8 @@
 
   const jellyfinPluginInstallButton = document.querySelector("[data-install-jellyfin-plugin]");
   const jellyfinPluginStatus = document.querySelector("[data-jellyfin-plugin-status]");
+  const librarySyncButton = document.querySelector("[data-run-library-sync]");
+  const librarySyncStatus = document.querySelector("[data-library-sync-status]");
 
   function setJellyfinPluginStatus(tone, message) {
     if (!jellyfinPluginStatus) return;
@@ -424,6 +500,54 @@
 
   if (jellyfinPluginInstallButton) {
     jellyfinPluginInstallButton.addEventListener("click", installJellyfinPlugin);
+  }
+
+  function setLibrarySyncStatus(tone, message) {
+    if (!librarySyncStatus) return;
+
+    const tones = {
+      info: "border-[rgba(160,182,207,0.12)] bg-[rgba(255,255,255,0.03)] text-[var(--text-soft)]",
+      loading: "border-[rgba(246,189,103,0.18)] bg-[rgba(246,189,103,0.08)] text-[var(--amber)]",
+      success: "border-[rgba(90,217,158,0.18)] bg-[rgba(90,217,158,0.08)] text-[var(--green)]",
+      error: "border-[rgba(255,127,127,0.18)] bg-[rgba(255,127,127,0.08)] text-[var(--red)]",
+    };
+
+    librarySyncStatus.hidden = false;
+    librarySyncStatus.className = `rounded-2xl border px-4 py-3 text-sm ${tones[tone] || tones.info}`;
+    librarySyncStatus.textContent = message;
+  }
+
+  async function runLibrarySync() {
+    if (!librarySyncButton) return;
+
+    const originalLabel = librarySyncButton.textContent;
+    librarySyncButton.disabled = true;
+    setLibrarySyncStatus("loading", "Queueing a Jellyfin library sync in the background...");
+
+    try {
+      const response = await fetch("/api/settings/scheduling/library-sync/run", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+        },
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.detail || "Could not start Library Sync.");
+      }
+
+      setLibrarySyncStatus(result.started === false ? "info" : "success", result.detail || "Library Sync queued.");
+    } catch (error) {
+      setLibrarySyncStatus("error", error.message || "Could not start Library Sync.");
+    } finally {
+      librarySyncButton.disabled = false;
+      librarySyncButton.textContent = originalLabel;
+    }
+  }
+
+  if (librarySyncButton) {
+    librarySyncButton.addEventListener("click", runLibrarySync);
   }
 </script>
 {% endif %}

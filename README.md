@@ -84,7 +84,7 @@ flowchart LR
 - Searchable decision log with stored reasoning and request outcomes
 - Editable manifest workflow for operator overrides and explicit feedback
 - Database-backed runtime settings with a live Settings page and prioritized LLM failover
-- Optional Jellyfin companion plugin that exposes per-user `Suggested for You` channels from Vanguarr snapshots
+- Optional Jellyfin companion plugin that exposes per-user `Suggested for You` channels from Vanguarr's indexed library-backed snapshots
 
 ## Web Interface And Endpoints
 
@@ -99,6 +99,7 @@ flowchart LR
 | `/api/health` | Cached JSON health snapshot for the active media server, Seer, TMDb, and the active LLM provider |
 | `/api/jellyfin/suggestions` | Bearer-protected API the Jellyfin `Vanguarr` plugin uses to fetch per-user suggestion snapshots |
 | `/api/webhooks/seer` | Bearer-protected webhook endpoint for Seer availability updates that should refresh user suggestions |
+| `/api/settings/scheduling/library-sync/run` | Queues a background Jellyfin library sync from the Scheduling settings page |
 | `/actions/profile-architect` | Manual Profile Architect trigger |
 | `/actions/decision-engine` | Manual Decision Engine trigger |
 | `/actions/suggested-for-you` | Manual Suggested For You snapshot rebuild for Jellyfin users |
@@ -157,9 +158,10 @@ If you want the Jellyfin `Suggested for You` experience, the shortest working pa
 6. If you prefer the manual route, add the Vanguarr plugin repository URL `https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/manifest.json` in Jellyfin and install the `Vanguarr` plugin from the plugin catalog.
 7. Restart Jellyfin after the plugin install finishes.
 8. Open the plugin settings in Jellyfin and set the Vanguarr base URL plus the same `SUGGESTIONS_API_KEY`.
-9. From the Vanguarr dashboard, run `Profile Architect` once and `Suggested For You` once.
+9. In `Settings` -> `Scheduling`, run `Library Sync Now` once so Vanguarr builds the Jellyfin catalog index.
+10. From the Vanguarr dashboard, run `Profile Architect` once if you want to force an immediate profile refresh.
 
-After that, Vanguarr stores per-user suggestion snapshots, Seerr availability webhooks refresh them, and the Jellyfin plugin exposes each user's `Suggested for You` channel inside Jellyfin.
+After that, Vanguarr stores per-user suggestion snapshots from the indexed Jellyfin library, optional Seerr availability webhooks can nudge refreshes, and the Jellyfin plugin exposes each user's `Suggested for You` channel inside Jellyfin.
 
 The full step-by-step plugin guide is in [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
@@ -255,6 +257,8 @@ Important behavior:
 | `SCHEDULER_ENABLED` | `true` | Enables the built-in APScheduler jobs |
 | `PROFILE_CRON` | `0 3 * * 0` | Weekly Profile Architect run in the configured timezone |
 | `DECISION_CRON` | `0 4 * * *` | Daily Decision Engine run in the configured timezone |
+| `LIBRARY_SYNC_ENABLED` | `true` | Enables the Jellyfin library indexing job that feeds Suggested For You |
+| `LIBRARY_SYNC_CRON` | `0 */4 * * *` | Cron expression for rebuilding the indexed Jellyfin catalog |
 | `SUGGESTIONS_ENABLED` | `true` | Enables per-user Suggested For You snapshot generation for Jellyfin |
 | `SUGGESTIONS_LIMIT` | `20` | Number of ranked available titles stored per user for the Jellyfin plugin |
 | `REQUEST_THRESHOLD` | `0.72` | Minimum hybrid confidence required to request media |
@@ -272,6 +276,7 @@ Useful extra knobs from [`.env.example`](.env.example):
 - `PROFILE_LLM_ENRICHMENT_ENABLED` disables the profile-side adjacent-lane suggestion step if you want a fully deterministic profile build.
 - `PROFILE_LLM_ENRICHMENT_MAX_OUTPUT_TOKENS` keeps that optional profile-side LLM assist intentionally small.
 - `SCHEDULER_ENABLED=false` is the right setting when you want dashboard-driven manual runs only.
+- `LIBRARY_SYNC_ENABLED=true` plus a sensible `LIBRARY_SYNC_CRON` is the simplest way to keep the Jellyfin channel aligned with adds and removals in the real library.
 
 ## How Profiles Work
 
@@ -351,7 +356,7 @@ This layout is what powers the dashboard, War Room, and manifest editor.
 - Vanguarr reads watched history through Jellyfin's normal item APIs.
 - It uses played-state filters and `DatePlayed` sorting on `/Items`.
 - The Jellyfin Playback Reporting plugin is not required.
-- The companion `Vanguarr` Jellyfin plugin exposes per-user `Suggested for You` channels from Vanguarr's stored suggestion snapshots.
+- The companion `Vanguarr` Jellyfin plugin exposes per-user `Suggested for You` channels from Vanguarr's indexed-library suggestion snapshots.
 - Plugin install and webhook setup instructions live in [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
 #### Plex

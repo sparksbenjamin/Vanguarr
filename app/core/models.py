@@ -83,6 +83,38 @@ class SuggestedMedia(Base):
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class LibraryMedia(Base):
+    __tablename__ = "library_media"
+    __table_args__ = (
+        UniqueConstraint("source_provider", "media_server_id", name="uq_library_media_source_item"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        index=True,
+    )
+    source_provider: Mapped[str] = mapped_column(String(32), default="jellyfin", index=True)
+    media_server_id: Mapped[str] = mapped_column(String(128), index=True)
+    media_type: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(String(255), index=True)
+    sort_title: Mapped[str] = mapped_column(String(255), default="", index=True)
+    overview: Mapped[str] = mapped_column(Text, default="")
+    production_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    release_date: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    community_rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+    genres_json: Mapped[str] = mapped_column(Text, default="[]")
+    state: Mapped[str] = mapped_column(String(32), default="available", index=True)
+    tmdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    tvdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class SeerWebhookEvent(Base):
     __tablename__ = "seer_webhook_events"
     __table_args__ = (

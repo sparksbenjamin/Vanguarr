@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True
     profile_cron: str = "0 3 * * 0"
     decision_cron: str = "0 4 * * *"
+    library_sync_enabled: bool = True
+    library_sync_cron: str = "0 */4 * * *"
     health_cache_seconds: int = 30
     profile_history_limit: int = 40
     profile_architect_max_output_tokens: int = 384
@@ -195,7 +197,7 @@ class Settings(BaseSettings):
             raise ValueError(f"Media server provider must be one of: {', '.join(sorted(valid))}.")
         return provider
 
-    @field_validator("profile_cron", "decision_cron")
+    @field_validator("profile_cron", "decision_cron", "library_sync_cron")
     @classmethod
     def validate_cron_expression(cls, value: str) -> str:
         CronTrigger.from_crontab(value)
@@ -533,6 +535,20 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         group="Scheduling",
         description="Cron expression for Decision Engine.",
         placeholder="0 4 * * *",
+    ),
+    SettingFieldDefinition(
+        key="library_sync_enabled",
+        label="Library Sync Enabled",
+        group="Scheduling",
+        description="Keep the indexed Jellyfin library catalog refreshed for Suggested For You.",
+        input_type="checkbox",
+    ),
+    SettingFieldDefinition(
+        key="library_sync_cron",
+        label="Library Sync Cron",
+        group="Scheduling",
+        description="Cron expression for the Jellyfin library index refresh.",
+        placeholder="0 */4 * * *",
     ),
     SettingFieldDefinition(
         key="global_exclusions",

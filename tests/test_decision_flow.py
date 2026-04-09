@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
-from app.core.models import TaskRun
+from app.core.models import LibraryMedia, TaskRun
 from app.core.prompts import build_decision_messages, build_profile_enrichment_messages
 from app.core.settings import Settings
 from app.core.services import ProfileStore, VanguarrService
@@ -248,6 +248,57 @@ def test_recover_interrupted_tasks_marks_running_rows(tmp_path) -> None:
     assert task_runs[0].finished_at is not None
     assert "restart before completion" in task_runs[0].summary.lower()
     assert task_runs[1].status == "success"
+
+
+def test_build_available_library_candidates_prefers_indexed_library_rows(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        session.add(
+            LibraryMedia(
+                source_provider="jellyfin",
+                media_server_id="item-1",
+                media_type="movie",
+                title="Arrival",
+                sort_title="Arrival",
+                overview="First contact drama.",
+                production_year=2016,
+                release_date="2016-11-11T00:00:00.0000000Z",
+                community_rating=8.1,
+                genres_json='["Sci-Fi","Drama"]',
+                state="available",
+                tmdb_id=329865,
+                imdb_id="tt2543164",
+                payload_json="{}",
+            )
+        )
+        session.commit()
+
+    import asyncio
+
+    candidates = asyncio.run(service._build_available_library_candidates("user-1"))
+
+    assert len(candidates) == 1
+    assert candidates[0]["title"] == "Arrival"
+    assert candidates[0]["external_ids"]["tmdb"] == 329865
+    assert candidates[0]["sources"] == ["library:indexed"]
 
 
 def test_viewing_history_context_reuses_profile_summary_signals() -> None:

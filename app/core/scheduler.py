@@ -55,6 +55,16 @@ class EngineScheduler:
             coalesce=True,
             max_instances=1,
         )
+        if settings.library_sync_enabled:
+            scheduler.add_job(
+                self.runner.launch_library_sync,
+                trigger=CronTrigger.from_crontab(settings.library_sync_cron, timezone=timezone),
+                id="library_sync",
+                name="Library Sync",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
         scheduler.start()
         self._scheduler = scheduler
 

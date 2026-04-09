@@ -20,7 +20,14 @@ from app.api.llm import LLMClient
 from app.api.media_server import MediaServerClientProtocol
 from app.api.seer import SeerClient
 from app.api.tmdb import TMDbClient
-from app.core.models import DecisionLog, RequestedMedia, SeerWebhookEvent, SuggestedMedia, TaskRun
+from app.core.models import (
+    DecisionLog,
+    LibraryMedia,
+    RequestedMedia,
+    SeerWebhookEvent,
+    SuggestedMedia,
+    TaskRun,
+)
 from app.core.prompts import (
     build_decision_messages,
     build_profile_enrichment_messages,
@@ -297,6 +304,57 @@ class VanguarrService:
                 stmt = stmt.limit(limit)
             return list(session.scalars(stmt))
 
+    def get_library_sync_snapshot(self) -> dict[str, Any]:
+        with self.session_scope() as session:
+            total_items = int(session.scalar(select(func.count(LibraryMedia.id))) or 0)
+            available_items = int(
+                session.scalar(
+                    select(func.count(LibraryMedia.id)).where(LibraryMedia.state == "available")
+                )
+                or 0
+            )
+            removed_items = int(
+                session.scalar(
+                    select(func.count(LibraryMedia.id)).where(LibraryMedia.state == "removed")
+                )
+                or 0
+            )
+            movies = int(
+                session.scalar(
+                    select(func.count(LibraryMedia.id)).where(
+                        LibraryMedia.state == "available",
+                        LibraryMedia.media_type == "movie",
+                    )
+                )
+                or 0
+            )
+            series = int(
+                session.scalar(
+                    select(func.count(LibraryMedia.id)).where(
+                        LibraryMedia.state == "available",
+                        LibraryMedia.media_type == "tv",
+                    )
+                )
+                or 0
+            )
+            last_seen_at = session.scalar(select(func.max(LibraryMedia.last_seen_at)))
+            last_task = session.scalar(
+                select(TaskRun)
+                .where(TaskRun.engine == "library_sync")
+                .order_by(desc(TaskRun.started_at))
+                .limit(1)
+            )
+
+        return {
+            "total_items": total_items,
+            "available_items": available_items,
+            "removed_items": removed_items,
+            "movies": movies,
+            "series": series,
+            "last_seen_at": last_seen_at,
+            "last_task": last_task,
+        }
+
     async def install_jellyfin_plugin(self) -> dict[str, Any]:
         if self.settings.normalized_media_server_provider != "jellyfin":
             raise ClientConfigError(
@@ -377,6 +435,8 @@ class VanguarrService:
             task = self._start_task(session, "profile_architect")
 
         updated_users: list[str] = []
+        suggestion_refreshes = 0
+        suggestion_targets: list[dict[str, Any]] = []
         errors: list[str] = []
 
         try:
@@ -418,20 +478,40 @@ class VanguarrService:
                     )
                     self.profile_store.write_payload(current_username, profile_payload)
                     updated_users.append(current_username)
+                    suggestion_targets.append(user)
                     logger.info("Profile Architect updated profile for user=%s", current_username)
                 except Exception as exc:
                     errors.append(f"{current_username}: {exc}")
                     logger.exception("Profile Architect failed for user=%s", current_username)
+
+            if self.settings.suggestions_enabled:
+                for user in suggestion_targets:
+                    current_username = str(user.get("Name") or "unknown")
+                    try:
+                        await self._refresh_user_suggestions(user)
+                        suggestion_refreshes += 1
+                    except Exception as exc:
+                        errors.append(f"{current_username} suggestions: {exc}")
+                        logger.exception(
+                            "Profile Architect follow-up suggestion refresh failed for user=%s",
+                            current_username,
+                        )
 
             if not users:
                 status = "error"
                 summary = f"No {self.settings.media_server_label} users matched the requested target."
             elif errors:
                 status = "partial"
-                summary = f"Updated {len(updated_users)} profile(s) with {len(errors)} error(s)."
+                summary = (
+                    f"Updated {len(updated_users)} profile(s), refreshed {suggestion_refreshes} "
+                    f"suggestion snapshot(s), with {len(errors)} error(s)."
+                )
             else:
                 status = "success"
-                summary = f"Updated {len(updated_users)} profile(s)."
+                summary = (
+                    f"Updated {len(updated_users)} profile(s) and refreshed "
+                    f"{suggestion_refreshes} suggestion snapshot(s)."
+                )
         except Exception as exc:
             status = "error"
             summary = f"Profile Architect failed: {exc}"
@@ -447,6 +527,7 @@ class VanguarrService:
             "status": status,
             "summary": summary,
             "updated_users": updated_users,
+            "suggestion_refreshes": suggestion_refreshes,
             "errors": errors,
         }
 
@@ -758,13 +839,13 @@ class VanguarrService:
                 elif errors:
                     status = "partial"
                     summary = (
-                        f"Refreshed {len(refreshed_users)} user playlist snapshot(s), "
+                        f"Refreshed {len(refreshed_users)} user suggestion snapshot(s), "
                         f"stored {stored} suggestion(s), scored {scored} available item(s), errors {len(errors)}."
                     )
                 else:
                     status = "success"
                     summary = (
-                        f"Refreshed {len(refreshed_users)} user playlist snapshot(s), "
+                        f"Refreshed {len(refreshed_users)} user suggestion snapshot(s), "
                         f"stored {stored} suggestion(s), scored {scored} available item(s)."
                     )
         except Exception as exc:
@@ -784,6 +865,124 @@ class VanguarrService:
             "refreshed_users": refreshed_users,
             "stored": stored,
             "scored": scored,
+            "errors": errors,
+        }
+
+    async def run_library_sync(self) -> dict[str, Any]:
+        logger.info("Library Sync started.")
+        with self.session_scope() as session:
+            task = self._start_task(session, "library_sync")
+
+        indexed = 0
+        added = 0
+        updated = 0
+        removed = 0
+        skipped = 0
+        refreshed_users: list[str] = []
+        errors: list[str] = []
+
+        try:
+            items = await self._jellyfin_client().get_library_items()
+            now = datetime.utcnow()
+            seen_ids: set[str] = set()
+            normalized_payloads: list[dict[str, Any]] = []
+
+            for item in items:
+                payload = self._library_item_to_sync_payload(item)
+                if payload is None:
+                    skipped += 1
+                    continue
+                seen_ids.add(str(payload["media_server_id"]))
+                normalized_payloads.append(payload)
+
+            with self.session_scope() as session:
+                existing_rows = {
+                    row.media_server_id: row
+                    for row in session.scalars(select(LibraryMedia).where(LibraryMedia.source_provider == "jellyfin"))
+                }
+
+                for payload in normalized_payloads:
+                    media_server_id = str(payload["media_server_id"])
+                    row = existing_rows.get(media_server_id)
+                    if row is None:
+                        row = LibraryMedia(
+                            source_provider="jellyfin",
+                            media_server_id=media_server_id,
+                        )
+                        session.add(row)
+                        added += 1
+                    else:
+                        updated += 1
+
+                    row.media_type = str(payload["media_type"])
+                    row.title = str(payload["title"])
+                    row.sort_title = str(payload["sort_title"])
+                    row.overview = str(payload["overview"])
+                    row.production_year = payload["production_year"]
+                    row.release_date = payload["release_date"]
+                    row.community_rating = payload["community_rating"]
+                    row.genres_json = json.dumps(payload["genres"], ensure_ascii=True)
+                    row.state = "available"
+                    row.tmdb_id = payload["tmdb_id"]
+                    row.tvdb_id = payload["tvdb_id"]
+                    row.imdb_id = payload["imdb_id"]
+                    row.last_seen_at = now
+                    row.payload_json = str(payload["payload_json"])
+                    indexed += 1
+
+                for media_server_id, row in existing_rows.items():
+                    if media_server_id in seen_ids or row.state == "removed":
+                        continue
+                    row.state = "removed"
+                    removed += 1
+
+            if self.settings.suggestions_enabled:
+                users = await self.media_server.list_users()
+                for user in users:
+                    current_username = str(user.get("Name") or "unknown")
+                    try:
+                        await self._refresh_user_suggestions(user)
+                        refreshed_users.append(current_username)
+                    except Exception as exc:
+                        errors.append(f"{current_username}: {exc}")
+                        logger.exception(
+                            "Library Sync suggestion refresh failed for user=%s",
+                            current_username,
+                        )
+
+            if errors:
+                status = "partial"
+                summary = (
+                    f"Indexed {indexed} Jellyfin item(s), added {added}, updated {updated}, "
+                    f"removed {removed}, skipped {skipped}, refreshed {len(refreshed_users)} suggestion snapshot(s), "
+                    f"errors {len(errors)}."
+                )
+            else:
+                status = "success"
+                summary = (
+                    f"Indexed {indexed} Jellyfin item(s), added {added}, updated {updated}, "
+                    f"removed {removed}, skipped {skipped}, refreshed {len(refreshed_users)} suggestion snapshot(s)."
+                )
+        except Exception as exc:
+            status = "error"
+            summary = f"Library Sync failed: {exc}"
+            errors.append(str(exc))
+
+        with self.session_scope() as session:
+            self._finish_task(session, task.id, status=status, summary=summary)
+
+        logger.info("Library Sync finished status=%s summary=%s", status, summary)
+
+        return {
+            "engine": "library_sync",
+            "status": status,
+            "summary": summary,
+            "indexed": indexed,
+            "added": added,
+            "updated": updated,
+            "removed": removed,
+            "skipped": skipped,
+            "refreshed_users": refreshed_users,
             "errors": errors,
         }
 
@@ -972,6 +1171,24 @@ class VanguarrService:
         }
 
     async def _build_available_library_candidates(self, jellyfin_user_id: str) -> list[dict[str, Any]]:
+        with self.session_scope() as session:
+            indexed_rows = list(
+                session.scalars(
+                    select(LibraryMedia)
+                    .where(LibraryMedia.state == "available")
+                    .order_by(LibraryMedia.sort_title.asc(), LibraryMedia.title.asc())
+                )
+            )
+
+        if indexed_rows:
+            candidates = [
+                candidate
+                for candidate in (self._library_media_to_candidate(row) for row in indexed_rows)
+                if candidate is not None
+            ]
+            if candidates:
+                return candidates
+
         items = await self._jellyfin_client().get_library_items(user_id=jellyfin_user_id)
         candidates: list[dict[str, Any]] = []
         for item in items:
@@ -2957,6 +3174,72 @@ class VanguarrService:
             "sources": ["library:available"],
             "source_lanes": ["available_library"],
             "media_info": {"status": "available"},
+            "external_ids": external_ids,
+        }
+
+    @classmethod
+    def _library_item_to_sync_payload(cls, item: dict[str, Any]) -> dict[str, Any] | None:
+        media_server_id = str(item.get("Id") or "").strip()
+        if not media_server_id:
+            return None
+
+        candidate = cls._library_item_to_candidate(item)
+        if candidate is None:
+            return None
+
+        external_ids = candidate.get("external_ids", {}) if isinstance(candidate.get("external_ids"), dict) else {}
+        return {
+            "media_server_id": media_server_id,
+            "media_type": str(candidate.get("media_type") or "unknown"),
+            "title": str(candidate.get("title") or "Unknown"),
+            "sort_title": str(item.get("SortName") or candidate.get("title") or "").strip(),
+            "overview": str(candidate.get("overview") or ""),
+            "production_year": cls._parse_release_year(candidate.get("release_date")),
+            "release_date": str(candidate.get("release_date") or "").strip() or None,
+            "community_rating": candidate.get("rating"),
+            "genres": cls._normalize_genres(candidate.get("genres", []), limit=6),
+            "tmdb_id": cls._coerce_int(external_ids.get("tmdb")),
+            "tvdb_id": cls._coerce_int(external_ids.get("tvdb")),
+            "imdb_id": str(external_ids.get("imdb") or "").strip() or None,
+            "payload_json": json.dumps(item, ensure_ascii=True),
+        }
+
+    @classmethod
+    def _library_media_to_candidate(cls, row: LibraryMedia) -> dict[str, Any] | None:
+        external_ids = {
+            key: value
+            for key, value in {
+                "tmdb": row.tmdb_id,
+                "tvdb": row.tvdb_id,
+                "imdb": row.imdb_id,
+            }.items()
+            if value not in (None, "")
+        }
+        if not external_ids:
+            return None
+
+        genres: list[str] = []
+        try:
+            parsed = json.loads(row.genres_json or "[]")
+            if isinstance(parsed, list):
+                genres = cls._normalize_genres(parsed, limit=6)
+        except json.JSONDecodeError:
+            genres = []
+
+        release_date = row.release_date or (str(row.production_year) if row.production_year is not None else None)
+        return {
+            "media_type": row.media_type,
+            "media_id": cls._stable_candidate_media_id(row.media_type, row.title, external_ids, release_date),
+            "title": row.title,
+            "overview": row.overview,
+            "genres": genres,
+            "rating": row.community_rating,
+            "vote_count": 0,
+            "popularity": 0,
+            "release_date": release_date,
+            "sources": ["library:indexed"],
+            "source_lanes": ["available_library"],
+            "media_info": {"status": row.state},
             "external_ids": external_ids,
         }
 

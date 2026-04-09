@@ -457,6 +457,7 @@ async def settings_root() -> RedirectResponse:
 async def settings_page(request: Request, section_slug: str) -> HTMLResponse:
     settings_page_def = get_settings_page_or_404(section_slug)
     settings = current_settings(request.app, force=True)
+    library_sync_snapshot = request.app.state.vanguarr.get_library_sync_snapshot()
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
@@ -471,6 +472,7 @@ async def settings_page(request: Request, section_slug: str) -> HTMLResponse:
             "llm_provider_options": LLM_PROVIDER_OPTIONS,
             "jellyfin_plugin_name": VANGUARR_JELLYFIN_PLUGIN_NAME,
             "jellyfin_plugin_repository_url": VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
+            "library_sync_snapshot": library_sync_snapshot,
         },
     )
 
@@ -578,6 +580,28 @@ async def install_jellyfin_plugin(request: Request) -> JSONResponse:
                 "detail": format_validation_error(exc),
             },
         )
+
+
+@app.post("/api/settings/scheduling/library-sync/run")
+async def run_library_sync_now(request: Request) -> JSONResponse:
+    settings = current_settings(request.app, force=True)
+    if settings.normalized_media_server_provider != "jellyfin":
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "detail": "Library Sync currently requires Jellyfin as the active media server.",
+            },
+        )
+
+    started, message = request.app.state.background_runner.launch_library_sync()
+    return JSONResponse(
+        {
+            "ok": True,
+            "started": started,
+            "detail": message,
+        }
+    )
 
 
 @app.get("/manifest", response_class=HTMLResponse)

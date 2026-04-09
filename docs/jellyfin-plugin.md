@@ -10,7 +10,7 @@ It does one job: it asks Vanguarr for the current user's ranked `Suggested for Y
 - A reachable Vanguarr instance
 - Jellyfin users already present in Vanguarr's source media server
 - A `Suggestions API Key` configured in Vanguarr
-- A `Seer Webhook Token` configured in Vanguarr if you want availability-driven refreshes
+- A `Seer Webhook Token` configured in Vanguarr if you want optional availability-driven nudges
 
 ## Add The Vanguarr Plugin Repo To Jellyfin
 
@@ -48,6 +48,8 @@ In the Vanguarr web UI, open `/settings` and set these runtime values:
 - `Seer Webhook Token`: bearer token expected from Seerr or Jellyseerr
 - `Suggested For You Enabled`: turn on per-user suggestion snapshots
 - `Suggested For You Limit`: number of titles stored per user
+- `Library Sync Enabled`: turns on the indexed Jellyfin catalog refresh job
+- `Library Sync Cron`: controls how often Vanguarr rebuilds the indexed Jellyfin catalog
 
 You can also seed the same values through environment variables:
 
@@ -55,6 +57,8 @@ You can also seed the same values through environment variables:
 - `SEER_WEBHOOK_TOKEN`
 - `SUGGESTIONS_ENABLED`
 - `SUGGESTIONS_LIMIT`
+- `LIBRARY_SYNC_ENABLED`
+- `LIBRARY_SYNC_CRON`
 
 ## Configure The Jellyfin Plugin
 
@@ -96,19 +100,21 @@ Authorization: Bearer YOUR_SEER_WEBHOOK_TOKEN
 
 4. Enable the availability-focused webhook events you care about, especially the events that fire when requested media becomes available.
 
-When Seerr sends an availability event, Vanguarr stores the delivery, refreshes the affected user's suggestion snapshot, and the Jellyfin plugin picks the changes up the next time that user's channel refreshes.
+When Seerr sends an availability event, Vanguarr stores the delivery and can nudge suggestion refreshes, but the primary source of truth for what can actually be suggested is the indexed Jellyfin library.
 
 ## First Run
 
-1. Run `Profile Architect` once from the Vanguarr dashboard.
-2. Run `Suggested For You` once from the same dashboard.
+1. In Vanguarr, open `Settings` -> `Scheduling` and run `Library Sync Now` once.
+2. Run `Profile Architect` once from the Vanguarr dashboard if you want to force a fresh profile build immediately.
 3. Open Jellyfin and confirm the per-user `Suggested for You` channel appears under Jellyfin's media/navigation surfaces for that user.
 
 After that:
 
-- Vanguarr refreshes suggestion snapshots when Seerr availability webhooks arrive.
+- Vanguarr refreshes the indexed Jellyfin catalog on the configured `Library Sync Cron`.
+- Vanguarr rebuilds suggestion snapshots after each successful library sync and after profile refreshes.
+- Seerr availability webhooks are optional and act as nudges instead of the primary library source.
 - Jellyfin refreshes the channel contents on the configured refresh interval.
-- If you want a full rebuild after profile changes, run `Suggested For You` again from the dashboard.
+- If you want a full rebuild outside the schedule, run `Library Sync Now` or `Suggested For You` manually.
 
 ## Packaging Notes
 

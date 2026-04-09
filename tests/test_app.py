@@ -74,6 +74,17 @@ def test_integrations_settings_page_shows_jellyfin_plugin_install_action() -> No
     assert "jellyfin-plugin/manifest.json" in response.text
 
 
+def test_scheduling_settings_page_shows_library_sync_box() -> None:
+    with TestClient(app) as client:
+        response = client.get("/settings/scheduling")
+
+    assert response.status_code == 200
+    assert "Library Sync Enabled" in response.text
+    assert "Library Sync Cron" in response.text
+    assert "Keep Suggested For You aligned with the real library" in response.text
+    assert "/api/settings/scheduling/library-sync/run" in response.text
+
+
 def test_settings_root_redirects_to_general() -> None:
     with TestClient(app) as client:
         response = client.get("/settings", follow_redirects=False)
@@ -405,4 +416,45 @@ def test_install_jellyfin_plugin_endpoint_returns_validation_error(monkeypatch) 
     assert response.json() == {
         "ok": False,
         "detail": "JELLYFIN_API_KEY is required to install Jellyfin plugins.",
+    }
+
+
+def test_run_library_sync_endpoint_queues_background_job(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.settings,
+            "snapshot",
+            lambda force=False: SimpleNamespace(normalized_media_server_provider="jellyfin"),
+        )
+
+        monkeypatch.setattr(
+            client.app.state.background_runner,
+            "launch_library_sync",
+            lambda: (True, "Library Sync started in the background for the Jellyfin library."),
+        )
+
+        response = client.post("/api/settings/scheduling/library-sync/run")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "started": True,
+        "detail": "Library Sync started in the background for the Jellyfin library.",
+    }
+
+
+def test_run_library_sync_endpoint_requires_jellyfin(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.settings,
+            "snapshot",
+            lambda force=False: SimpleNamespace(normalized_media_server_provider="plex"),
+        )
+
+        response = client.post("/api/settings/scheduling/library-sync/run")
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "ok": False,
+        "detail": "Library Sync currently requires Jellyfin as the active media server.",
     }

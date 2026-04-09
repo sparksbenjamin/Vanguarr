@@ -7,6 +7,7 @@ class FakeService:
     def __init__(self) -> None:
         self.profile_calls: list[str | None] = []
         self.decision_calls: list[str | None] = []
+        self.library_calls = 0
         self.profile_release = asyncio.Event()
 
     async def run_profile_architect(self, username: str | None) -> dict[str, str]:
@@ -18,6 +19,11 @@ class FakeService:
         self.decision_calls.append(username)
         await asyncio.sleep(0)
         return {"summary": "Decision Engine finished."}
+
+    async def run_library_sync(self) -> dict[str, str]:
+        self.library_calls += 1
+        await asyncio.sleep(0)
+        return {"summary": "Library Sync finished."}
 
 
 def test_background_runner_prevents_duplicate_profile_launches() -> None:
@@ -59,5 +65,23 @@ def test_background_runner_cleans_up_completed_decision_runs() -> None:
         await asyncio.sleep(0)
         assert service.decision_calls == [None]
         assert runner.is_running("decision_engine") is False
+
+    asyncio.run(scenario())
+
+
+def test_background_runner_launches_library_sync() -> None:
+    async def scenario() -> None:
+        service = FakeService()
+        runner = BackgroundEngineRunner(service)
+
+        started, message = runner.launch_library_sync()
+
+        assert started is True
+        assert message == "Library Sync started in the background for the Jellyfin library."
+
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert service.library_calls == 1
+        assert runner.is_running("library_sync") is False
 
     asyncio.run(scenario())

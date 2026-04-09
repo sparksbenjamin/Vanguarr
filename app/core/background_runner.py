@@ -41,6 +41,14 @@ class BackgroundEngineRunner:
             job_factory=lambda: self.service.run_suggested_for_you(username),
         )
 
+    def launch_library_sync(self) -> tuple[bool, str]:
+        return self._launch(
+            engine_name="library_sync",
+            label="Library Sync",
+            target="the Jellyfin library",
+            job_factory=self.service.run_library_sync,
+        )
+
     def is_running(self, engine_name: str) -> bool:
         task = self._tasks.get(engine_name)
         return bool(task and not task.done())
