@@ -1,20 +1,30 @@
 # Vanguarr
 
 [![Docker workflow](https://github.com/sparksbenjamin/Vanguarr/actions/workflows/docker.yml/badge.svg)](https://github.com/sparksbenjamin/Vanguarr/actions/workflows/docker.yml)
+[![Tests](https://github.com/sparksbenjamin/Vanguarr/actions/workflows/tests.yml/badge.svg)](https://github.com/sparksbenjamin/Vanguarr/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](#local-development)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
-Vanguarr is a hybrid media-request engine for Jellyfin and the Arr stack.
+> Vanguarr is the scout of the ARR stack.
 
-It turns real Jellyfin watch history into persistent per-user taste manifests, builds recommendation seed lanes from that history, pulls candidate titles from a Seer-compatible request service, scores them in code, and only uses an LLM as a lightweight assist instead of the source of truth. When a title clears the configured confidence threshold, Vanguarr submits the request automatically.
+Vanguarr is a hybrid media-request engine for Jellyfin and the Arr stack. It watches what people actually play, maps that behavior into durable taste manifests, scouts recommendation territory through Seer, and only sends high-confidence requests downstream.
 
-The result is a system that is easier to trust, easier to tune, and easier to operate than a "just ask the model" workflow.
+Instead of handing the whole decision loop to an LLM, Vanguarr keeps the important parts inspectable: profiles are stored on disk, ranking happens in code, request decisions are logged, and the model stays in a narrow assist role. The result is a system that is easier to trust, easier to tune, and easier to operate than a "just ask the model" workflow.
+
+## At A Glance
+
+- Learns from real Jellyfin watch history, not generic popularity.
+- Builds persistent user manifests you can inspect, edit, and tune.
+- Pulls candidates from a Seer-compatible request stack and scores them in code.
+- Uses optional TMDb enrichment and optional LLM assistance without surrendering control.
+- Gives operators a dashboard, a War Room log, and a manifest editor out of the box.
 
 ## Why Vanguarr
 
+- It acts like a scout, not a black box: Vanguarr surveys the field, reports what it found, and only then asks the stack to move.
 - Deterministic first: recommendation scoring happens in code and is stored for review.
 - Persistent profiles: each user gets a durable JSON manifest plus a derived summary block.
-- LLMs stay narrow: they suggest adjacent lanes and provide a final vote, but they do not own the whole pipeline.
+- LLMs stay narrow: they suggest adjacent lanes and provide a final vote, but they do not own the pipeline.
 - Operator-friendly UI: dashboard, health board, decision log, and manifest editor are built in.
 - Host-visible runtime state: SQLite history, profiles, and logs live under `./data`.
 - Safe deployment model: Dockerized, single-container friendly, and compatible with arbitrary non-root UIDs in group `0`.
@@ -25,6 +35,8 @@ Vanguarr runs two cooperating engines:
 
 - `Profile Architect` reads Jellyfin playback history, groups repeat watches, ranks genres, infers format and release-era preferences, optionally asks the LLM for a few adjacent discovery lanes, and writes a persistent profile manifest to disk.
 - `Decision Engine` builds recommendation seed lanes from top watched, repeat watched, recent, and genre-anchor titles, pulls a blended candidate pool from Seer recommendations plus trending, enriches the best items with TMDb metadata, scores them in code, applies a small LLM adjustment, and requests only titles that clear your threshold.
+
+In plain English: Vanguarr watches, remembers, scouts, scores, explains, and only then requests.
 
 ```mermaid
 flowchart LR
@@ -47,6 +59,7 @@ flowchart LR
 
 ## Feature Highlights
 
+- Positioned for Jellyfin + Arr operators who want automation without mystery
 - FastAPI web application with a built-in operator UI
 - APScheduler-based recurring jobs with manual run controls
 - Jellyfin integration through standard `/Users` and `/Items` APIs
@@ -106,6 +119,8 @@ http://localhost:8000
 6. From the dashboard, run `Profile Architect` once to generate manifests, then run `Decision Engine` to score candidates immediately instead of waiting for the scheduled jobs.
 
 The included [`docker-compose.yml`](docker-compose.yml) mounts `./data` into `/data`, which means profiles, logs, and the SQLite database stay visible on the host.
+
+If you want the shortest possible summary for sharing the repo, it is this: Vanguarr is the service that scouts what your Jellyfin users are most likely to want next and quietly files the right requests into the ARR stack.
 
 ### Run The Published GHCR Image
 
@@ -334,7 +349,7 @@ Vanguarr is intentionally opinionated about where intelligence should live:
 - The LLM is a scoped assistant, not the primary ranking engine.
 - Every request decision leaves a paper trail.
 
-That makes it much easier to understand why the system requested something, why it ignored something, and what to tune next.
+That makes it much easier to understand why the system requested something, why it ignored something, and what to tune next. Vanguarr should feel like a scout reporting back to the ARR stack, not an oracle making opaque calls.
 
 ## License
 
