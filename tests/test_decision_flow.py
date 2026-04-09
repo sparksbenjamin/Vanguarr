@@ -1,4 +1,13 @@
+from datetime import datetime
+from types import SimpleNamespace
+
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+
+from app.core.db import Base
+from app.core.models import TaskRun
 from app.core.prompts import build_decision_messages, build_profile_enrichment_messages
+from app.core.settings import Settings
 from app.core.services import ProfileStore, VanguarrService
 
 
@@ -194,6 +203,51 @@ def test_render_profile_block_uses_code_derived_signals() -> None:
     assert "Add-on lanes worth testing:" in block
     assert "Adventure" in block
     assert "found family" in block
+
+
+def test_recover_interrupted_tasks_marks_running_rows(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        session.add(TaskRun(engine="decision_engine", status="running", summary="Task started."))
+        session.add(
+            TaskRun(
+                engine="profile_architect",
+                status="success",
+                summary="Updated 4 profile(s).",
+                finished_at=datetime.utcnow(),
+            )
+        )
+        session.commit()
+
+    recovered_count = service.recover_interrupted_tasks()
+
+    assert recovered_count == 1
+
+    with session_factory() as session:
+        task_runs = list(session.scalars(select(TaskRun).order_by(TaskRun.id.asc())))
+
+    assert task_runs[0].status == "interrupted"
+    assert task_runs[0].finished_at is not None
+    assert "restart before completion" in task_runs[0].summary.lower()
+    assert task_runs[1].status == "success"
 
 
 def test_viewing_history_context_reuses_profile_summary_signals() -> None:

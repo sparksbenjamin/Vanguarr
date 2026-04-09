@@ -23,6 +23,22 @@ def test_dashboard_renders() -> None:
     assert "Vanguarr" in response.text
 
 
+def test_startup_recovers_interrupted_tasks(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    def fake_recover(self) -> int:
+        calls["count"] += 1
+        return 0
+
+    monkeypatch.setattr("app.main.VanguarrService.recover_interrupted_tasks", fake_recover)
+
+    with TestClient(app) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert calls["count"] == 1
+
+
 def test_settings_page_renders() -> None:
     with TestClient(app) as client:
         response = client.get("/settings")

@@ -235,6 +235,7 @@ async def lifespan(app: FastAPI):
         llm=llm,
         session_factory=SessionLocal,
     )
+    recovered_task_runs = service.recover_interrupted_tasks()
     scheduler = EngineScheduler(live_settings, service)
     health_monitor = HealthMonitor(
         media_server=media_server,
@@ -255,6 +256,11 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
 
     runtime_settings = apply_runtime_settings(app, force=True)
+    if recovered_task_runs:
+        logging.getLogger("vanguarr").warning(
+            "Recovered %s interrupted task run(s) during startup.",
+            recovered_task_runs,
+        )
     logging.getLogger("vanguarr").info(
         "Preparing runtime data_dir=%s profiles_dir=%s log_file=%s",
         runtime_settings.data_dir,

@@ -240,6 +240,36 @@ class VanguarrService:
             stmt = select(TaskRun).order_by(desc(TaskRun.started_at)).limit(limit)
             return list(session.scalars(stmt))
 
+    def recover_interrupted_tasks(self) -> int:
+        with self.session_scope() as session:
+            running_tasks = list(
+                session.scalars(
+                    select(TaskRun).where(
+                        TaskRun.status == "running",
+                        TaskRun.finished_at.is_(None),
+                    )
+                )
+            )
+            recovered_at = datetime.utcnow()
+
+            for task in running_tasks:
+                previous_summary = str(task.summary or "").strip()
+                task.status = "interrupted"
+                task.finished_at = recovered_at
+                task.summary = (
+                    f"{previous_summary} Recovered as interrupted after a restart before completion."
+                    if previous_summary
+                    else "Recovered as interrupted after a restart before completion."
+                )
+                session.add(task)
+
+        if running_tasks:
+            logger.warning(
+                "Recovered %s interrupted task run(s) left in running state from a previous process.",
+                len(running_tasks),
+            )
+        return len(running_tasks)
+
     def get_recent_requests(self, limit: int = 8) -> list[RequestedMedia]:
         with self.session_scope() as session:
             stmt = select(RequestedMedia).order_by(desc(RequestedMedia.created_at)).limit(limit)
