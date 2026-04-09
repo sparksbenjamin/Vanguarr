@@ -39,6 +39,9 @@ class LLMProviderSettings(BaseModel):
     api_base: str | None = None
     api_key: str | None = None
     timeout_seconds: int | None = None
+    max_output_tokens: int | None = None
+    use_for_decision: bool = True
+    use_for_profile_enrichment: bool = True
 
     @field_validator("name", "provider", "model", mode="before")
     @classmethod
@@ -54,12 +57,20 @@ class LLMProviderSettings(BaseModel):
             return None
         return str(value).strip()
 
-    @field_validator("timeout_seconds", mode="before")
+    @field_validator("timeout_seconds", "max_output_tokens", mode="before")
     @classmethod
     def blank_timeout_to_none(cls, value: object) -> object:
         if value in ("", None):
             return None
-        return value
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return value
+        return numeric if numeric > 0 else None
 
     @field_validator("priority", mode="before")
     @classmethod
@@ -120,7 +131,7 @@ class Settings(BaseSettings):
     llm_provider: str = "ollama"
     llm_model: str = "ollama/llama3.1:8b"
     llm_temperature: float = 0.2
-    llm_max_output_tokens: int = 700
+    llm_max_output_tokens: int | None = None
     llm_timeout_seconds: int | None = None
     ollama_api_base: str = "http://ollama:11434"
     openai_api_key: str | None = None
@@ -214,19 +225,15 @@ class Settings(BaseSettings):
 
     @property
     def active_llm_providers(self) -> tuple[LLMProviderSettings, ...]:
-        configured = tuple(
-            sorted(
-                (provider for provider in self.llm_providers if provider.enabled),
-                key=lambda provider: (provider.priority, provider.id or 0, provider.name.lower()),
-            )
-        )
-        if configured:
-            return configured
+        return self.providers_for_use()
 
-        legacy = self.legacy_llm_provider
-        if legacy is not None and legacy.model:
-            return (legacy,)
-        return ()
+    @property
+    def decision_llm_providers(self) -> tuple[LLMProviderSettings, ...]:
+        return self.providers_for_use("decision")
+
+    @property
+    def profile_enrichment_llm_providers(self) -> tuple[LLMProviderSettings, ...]:
+        return self.providers_for_use("profile_enrichment")
 
     @property
     def primary_llm_provider(self) -> LLMProviderSettings | None:
@@ -271,7 +278,39 @@ class Settings(BaseSettings):
             api_base=api_base,
             api_key=api_key,
             timeout_seconds=self.llm_timeout_seconds,
+            max_output_tokens=self.llm_max_output_tokens,
+            use_for_decision=True,
+            use_for_profile_enrichment=True,
         )
+
+    def providers_for_use(self, use_case: str | None = None) -> tuple[LLMProviderSettings, ...]:
+        configured = tuple(
+            sorted(
+                (
+                    provider
+                    for provider in self.llm_providers
+                    if provider.enabled and self._provider_supports_use_case(provider, use_case)
+                ),
+                key=lambda provider: (provider.priority, provider.id or 0, provider.name.lower()),
+            )
+        )
+        if configured:
+            return configured
+        if self.llm_providers:
+            return ()
+
+        legacy = self.legacy_llm_provider
+        if legacy is not None and legacy.model:
+            return (legacy,)
+        return ()
+
+    @staticmethod
+    def _provider_supports_use_case(provider: LLMProviderSettings, use_case: str | None) -> bool:
+        if use_case == "decision":
+            return provider.use_for_decision
+        if use_case == "profile_enrichment":
+            return provider.use_for_profile_enrichment
+        return provider.use_for_decision or provider.use_for_profile_enrichment
 
     def resolve_llm_timeout(self, provider: str, provider_timeout: int | None = None) -> int:
         if provider_timeout is not None:
@@ -511,13 +550,6 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         input_type="checkbox",
     ),
     SettingFieldDefinition(
-        key="profile_llm_enrichment_max_output_tokens",
-        label="Profile LLM Enrichment Tokens",
-        group="Tuning",
-        description="Output token cap for profile enrichment prompts.",
-        input_type="number",
-    ),
-    SettingFieldDefinition(
         key="candidate_limit",
         label="Candidate Limit",
         group="Tuning",
@@ -571,13 +603,6 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         label="LLM Temperature",
         group="LLM",
         description="Fallback temperature used across LLM providers.",
-        input_type="number",
-    ),
-    SettingFieldDefinition(
-        key="llm_max_output_tokens",
-        label="LLM Max Output Tokens",
-        group="LLM",
-        description="Fallback token cap used across LLM providers.",
         input_type="number",
     ),
     SettingFieldDefinition(

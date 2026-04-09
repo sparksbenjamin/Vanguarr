@@ -159,6 +159,9 @@ def parse_provider_payloads(form: object) -> list[dict[str, object]]:
                 "api_base": get(f"{prefix}api_base", ""),
                 "api_key": get(f"{prefix}api_key", ""),
                 "timeout_seconds": get(f"{prefix}timeout_seconds", ""),
+                "max_output_tokens": get(f"{prefix}max_output_tokens", ""),
+                "use_for_decision": f"{prefix}use_for_decision" in form,
+                "use_for_profile_enrichment": f"{prefix}use_for_profile_enrichment" in form,
                 "delete": f"{prefix}delete" in form,
             }
         )
@@ -174,6 +177,9 @@ def parse_provider_payloads(form: object) -> list[dict[str, object]]:
             "api_base": get("provider-new-api_base", ""),
             "api_key": get("provider-new-api_key", ""),
             "timeout_seconds": get("provider-new-timeout_seconds", ""),
+            "max_output_tokens": get("provider-new-max_output_tokens", ""),
+            "use_for_decision": "provider-new-use_for_decision" in form,
+            "use_for_profile_enrichment": "provider-new-use_for_profile_enrichment" in form,
             "delete": False,
         }
     )
@@ -206,6 +212,9 @@ def normalize_provider_payload(raw_payload: dict[str, object] | None) -> dict[st
         "api_base": str(payload.get("api_base") or "").strip() or None,
         "api_key": str(payload.get("api_key") or "").strip() or None,
         "timeout_seconds": payload.get("timeout_seconds", ""),
+        "max_output_tokens": payload.get("max_output_tokens", ""),
+        "use_for_decision": bool(payload.get("use_for_decision", True)),
+        "use_for_profile_enrichment": bool(payload.get("use_for_profile_enrichment", True)),
     }
 
 

@@ -69,6 +69,9 @@ def test_llm_providers_page_renders() -> None:
     assert "Delete Provider" in response.text
     assert "Test Provider" in response.text
     assert "Load Ollama Models" in response.text
+    assert "Use For Decisions" in response.text
+    assert "Use For Profile Enrichment" in response.text
+    assert "Blank for unlimited" in response.text
 
 
 def test_llm_provider_delete_endpoint(monkeypatch) -> None:
@@ -124,6 +127,9 @@ def test_llm_provider_test_endpoint(monkeypatch) -> None:
                 "api_base": "http://ollama:11434",
                 "api_key": "",
                 "timeout_seconds": "",
+                "max_output_tokens": "",
+                "use_for_decision": True,
+                "use_for_profile_enrichment": True,
             },
         )
 
@@ -151,6 +157,9 @@ def test_ollama_models_endpoint(monkeypatch) -> None:
                 "api_base": "http://ollama:11434",
                 "api_key": "",
                 "timeout_seconds": "",
+                "max_output_tokens": "",
+                "use_for_decision": True,
+                "use_for_profile_enrichment": True,
             },
         )
 

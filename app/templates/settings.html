@@ -131,6 +131,20 @@
                 Try this provider in the failover chain.
               </label>
             </div>
+            <div>
+              <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-use_for_decision">Use For Decisions</label>
+              <label class="flex items-center gap-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-[0.9rem] text-sm text-[var(--text-soft)]">
+                <input id="provider-{{ provider.id }}-use_for_decision" name="provider-{{ provider.id }}-use_for_decision" type="checkbox" value="true" class="h-4 w-4 rounded border-white/20 bg-transparent text-[var(--accent)]" {% if provider.use_for_decision %}checked{% endif %} />
+                Allow this provider chain entry to score decision requests.
+              </label>
+            </div>
+            <div class="md:col-span-2">
+              <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-use_for_profile_enrichment">Use For Profile Enrichment</label>
+              <label class="flex items-center gap-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-[0.9rem] text-sm text-[var(--text-soft)]">
+                <input id="provider-{{ provider.id }}-use_for_profile_enrichment" name="provider-{{ provider.id }}-use_for_profile_enrichment" type="checkbox" value="true" class="h-4 w-4 rounded border-white/20 bg-transparent text-[var(--accent)]" {% if provider.use_for_profile_enrichment %}checked{% endif %} />
+                Allow this provider chain entry to generate profile enrichment signals.
+              </label>
+            </div>
             <div class="md:col-span-2">
               <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-model">Model</label>
               <div class="grid gap-3 xl:grid-cols-[1fr_auto_auto] xl:items-end">
@@ -156,6 +170,11 @@
             <div>
               <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-timeout_seconds">Timeout Seconds</label>
               <input id="provider-{{ provider.id }}-timeout_seconds" name="provider-{{ provider.id }}-timeout_seconds" type="number" value="{{ provider.timeout_seconds if provider.timeout_seconds is not none else '' }}" class="field-input text-sm" />
+            </div>
+            <div>
+              <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-max_output_tokens">Max Output Tokens</label>
+              <input id="provider-{{ provider.id }}-max_output_tokens" name="provider-{{ provider.id }}-max_output_tokens" type="number" value="{{ provider.max_output_tokens if provider.max_output_tokens is not none else '' }}" placeholder="Blank for unlimited" class="field-input text-sm" />
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Leave blank to avoid sending a max token cap for this provider.</p>
             </div>
             <div class="md:col-span-2">
               <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-api_key">API Key</label>
@@ -200,6 +219,20 @@
                 Try this provider after saving.
               </label>
             </div>
+            <div>
+              <label class="mb-2 block text-sm font-medium" for="provider-new-use_for_decision">Use For Decisions</label>
+              <label class="flex items-center gap-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-[0.9rem] text-sm text-[var(--text-soft)]">
+                <input id="provider-new-use_for_decision" name="provider-new-use_for_decision" type="checkbox" value="true" class="h-4 w-4 rounded border-white/20 bg-transparent text-[var(--accent)]" checked />
+                Allow this provider to vote in decision runs.
+              </label>
+            </div>
+            <div class="md:col-span-2">
+              <label class="mb-2 block text-sm font-medium" for="provider-new-use_for_profile_enrichment">Use For Profile Enrichment</label>
+              <label class="flex items-center gap-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-[0.9rem] text-sm text-[var(--text-soft)]">
+                <input id="provider-new-use_for_profile_enrichment" name="provider-new-use_for_profile_enrichment" type="checkbox" value="true" class="h-4 w-4 rounded border-white/20 bg-transparent text-[var(--accent)]" checked />
+                Allow this provider to generate profile enrichment suggestions.
+              </label>
+            </div>
             <div class="md:col-span-2">
               <label class="mb-2 block text-sm font-medium" for="provider-new-model">Model</label>
               <div class="grid gap-3 xl:grid-cols-[1fr_auto_auto] xl:items-end">
@@ -223,13 +256,18 @@
               <label class="mb-2 block text-sm font-medium" for="provider-new-timeout_seconds">Timeout Seconds</label>
               <input id="provider-new-timeout_seconds" name="provider-new-timeout_seconds" type="number" class="field-input text-sm" />
             </div>
+            <div>
+              <label class="mb-2 block text-sm font-medium" for="provider-new-max_output_tokens">Max Output Tokens</label>
+              <input id="provider-new-max_output_tokens" name="provider-new-max_output_tokens" type="number" placeholder="Blank for unlimited" class="field-input text-sm" />
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Leave blank to avoid sending a max token cap for this provider.</p>
+            </div>
             <div class="md:col-span-2">
               <label class="mb-2 block text-sm font-medium" for="provider-new-api_key">API Key</label>
               <input id="provider-new-api_key" name="provider-new-api_key" type="password" class="field-input text-sm" />
             </div>
           </div>
         </article>
-        <p class="text-sm leading-6 text-[var(--text-soft)]">Lower priorities run first. If a request or health check fails, Vanguarr moves down the enabled provider chain automatically.</p>
+        <p class="text-sm leading-6 text-[var(--text-soft)]">Lower priorities run first. You can use the same provider for both decisions and profile enrichment, or split them into separate failover chains by toggling the two role checkboxes.</p>
       </div>
     </section>
 
@@ -277,6 +315,9 @@
       api_base: providerField(row, "api_base")?.value ?? "",
       api_key: providerField(row, "api_key")?.value ?? "",
       timeout_seconds: providerField(row, "timeout_seconds")?.value ?? "",
+      max_output_tokens: providerField(row, "max_output_tokens")?.value ?? "",
+      use_for_decision: Boolean(providerField(row, "use_for_decision")?.checked),
+      use_for_profile_enrichment: Boolean(providerField(row, "use_for_profile_enrichment")?.checked),
     };
   }
 

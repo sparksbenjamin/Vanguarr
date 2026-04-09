@@ -83,6 +83,9 @@ class SettingsManager:
                             api_base=legacy_provider.api_base,
                             api_key=legacy_provider.api_key,
                             timeout_seconds=legacy_provider.timeout_seconds,
+                            max_output_tokens=legacy_provider.max_output_tokens,
+                            use_for_decision=legacy_provider.use_for_decision,
+                            use_for_profile_enrichment=legacy_provider.use_for_profile_enrichment,
                         )
                     )
 
@@ -171,6 +174,9 @@ class SettingsManager:
                     row.api_base = provider.api_base
                     row.api_key = provider.api_key
                     row.timeout_seconds = provider.timeout_seconds
+                    row.max_output_tokens = provider.max_output_tokens
+                    row.use_for_decision = provider.use_for_decision
+                    row.use_for_profile_enrichment = provider.use_for_profile_enrichment
                     continue
 
                 session.add(
@@ -183,6 +189,9 @@ class SettingsManager:
                         api_base=provider.api_base,
                         api_key=provider.api_key,
                         timeout_seconds=provider.timeout_seconds,
+                        max_output_tokens=provider.max_output_tokens,
+                        use_for_decision=provider.use_for_decision,
+                        use_for_profile_enrichment=provider.use_for_profile_enrichment,
                     )
                 )
 
@@ -206,6 +215,9 @@ class SettingsManager:
                 api_base=row.api_base,
                 api_key=row.api_key,
                 timeout_seconds=row.timeout_seconds,
+                max_output_tokens=row.max_output_tokens,
+                use_for_decision=row.use_for_decision,
+                use_for_profile_enrichment=row.use_for_profile_enrichment,
             )
             for row in session.scalars(
                 select(LLMProviderConfig).order_by(LLMProviderConfig.priority.asc(), LLMProviderConfig.id.asc())
@@ -236,26 +248,28 @@ class SettingsManager:
             api_base = str(payload.get("api_base") or "").strip() or None
             api_key = str(payload.get("api_key") or "").strip() or None
             timeout_seconds = payload.get("timeout_seconds", "")
+            max_output_tokens = payload.get("max_output_tokens", "")
             priority = payload.get("priority", 1)
             enabled = bool(payload.get("enabled"))
+            use_for_decision = bool(payload.get("use_for_decision"))
+            use_for_profile_enrichment = bool(payload.get("use_for_profile_enrichment"))
             delete_requested = bool(payload.get("delete"))
 
             normalized_id = None if row_id in ("", None) else int(row_id)
             if delete_requested:
                 continue
 
-            has_any_input = any(
+            has_meaningful_new_input = any(
                 [
-                    provider,
-                    model,
                     name,
+                    model,
                     api_base,
                     api_key,
                     str(timeout_seconds).strip(),
-                    enabled,
+                    str(max_output_tokens).strip(),
                 ]
             )
-            if normalized_id is None and not has_any_input:
+            if normalized_id is None and not has_meaningful_new_input:
                 continue
 
             normalized.append(
@@ -269,6 +283,9 @@ class SettingsManager:
                     "api_base": api_base,
                     "api_key": api_key,
                     "timeout_seconds": timeout_seconds,
+                    "max_output_tokens": max_output_tokens,
+                    "use_for_decision": use_for_decision,
+                    "use_for_profile_enrichment": use_for_profile_enrichment,
                 }
             )
         return normalized

@@ -547,8 +547,8 @@ class VanguarrService:
                                         candidate=candidate,
                                         global_exclusions=exclusions,
                                     ),
-                                    max_tokens=350,
                                     temperature=0,
+                                    purpose="decision",
                                 )
                                 llm_vote = str(llm_payload.get("decision", "IGNORE")).upper()
                                 if llm_vote not in {"REQUEST", "IGNORE"}:
@@ -1349,11 +1349,8 @@ class VanguarrService:
         try:
             payload = await self.llm.generate_json(
                 messages=build_profile_enrichment_messages(username, history_summary),
-                max_tokens=min(
-                    self.settings.profile_llm_enrichment_max_output_tokens,
-                    self.settings.profile_architect_max_output_tokens,
-                ),
                 temperature=0.1,
+                purpose="profile_enrichment",
             )
         except Exception as exc:
             logger.warning("Profile enrichment skipped for user=%s reason=%s", username, exc)

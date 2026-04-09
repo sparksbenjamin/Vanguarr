@@ -71,6 +71,7 @@ class LLMClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
         timeout_seconds: int | None = None,
+        purpose: str | None = None,
     ) -> str:
         messages = [
             {"role": "system", "content": system_prompt},
@@ -81,6 +82,7 @@ class LLMClient:
             max_tokens=max_tokens,
             temperature=temperature,
             timeout_seconds=timeout_seconds,
+            purpose=purpose,
         )
 
     async def generate_messages(
@@ -90,10 +92,13 @@ class LLMClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
         timeout_seconds: int | None = None,
+        purpose: str | None = None,
     ) -> str:
         settings = self._current_settings()
-        providers = settings.active_llm_providers
+        providers = self._providers_for_purpose(settings, purpose)
         if not providers:
+            if purpose:
+                raise ClientConfigError(f"No LLM providers are configured for {purpose.replace('_', ' ')}.")
             raise ClientConfigError("No LLM providers are configured.")
 
         errors: list[str] = []
@@ -119,12 +124,14 @@ class LLMClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
         timeout_seconds: int | None = None,
+        purpose: str | None = None,
     ) -> dict[str, Any]:
         raw_text = await self.generate_messages(
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
             timeout_seconds=timeout_seconds,
+            purpose=purpose,
         )
         return self._extract_json_object(raw_text)
 
@@ -185,9 +192,11 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": self._resolve_model_name(provider),
             "timeout": timeout_seconds or self._effective_timeout_seconds(settings, provider),
-            "max_tokens": max_tokens or settings.llm_max_output_tokens,
             "temperature": settings.llm_temperature if temperature is None else temperature,
         }
+        effective_max_tokens = max_tokens if max_tokens is not None else provider.max_output_tokens
+        if effective_max_tokens is not None:
+            kwargs["max_tokens"] = effective_max_tokens
 
         api_base = self._provider_api_base(settings, provider)
         api_key = self._provider_api_key(settings, provider)
@@ -326,6 +335,17 @@ class LLMClient:
     @staticmethod
     def _effective_timeout_seconds(settings: Settings, provider: LLMProviderSettings) -> int:
         return settings.resolve_llm_timeout(provider.provider, provider.timeout_seconds)
+
+    @staticmethod
+    def _providers_for_purpose(
+        settings: Settings,
+        purpose: str | None,
+    ) -> tuple[LLMProviderSettings, ...]:
+        if purpose == "decision":
+            return settings.decision_llm_providers
+        if purpose == "profile_enrichment":
+            return settings.profile_enrichment_llm_providers
+        return settings.active_llm_providers
 
     @staticmethod
     def _extract_text(response: Any) -> str:

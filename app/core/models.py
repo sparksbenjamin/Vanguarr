@@ -88,3 +88,6 @@ class LLMProviderConfig(Base):
     api_base: Mapped[str | None] = mapped_column(Text, nullable=True)
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    use_for_decision: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    use_for_profile_enrichment: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
