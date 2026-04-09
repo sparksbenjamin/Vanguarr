@@ -6,14 +6,16 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from app.core.background_runner import BackgroundEngineRunner
 from app.core.services import VanguarrService
 from app.core.settings import Settings
 
 
 class EngineScheduler:
-    def __init__(self, settings: Settings, service: VanguarrService) -> None:
+    def __init__(self, settings: Settings, service: VanguarrService, runner: BackgroundEngineRunner) -> None:
         self.settings = settings
         self.service = service
+        self.runner = runner
         self._scheduler: AsyncIOScheduler | None = None
 
     def _current_settings(self) -> Settings:
@@ -36,7 +38,7 @@ class EngineScheduler:
         timezone = ZoneInfo(settings.timezone)
         scheduler = AsyncIOScheduler(timezone=timezone)
         scheduler.add_job(
-            self.service.run_profile_architect,
+            self.runner.launch_profile_architect,
             trigger=CronTrigger.from_crontab(settings.profile_cron, timezone=timezone),
             id="profile_architect",
             name="Profile Architect",
@@ -45,7 +47,7 @@ class EngineScheduler:
             max_instances=1,
         )
         scheduler.add_job(
-            self.service.run_decision_engine,
+            self.runner.launch_decision_engine,
             trigger=CronTrigger.from_crontab(settings.decision_cron, timezone=timezone),
             id="decision_engine",
             name="Decision Engine",

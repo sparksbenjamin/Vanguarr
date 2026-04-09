@@ -15,6 +15,7 @@ from app.api.llm import LLMClient
 from app.api.media_server import MediaServerClient
 from app.api.seer import SeerClient
 from app.api.tmdb import TMDbClient
+from app.core.background_runner import BackgroundEngineRunner
 from app.core.config_store import LiveSettings, SettingsManager
 from app.core.db import SessionLocal, init_db
 from app.core.health import HealthMonitor
@@ -244,8 +245,9 @@ async def lifespan(app: FastAPI):
         llm=llm,
         session_factory=SessionLocal,
     )
+    background_runner = BackgroundEngineRunner(service)
     recovered_task_runs = service.recover_interrupted_tasks()
-    scheduler = EngineScheduler(live_settings, service)
+    scheduler = EngineScheduler(live_settings, service, background_runner)
     health_monitor = HealthMonitor(
         media_server=media_server,
         seer=seer,
@@ -261,6 +263,7 @@ async def lifespan(app: FastAPI):
     app.state.tmdb = tmdb
     app.state.llm = llm
     app.state.vanguarr = service
+    app.state.background_runner = background_runner
     app.state.health_monitor = health_monitor
     app.state.scheduler = scheduler
 
@@ -280,6 +283,7 @@ async def lifespan(app: FastAPI):
     yield
     logging.getLogger("vanguarr").info("Vanguarr shutting down.")
     scheduler.shutdown()
+    await background_runner.shutdown()
 
 
 app = FastAPI(
@@ -527,8 +531,8 @@ async def action_profile_architect(
     username: str = Form(""),
 ) -> RedirectResponse:
     cleaned_username = username.strip() or None
-    result = await request.app.state.vanguarr.run_profile_architect(cleaned_username)
-    return redirect_with_toast("/", result["summary"])
+    _started, message = request.app.state.background_runner.launch_profile_architect(cleaned_username)
+    return redirect_with_toast("/", message)
 
 
 @app.post("/actions/decision-engine")
@@ -537,5 +541,5 @@ async def action_decision_engine(
     username: str = Form(""),
 ) -> RedirectResponse:
     cleaned_username = username.strip() or None
-    result = await request.app.state.vanguarr.run_decision_engine(cleaned_username)
-    return redirect_with_toast("/", result["summary"])
+    _started, message = request.app.state.background_runner.launch_decision_engine(cleaned_username)
+    return redirect_with_toast("/", message)

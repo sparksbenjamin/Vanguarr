@@ -186,3 +186,45 @@ def test_manifest_page_shows_profiles_under_settings_group() -> None:
     assert 'data-settings-open="true"' in response.text
     assert 'href="/manifest"' in response.text
     assert "settings-subnav-link-active" in response.text
+
+
+def test_profile_architect_action_redirects_immediately_with_background_toast(monkeypatch) -> None:
+    with TestClient(app) as client:
+        launches: list[str | None] = []
+
+        def fake_launch(username: str | None) -> tuple[bool, str]:
+            launches.append(username)
+            return True, "Profile Architect started in the background for admin."
+
+        monkeypatch.setattr(client.app.state.background_runner, "launch_profile_architect", fake_launch)
+
+        response = client.post(
+            "/actions/profile-architect",
+            data={"username": "admin"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?toast=Profile+Architect+started+in+the+background+for+admin."
+    assert launches == ["admin"]
+
+
+def test_decision_engine_action_reports_existing_background_run(monkeypatch) -> None:
+    with TestClient(app) as client:
+        launches: list[str | None] = []
+
+        def fake_launch(username: str | None) -> tuple[bool, str]:
+            launches.append(username)
+            return False, "Decision Engine is already running."
+
+        monkeypatch.setattr(client.app.state.background_runner, "launch_decision_engine", fake_launch)
+
+        response = client.post(
+            "/actions/decision-engine",
+            data={"username": ""},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?toast=Decision+Engine+is+already+running."
+    assert launches == [None]
