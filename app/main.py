@@ -405,8 +405,8 @@ async def jellyfin_suggestions_api(
                 "external_ids": {
                     key: value
                     for key, value in {
-                        "tmdb": item.tmdb_id,
-                        "tvdb": item.tvdb_id,
+                        "tmdb": str(item.tmdb_id) if item.tmdb_id is not None else None,
+                        "tvdb": str(item.tvdb_id) if item.tvdb_id is not None else None,
                         "imdb": item.imdb_id,
                     }.items()
                     if value not in (None, "")

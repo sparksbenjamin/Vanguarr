@@ -397,7 +397,7 @@ def test_jellyfin_suggestions_api_returns_ranked_items(monkeypatch) -> None:
     assert payload["count"] == 1
     assert payload["items"][0]["title"] == "Arrival"
     assert payload["items"][0]["external_ids"] == {
-        "tmdb": 329865,
+        "tmdb": "329865",
         "imdb": "tt2543164",
     }
 
