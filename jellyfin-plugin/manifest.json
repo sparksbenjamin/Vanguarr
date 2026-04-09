@@ -2,18 +2,18 @@
   {
     "guid": "7d7e8c4f-0fbe-48d0-95a9-8ca4c7d7c5e8",
     "name": "Vanguarr",
-    "overview": "Syncs per-user Suggested for You playlists from Vanguarr into Jellyfin.",
-    "description": "Connects Jellyfin to Vanguarr's Suggested for You API, resolves ranked suggestions to existing library items, and keeps a per-user playlist fresh without extra libraries or symlink trees.",
+    "overview": "Surfaces per-user Suggested for You channels from Vanguarr inside Jellyfin.",
+    "description": "Connects Jellyfin to Vanguarr's Suggested for You API, resolves ranked suggestions to existing library items, and exposes them as a per-user channel without extra libraries or symlink trees.",
     "owner": "sparksbenjamin",
     "category": "General",
     "versions": [
       {
-        "version": "1.0.0.0",
-        "changelog": "- Initial Vanguarr Jellyfin plugin release.\n- Syncs per-user Suggested for You playlists from Vanguarr snapshots.\n- Includes an admin config page for the Vanguarr URL, API key, sync interval, suggestion limit, and playlist name.\n",
+        "version": "1.1.0.0",
+        "changelog": "- Replaces the playlist sync with per-user Suggested for You Jellyfin channels.\n- Suggested shows can now be browsed into seasons and episodes from the plugin surface.\n- Updates the config page and docs to match the new channel-based UX.\n",
         "targetAbi": "10.11.0",
-        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.0.0.0.zip",
-        "checksum": "2b52f593387d8bf25a303d0e430c9efc",
-        "timestamp": "2026-04-09T19:26:39Z"
+        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.1.0.0.zip",
+        "checksum": "1a7ba4b4c8ba2e07cc7627f5d4a8e2b5",
+        "timestamp": "2026-04-09T20:33:13Z"
       }
     ]
   }

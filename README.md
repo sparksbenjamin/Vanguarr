@@ -27,7 +27,7 @@ Vanguarr is relevant if you're searching for any of these:
 - Learns from real media-server watch history, not generic popularity.
 - Builds persistent user manifests you can inspect, edit, and tune.
 - Pulls candidates from Seer-compatible request stacks such as Jellyseerr and scores them in code.
-- Can sync per-user `Suggested for You` Jellyfin playlists through the companion `Vanguarr` plugin without per-user libraries or symlink trees.
+- Can surface per-user `Suggested for You` Jellyfin channels through the companion `Vanguarr` plugin without per-user libraries or symlink trees.
 - Uses optional TMDb enrichment and optional LLM assistance without surrendering control.
 - Gives operators a dashboard, a War Room log, and a manifest editor out of the box.
 
@@ -84,7 +84,7 @@ flowchart LR
 - Searchable decision log with stored reasoning and request outcomes
 - Editable manifest workflow for operator overrides and explicit feedback
 - Database-backed runtime settings with a live Settings page and prioritized LLM failover
-- Optional Jellyfin companion plugin that syncs per-user `Suggested for You` playlists from Vanguarr snapshots
+- Optional Jellyfin companion plugin that exposes per-user `Suggested for You` channels from Vanguarr snapshots
 
 ## Web Interface And Endpoints
 
@@ -141,7 +141,7 @@ http://localhost:8000
 
 The included [`docker-compose.yml`](docker-compose.yml) mounts `./data` into `/data`, which means profiles, logs, and the SQLite database stay visible on the host.
 
-If you want the Jellyfin-side install flow for per-user playlists, follow [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
+If you want the Jellyfin-side install flow for the per-user `Suggested for You` channel, follow [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
 If you want the shortest possible summary for sharing the repo, it is this: Vanguarr is the service that scouts what your media-server users are most likely to want next and quietly files the right requests into the ARR stack.
 
@@ -159,7 +159,7 @@ If you want the Jellyfin `Suggested for You` experience, the shortest working pa
 8. Open the plugin settings in Jellyfin and set the Vanguarr base URL plus the same `SUGGESTIONS_API_KEY`.
 9. From the Vanguarr dashboard, run `Profile Architect` once and `Suggested For You` once.
 
-After that, Vanguarr stores per-user suggestion snapshots, Seerr availability webhooks refresh them, and the Jellyfin plugin keeps each user's `Suggested for You` playlist in sync.
+After that, Vanguarr stores per-user suggestion snapshots, Seerr availability webhooks refresh them, and the Jellyfin plugin exposes each user's `Suggested for You` channel inside Jellyfin.
 
 The full step-by-step plugin guide is in [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
@@ -351,7 +351,7 @@ This layout is what powers the dashboard, War Room, and manifest editor.
 - Vanguarr reads watched history through Jellyfin's normal item APIs.
 - It uses played-state filters and `DatePlayed` sorting on `/Items`.
 - The Jellyfin Playback Reporting plugin is not required.
-- The companion `Vanguarr` Jellyfin plugin syncs per-user `Suggested for You` playlists from Vanguarr's stored suggestion snapshots.
+- The companion `Vanguarr` Jellyfin plugin exposes per-user `Suggested for You` channels from Vanguarr's stored suggestion snapshots.
 - Plugin install and webhook setup instructions live in [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
 #### Plex

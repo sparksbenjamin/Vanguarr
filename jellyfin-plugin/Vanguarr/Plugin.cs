@@ -18,7 +18,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     public override string Name => "Vanguarr";
 
-    public override string Description => "Syncs per-user Vanguarr suggestion snapshots into Jellyfin playlists.";
+    public override string Description => "Creates per-user Suggested for You channels in Jellyfin from Vanguarr recommendations.";
 
     public override Guid Id => Guid.Parse("7d7e8c4f-0fbe-48d0-95a9-8ca4c7d7c5e8");
 

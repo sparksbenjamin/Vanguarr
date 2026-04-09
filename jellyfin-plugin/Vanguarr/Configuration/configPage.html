@@ -15,7 +15,7 @@
 
                     <div class="verticalSection">
                         <div class="fieldDescription">
-                            This plugin syncs a per-user Jellyfin playlist from Vanguarr's Suggested for You API. Vanguarr handles ranking and Seerr webhook updates; Jellyfin handles the user-facing playlist.
+                            This plugin creates a per-user Jellyfin Suggested for You channel from Vanguarr's recommendations API. Vanguarr handles ranking and Jellyfin renders the suggestions as a library-like surface for each user.
                         </div>
                     </div>
 
@@ -32,21 +32,21 @@
                     </div>
 
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="SyncIntervalMinutes">Sync Interval (minutes)</label>
+                        <label class="inputLabel inputLabelUnfocused" for="SyncIntervalMinutes">Refresh Interval (minutes)</label>
                         <input id="SyncIntervalMinutes" name="SyncIntervalMinutes" type="number" min="1" is="emby-input" />
-                        <div class="fieldDescription">How often Jellyfin should refresh user playlists from Vanguarr.</div>
+                        <div class="fieldDescription">How often Jellyfin should refresh each user's Suggested for You channel from Vanguarr when that channel is opened.</div>
                     </div>
 
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="SuggestionLimit">Suggestion Limit</label>
                         <input id="SuggestionLimit" name="SuggestionLimit" type="number" min="1" is="emby-input" />
-                        <div class="fieldDescription">Maximum number of titles to keep in each user's Suggested for You playlist.</div>
+                        <div class="fieldDescription">Maximum number of titles to show in each user's Suggested for You channel.</div>
                     </div>
 
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="PlaylistName">Playlist Name</label>
+                        <label class="inputLabel inputLabelUnfocused" for="PlaylistName">Channel Name</label>
                         <input id="PlaylistName" name="PlaylistName" type="text" is="emby-input" />
-                        <div class="fieldDescription">Name of the per-user playlist that will appear in Jellyfin.</div>
+                        <div class="fieldDescription">Base name for the per-user Suggested for You channel that Jellyfin will show for each user. Restart Jellyfin after changing this value.</div>
                     </div>
 
                     <div>
