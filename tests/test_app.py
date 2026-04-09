@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from app.api.base import ConnectionCheck
@@ -48,8 +50,37 @@ def test_llm_providers_page_renders() -> None:
 
     assert response.status_code == 200
     assert "Priority-ordered failover chain" in response.text
+    assert "Delete Provider" in response.text
     assert "Test Provider" in response.text
     assert "Load Ollama Models" in response.text
+
+
+def test_llm_provider_delete_endpoint(monkeypatch) -> None:
+    deleted: dict[str, object] = {}
+
+    with TestClient(app) as client:
+        existing_provider = SimpleNamespace(id=7, name="Primary Ollama")
+        monkeypatch.setattr(
+            client.app.state.settings,
+            "snapshot",
+            lambda force=False: SimpleNamespace(llm_providers=(existing_provider,)),
+        )
+
+        def fake_save_settings(setting_values, provider_payloads):
+            deleted["setting_values"] = setting_values
+            deleted["provider_payloads"] = provider_payloads
+            return SimpleNamespace(llm_providers=())
+
+        monkeypatch.setattr(client.app.state.settings.manager, "save_settings", fake_save_settings)
+        monkeypatch.setattr("app.main.apply_runtime_settings", lambda app, force=False: SimpleNamespace())
+
+        response = client.post("/api/settings/llm/provider-delete/7", json={})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["provider_id"] == 7
+    assert deleted["setting_values"] == {}
+    assert deleted["provider_payloads"] == [{"id": 7, "delete": True}]
 
 
 def test_llm_provider_test_endpoint(monkeypatch) -> None:

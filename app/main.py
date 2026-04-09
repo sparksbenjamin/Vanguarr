@@ -439,6 +439,25 @@ async def list_ollama_models(request: Request) -> JSONResponse:
         )
 
 
+@app.post("/api/settings/llm/provider-delete/{provider_id}")
+async def delete_llm_provider(request: Request, provider_id: int) -> JSONResponse:
+    settings = current_settings(request.app, force=True)
+    provider = next((item for item in settings.llm_providers if item.id == provider_id), None)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="LLM provider not found.")
+
+    updated_settings = request.app.state.settings.manager.save_settings({}, [{"id": provider_id, "delete": True}])
+    apply_runtime_settings(request.app, force=True)
+    return JSONResponse(
+        {
+            "ok": True,
+            "detail": f"Deleted {provider.name}.",
+            "provider_id": provider_id,
+            "providers_remaining": len(updated_settings.llm_providers),
+        }
+    )
+
+
 @app.get("/manifest", response_class=HTMLResponse)
 async def manifest(request: Request, username: str = "") -> HTMLResponse:
     service: VanguarrService = request.app.state.vanguarr

@@ -87,19 +87,22 @@
         <p class="panel-kicker">LLM Providers</p>
         <h2 class="mt-2 panel-title">Priority-ordered failover chain</h2>
       </div>
-      <div class="space-y-4 px-5 py-5">
+      <div class="space-y-4 px-5 py-5" data-provider-list>
         {% for provider in llm_providers %}
-        <input type="hidden" name="provider_row_ids" value="{{ provider.id }}" />
+        <input type="hidden" name="provider_row_ids" value="{{ provider.id }}" data-provider-row-input="{{ provider.id }}" />
         <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4" data-provider-card data-provider-row-id="{{ provider.id }}">
           <div class="flex items-center justify-between gap-4">
             <div>
               <p class="font-medium">{{ provider.name }}</p>
               <p class="mono mt-1 text-xs text-[var(--text-dim)]">{{ provider.provider }} / priority {{ provider.priority }}</p>
             </div>
-            <label class="flex items-center gap-2 text-sm text-[var(--text-soft)]">
-              <input name="provider-{{ provider.id }}-delete" type="checkbox" value="true" class="h-4 w-4 rounded border-white/20 bg-transparent text-[var(--red)]" />
-              Remove
-            </label>
+            <button
+              type="button"
+              class="button button-ghost border-[rgba(255,127,127,0.24)] text-[var(--red)] hover:border-[rgba(255,127,127,0.35)] hover:bg-[rgba(255,127,127,0.08)] hover:text-white"
+              data-provider-delete
+            >
+              Delete Provider
+            </button>
           </div>
 
           <div class="mt-4 hidden rounded-2xl border px-4 py-3 text-sm" data-provider-status></div>
@@ -160,9 +163,8 @@
             </div>
           </div>
         </article>
-        {% else %}
-        <div class="empty-state">No LLM providers are saved yet. Add one below to create the first live provider chain.</div>
         {% endfor %}
+        <div class="empty-state {% if llm_providers %}hidden{% endif %}" data-provider-empty-state>No LLM providers are saved yet. Add one below to create the first live provider chain.</div>
       </div>
     </section>
 
@@ -252,6 +254,8 @@
 {% if settings_page.kind == "providers" %}
 <script>
   const providerCards = Array.from(document.querySelectorAll("[data-provider-card]"));
+  const providerList = document.querySelector("[data-provider-list]");
+  const providerEmptyState = document.querySelector("[data-provider-empty-state]");
 
   function providerPrefix(rowId) {
     return rowId === "new" ? "provider-new-" : `provider-${rowId}-`;
@@ -290,6 +294,13 @@
     status.hidden = false;
     status.className = `mt-4 rounded-2xl border px-4 py-3 text-sm ${tones[tone] || tones.info}`;
     status.textContent = message;
+  }
+
+  function syncProviderEmptyState() {
+    if (!providerList || !providerEmptyState) return;
+
+    const hasSavedProviders = providerList.querySelector("[data-provider-card]") !== null;
+    providerEmptyState.classList.toggle("hidden", hasSavedProviders);
   }
 
   function populateModelSelect(row, models, selectedModel) {
@@ -401,12 +412,39 @@
     }
   }
 
+  async function handleProviderDelete(row, button) {
+    const rowId = row.dataset.providerRowId;
+    if (!rowId) return;
+    if (!window.confirm("Delete this provider from the live failover chain?")) {
+      return;
+    }
+
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    setProviderStatus(row, "loading", "Deleting provider...");
+
+    try {
+      await postProviderAction(`/api/settings/llm/provider-delete/${rowId}`, {});
+      document.querySelector(`[data-provider-row-input="${rowId}"]`)?.remove();
+      row.remove();
+      syncProviderEmptyState();
+    } catch (error) {
+      setProviderStatus(row, "error", error.message || "Could not delete provider.");
+      button.disabled = false;
+      button.textContent = originalLabel;
+      return;
+    }
+
+    button.textContent = originalLabel;
+  }
+
   for (const row of providerCards) {
     const providerSelect = providerField(row, "provider");
     const modelInput = providerField(row, "model");
     const modelSelect = row.querySelector("[data-provider-model-select]");
     const testButton = row.querySelector("[data-provider-test]");
     const loadModelsButton = row.querySelector("[data-provider-load-models]");
+    const deleteButton = row.querySelector("[data-provider-delete]");
 
     if (providerSelect) {
       providerSelect.addEventListener("change", () => {
@@ -431,8 +469,14 @@
       loadModelsButton.addEventListener("click", () => handleLoadModels(row, loadModelsButton));
     }
 
+    if (deleteButton) {
+      deleteButton.addEventListener("click", () => handleProviderDelete(row, deleteButton));
+    }
+
     syncOllamaControls(row);
   }
+
+  syncProviderEmptyState();
 </script>
 {% endif %}
 {% endblock %}
