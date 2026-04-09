@@ -2,20 +2,31 @@
 
 [![Docker workflow](https://github.com/sparksbenjamin/Vanguarr/actions/workflows/docker.yml/badge.svg)](https://github.com/sparksbenjamin/Vanguarr/actions/workflows/docker.yml)
 [![Tests](https://github.com/sparksbenjamin/Vanguarr/actions/workflows/tests.yml/badge.svg)](https://github.com/sparksbenjamin/Vanguarr/actions/workflows/tests.yml)
+[![Latest tag](https://img.shields.io/github/v/tag/sparksbenjamin/Vanguarr?sort=semver)](https://github.com/sparksbenjamin/Vanguarr/tags)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](#local-development)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
 > Vanguarr is the scout of the ARR stack.
 
-Vanguarr is a hybrid media-request engine for Jellyfin and the Arr stack. It watches what people actually play, maps that behavior into durable taste manifests, scouts recommendation territory through Seer, and only sends high-confidence requests downstream.
+Vanguarr is a self-hosted Jellyfin recommendation engine and ARR automation layer. It watches what people actually play, maps that behavior into durable taste manifests, scouts recommendation territory through Seer-compatible request services such as Jellyseerr, and only sends high-confidence requests downstream.
 
 Instead of handing the whole decision loop to an LLM, Vanguarr keeps the important parts inspectable: profiles are stored on disk, ranking happens in code, request decisions are logged, and the model stays in a narrow assist role. The result is a system that is easier to trust, easier to tune, and easier to operate than a "just ask the model" workflow.
+
+## If You're Looking For
+
+Vanguarr is relevant if you're searching for any of these:
+
+- a Jellyfin recommendation engine
+- Jellyseerr automation or Seer request automation
+- self-hosted media request automation for the ARR stack
+- watch-history-based AI recommendations for movies and TV
+- an explainable alternative to opaque LLM-only media recommendation tools
 
 ## At A Glance
 
 - Learns from real Jellyfin watch history, not generic popularity.
 - Builds persistent user manifests you can inspect, edit, and tune.
-- Pulls candidates from a Seer-compatible request stack and scores them in code.
+- Pulls candidates from Seer-compatible request stacks such as Jellyseerr and scores them in code.
 - Uses optional TMDb enrichment and optional LLM assistance without surrendering control.
 - Gives operators a dashboard, a War Room log, and a manifest editor out of the box.
 
