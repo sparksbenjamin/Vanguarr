@@ -628,12 +628,18 @@ async def library_sync_status(request: Request) -> JSONResponse:
 @app.get("/manifest", response_class=HTMLResponse)
 async def manifest(request: Request, username: str = "") -> HTMLResponse:
     service: VanguarrService = request.app.state.vanguarr
+    settings = current_settings(request.app, force=True)
     profiles = service.list_profiles()
     selected_user = username or (profiles[0] if profiles else "")
     profile_content = service.read_profile(selected_user) if selected_user else ""
     profile_summary = service.read_profile_summary(selected_user) if selected_user else ""
     profile_json_path = service.profile_store.json_path_for(selected_user) if selected_user else None
     profile_summary_path = service.profile_store.summary_path_for(selected_user) if selected_user else None
+    suggestions_preview = (
+        service.get_suggestions(username=selected_user, limit=settings.suggestions_limit)
+        if selected_user
+        else []
+    )
     return templates.TemplateResponse(
         request=request,
         name="manifest.html",
@@ -648,6 +654,8 @@ async def manifest(request: Request, username: str = "") -> HTMLResponse:
             "profile_summary": profile_summary,
             "profile_json_path": profile_json_path,
             "profile_summary_path": profile_summary_path,
+            "suggestions_preview": suggestions_preview,
+            "suggestions_limit": settings.suggestions_limit,
         },
     )
 
@@ -671,6 +679,19 @@ async def manifest_save(
         return redirect_with_toast("/manifest", str(exc), username=cleaned_username)
 
     return redirect_with_toast("/manifest", f"Saved profile manifest for {cleaned_username}.", username=cleaned_username)
+
+
+@app.post("/manifest/actions/suggested-for-you")
+async def manifest_action_suggested_for_you(
+    request: Request,
+    username: str = Form(""),
+) -> RedirectResponse:
+    cleaned_username = username.strip()
+    if not cleaned_username:
+        return redirect_with_toast("/manifest", "Select a profile before refreshing suggestions.")
+
+    _started, message = request.app.state.background_runner.launch_suggested_for_you(cleaned_username)
+    return redirect_with_toast("/manifest", message, username=cleaned_username)
 
 
 @app.post("/actions/profile-architect")

@@ -116,6 +116,55 @@
             <pre class="max-h-[620px] overflow-auto px-5 py-5 text-sm leading-6 text-[var(--text-soft)] whitespace-pre-wrap">{{ profile_summary or "No summary generated yet." }}</pre>
           </section>
 
+          <section class="rounded-[1.35rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)]">
+            <div class="border-b border-white/5 px-5 py-4">
+              <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <p class="panel-kicker">Suggested For You Preview</p>
+                  <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+                    Preview the current stored suggestion snapshot for {{ selected_user or "the selected user" }} before it reaches Jellyfin.
+                  </p>
+                </div>
+                <form method="post" action="/manifest/actions/suggested-for-you">
+                  <input type="hidden" name="username" value="{{ selected_user }}" />
+                  <button class="button button-ghost w-full lg:w-auto" type="submit" {% if not selected_user %}disabled{% endif %}>
+                    Refresh Suggestions For This User
+                  </button>
+                </form>
+              </div>
+            </div>
+            <div class="space-y-3 px-5 py-5">
+              {% if suggestions_preview %}
+              <p class="text-sm leading-6 text-[var(--text-soft)]">Showing {{ suggestions_preview|length }} of {{ suggestions_limit }} stored suggestion slots.</p>
+              <div class="max-h-[460px] space-y-3 overflow-auto">
+                {% for item in suggestions_preview %}
+                <article class="rounded-[1.15rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+                  <div class="flex items-start justify-between gap-4">
+                    <div>
+                      <p class="font-medium">{{ item.rank }}. {{ item.title }}</p>
+                      <p class="mt-1 text-sm text-[var(--text-soft)]">
+                        {{ item.media_type }}{% if item.production_year %} / {{ item.production_year }}{% endif %} / score {{ "%.2f"|format(item.score) }}
+                      </p>
+                    </div>
+                    <span class="status-pill {{ 'status-good' if item.state == 'available' else 'status-neutral' }}">{{ item.state }}</span>
+                  </div>
+                  {% if item.overview %}
+                  <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">{{ item.overview }}</p>
+                  {% endif %}
+                  {% if item.reasoning %}
+                  <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">{{ item.reasoning }}</p>
+                  {% endif %}
+                </article>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="empty-state">
+                No stored suggestions are available for this profile yet. Run `Library Sync` and then refresh suggestions for this user to see what Jellyfin should receive.
+              </div>
+              {% endif %}
+            </div>
+          </section>
+
           <section class="rounded-[1.35rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-5 py-5">
             <p class="panel-kicker">What To Edit</p>
             <div class="mt-3 space-y-3 text-sm leading-6 text-[var(--text-soft)]">

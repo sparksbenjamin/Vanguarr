@@ -212,6 +212,59 @@ def test_manifest_page_shows_profiles_under_settings_group() -> None:
     assert 'data-settings-open="true"' in response.text
     assert 'href="/manifest"' in response.text
     assert "settings-subnav-link-active" in response.text
+    assert "Suggested For You Preview" in response.text
+    assert "/manifest/actions/suggested-for-you" in response.text
+
+
+def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(client.app.state.vanguarr, "list_profiles", lambda: ["alice"])
+        monkeypatch.setattr(client.app.state.vanguarr, "read_profile", lambda username: '{"username": "alice"}')
+        monkeypatch.setattr(client.app.state.vanguarr, "read_profile_summary", lambda username: "profile summary")
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_suggestions",
+            lambda username=None, jellyfin_user_id=None, limit=None: [
+                SimpleNamespace(
+                    rank=1,
+                    title="Arrival",
+                    media_type="movie",
+                    production_year=2016,
+                    score=0.91,
+                    state="available",
+                    overview="First contact drama.",
+                    reasoning="Matches sci-fi preference and avoids top-repeat comfort titles.",
+                )
+            ],
+        )
+
+        response = client.get("/manifest?username=alice")
+
+    assert response.status_code == 200
+    assert "Showing 1 of" in response.text
+    assert "Arrival" in response.text
+    assert "Matches sci-fi preference and avoids top-repeat comfort titles." in response.text
+
+
+def test_manifest_suggested_for_you_action_redirects_back_to_manifest(monkeypatch) -> None:
+    with TestClient(app) as client:
+        launches: list[str | None] = []
+
+        def fake_launch(username: str | None) -> tuple[bool, str]:
+            launches.append(username)
+            return True, "Suggested For You started in the background for alice."
+
+        monkeypatch.setattr(client.app.state.background_runner, "launch_suggested_for_you", fake_launch)
+
+        response = client.post(
+            "/manifest/actions/suggested-for-you",
+            data={"username": "alice"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/manifest?username=alice&toast=Suggested+For+You+started+in+the+background+for+alice."
+    assert launches == ["alice"]
 
 
 def test_profile_architect_action_redirects_immediately_with_background_toast(monkeypatch) -> None:
