@@ -48,7 +48,7 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia, I
             var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
             var refreshInterval = Math.Max(1, config.SyncIntervalMinutes);
             var refreshBucket = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60 / refreshInterval;
-            return $"{refreshInterval}:{Math.Max(1, config.SuggestionLimit)}:{refreshBucket}:{BuildConfigSignature(config)}";
+            return $"2:{refreshInterval}:{Math.Max(1, config.SuggestionLimit)}:{refreshBucket}:{BuildConfigSignature(config)}";
         }
     }
 
@@ -165,22 +165,22 @@ public sealed class VanguarrSuggestedChannel : IChannel, ISupportsLatestMedia, I
     {
         if (item is Series)
         {
-            return BuildFolderItem(user, item, SeriesPrefix, ChannelFolderType.Series);
+            return BuildFolderItem(user, item, SeriesPrefix);
         }
 
         if (item is Season)
         {
-            return BuildFolderItem(user, item, SeasonPrefix, ChannelFolderType.Season);
+            return BuildFolderItem(user, item, SeasonPrefix);
         }
 
         return BuildMediaItem(user, item);
     }
 
-    private ChannelItemInfo BuildFolderItem(User user, BaseItem item, string prefix, ChannelFolderType folderType)
+    private ChannelItemInfo BuildFolderItem(User user, BaseItem item, string prefix)
     {
         var channelItem = CreateCommonChannelItem(item, BuildExternalId(user, prefix, item.Id));
         channelItem.Type = ChannelItemType.Folder;
-        channelItem.FolderType = folderType;
+        channelItem.FolderType = ChannelFolderType.Container;
         channelItem.MediaType = ChannelMediaType.Video;
         return channelItem;
     }
