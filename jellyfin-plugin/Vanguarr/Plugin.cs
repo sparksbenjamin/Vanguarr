@@ -18,7 +18,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     public override string Name => "Vanguarr";
 
-    public override string Description => "Creates per-user Suggested for You channels in Jellyfin from Vanguarr recommendations.";
+    public override string Description => "Adds native personalized Suggested Movies and Suggested Shows views to Jellyfin from Vanguarr.";
 
     public override Guid Id => Guid.Parse("7d7e8c4f-0fbe-48d0-95a9-8ca4c7d7c5e8");
 

@@ -15,7 +15,7 @@
 
                     <div class="verticalSection">
                         <div class="fieldDescription">
-                            This plugin creates a per-user Jellyfin Suggested for You channel from Vanguarr's recommendations API. Vanguarr handles ranking and Jellyfin renders the suggestions as a library-like surface for each user.
+                            This plugin connects Jellyfin to Vanguarr's recommendations API and creates two native, user-specific Jellyfin views backed by real library items: one for movies and one for shows. Stock Jellyfin does not support adding a brand-new custom home row from a plugin, so Vanguarr surfaces these as first-class browseable views that feel like focused recommendation libraries.
                         </div>
                     </div>
 
@@ -34,19 +34,25 @@
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="SyncIntervalMinutes">Refresh Interval (minutes)</label>
                         <input id="SyncIntervalMinutes" name="SyncIntervalMinutes" type="number" min="1" is="emby-input" />
-                        <div class="fieldDescription">How often Jellyfin should refresh each user's Suggested for You channel from Vanguarr when that channel is opened.</div>
+                        <div class="fieldDescription">How long Jellyfin should cache each user's resolved Vanguarr suggestions before it refreshes them again.</div>
                     </div>
 
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="SuggestionLimit">Suggestion Limit</label>
                         <input id="SuggestionLimit" name="SuggestionLimit" type="number" min="1" is="emby-input" />
-                        <div class="fieldDescription">Maximum number of titles to show in each user's Suggested for You channel.</div>
+                        <div class="fieldDescription">Maximum number of titles Vanguarr should resolve per user before Jellyfin splits them into the movie and show views.</div>
                     </div>
 
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="PlaylistName">Channel Name</label>
-                        <input id="PlaylistName" name="PlaylistName" type="text" is="emby-input" />
-                        <div class="fieldDescription">Base name for the per-user Suggested for You channel that Jellyfin will show for each user. Restart Jellyfin after changing this value.</div>
+                        <label class="inputLabel inputLabelUnfocused" for="SuggestedMoviesName">Suggested Movies Name</label>
+                        <input id="SuggestedMoviesName" name="SuggestedMoviesName" type="text" is="emby-input" />
+                        <div class="fieldDescription">Display name for the native Jellyfin movie recommendations view. Restart Jellyfin after changing this value.</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SuggestedShowsName">Suggested Shows Name</label>
+                        <input id="SuggestedShowsName" name="SuggestedShowsName" type="text" is="emby-input" />
+                        <div class="fieldDescription">Display name for the native Jellyfin show recommendations view. Restart Jellyfin after changing this value.</div>
                     </div>
 
                     <div>
@@ -71,7 +77,8 @@
                         document.querySelector('#SuggestionsApiKey').value = config.SuggestionsApiKey || '';
                         document.querySelector('#SyncIntervalMinutes').value = config.SyncIntervalMinutes || 15;
                         document.querySelector('#SuggestionLimit').value = config.SuggestionLimit || 20;
-                        document.querySelector('#PlaylistName').value = config.PlaylistName || 'Suggested for You';
+                        document.querySelector('#SuggestedMoviesName').value = config.SuggestedMoviesName || 'Suggested Movies';
+                        document.querySelector('#SuggestedShowsName').value = config.SuggestedShowsName || 'Suggested Shows';
                         Dashboard.hideLoadingMsg();
                     });
                 });
@@ -84,7 +91,8 @@
                         config.SuggestionsApiKey = document.querySelector('#SuggestionsApiKey').value.trim();
                         config.SyncIntervalMinutes = parseInt(document.querySelector('#SyncIntervalMinutes').value || '15', 10);
                         config.SuggestionLimit = parseInt(document.querySelector('#SuggestionLimit').value || '20', 10);
-                        config.PlaylistName = document.querySelector('#PlaylistName').value.trim() || 'Suggested for You';
+                        config.SuggestedMoviesName = document.querySelector('#SuggestedMoviesName').value.trim() || 'Suggested Movies';
+                        config.SuggestedShowsName = document.querySelector('#SuggestedShowsName').value.trim() || 'Suggested Shows';
                         ApiClient.updatePluginConfiguration(VanguarrConfig.pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);
                         });

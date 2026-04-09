@@ -2,18 +2,18 @@
   {
     "guid": "7d7e8c4f-0fbe-48d0-95a9-8ca4c7d7c5e8",
     "name": "Vanguarr",
-    "overview": "Surfaces per-user Suggested for You channels from Vanguarr inside Jellyfin.",
-    "description": "Connects Jellyfin to Vanguarr's Suggested for You API, resolves ranked suggestions to existing library items, and exposes them as a per-user channel without extra libraries or symlink trees.",
+    "overview": "Surfaces per-user Suggested Movies and Suggested Shows views from Vanguarr inside Jellyfin.",
+    "description": "Connects Jellyfin to Vanguarr's suggestions API, resolves ranked suggestions to existing library items, and exposes them as native user-specific Jellyfin views for movies and shows without extra libraries or symlink trees.",
     "owner": "sparksbenjamin",
     "category": "General",
     "versions": [
       {
-        "version": "1.1.4.0",
-        "changelog": "- Filters suggestion resolution down to real file-backed Jellyfin library items so phantom channel or remote metadata matches do not appear.\n- Forces another channel cache refresh to clear stale empty or incorrect per-user results.\n- Keeps the browseable show-folder behavior from 1.1.3.0.\n",
+        "version": "1.2.0.0",
+        "changelog": "- Replaces the old channel surface with native user-specific Jellyfin views for Suggested Movies and Suggested Shows.\n- Uses real Jellyfin library items inside those views so opening details pages and playback stay native.\n- Adds startup registration and repair logic for the native suggested views plus cleaner plugin configuration text.\n",
         "targetAbi": "10.11.0",
-        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.1.4.0.zip",
-        "checksum": "c4e0b8468a062f15c8f69b86d2b20e52",
-        "timestamp": "2026-04-09T22:56:06Z"
+        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.2.0.0.zip",
+        "checksum": "68b1a3080c472f4a7a495e14be8a605e",
+        "timestamp": "2026-04-09T23:36:26Z"
       }
     ]
   }

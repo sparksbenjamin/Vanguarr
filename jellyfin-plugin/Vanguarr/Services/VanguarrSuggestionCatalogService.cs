@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Collections.Concurrent;
 using BaseItemKind = Jellyfin.Data.Enums.BaseItemKind;
 using ItemSortBy = Jellyfin.Data.Enums.ItemSortBy;
 using Jellyfin.Database.Implementations.Entities;
@@ -16,13 +17,21 @@ namespace Vanguarr.Jellyfin.Services;
 
 public sealed class VanguarrSuggestionCatalogService
 {
+    private sealed record CachedSuggestionsEntry(
+        string Signature,
+        DateTime CachedAtUtc,
+        IReadOnlyList<ResolvedVanguarrSuggestion> Suggestions);
+
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ILogger<VanguarrSuggestionCatalogService> _logger;
+    private readonly ConcurrentDictionary<Guid, CachedSuggestionsEntry> _suggestionCache = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
     };
+
+    public static VanguarrSuggestionCatalogService? Current { get; private set; }
 
     public VanguarrSuggestionCatalogService(
         ILibraryManager libraryManager,
@@ -32,6 +41,7 @@ public sealed class VanguarrSuggestionCatalogService
         _libraryManager = libraryManager;
         _mediaSourceManager = mediaSourceManager;
         _logger = logger;
+        Current = this;
     }
 
     public async Task<IReadOnlyList<ResolvedVanguarrSuggestion>> GetResolvedSuggestionsAsync(
@@ -45,6 +55,15 @@ public sealed class VanguarrSuggestionCatalogService
                 "Vanguarr plugin is missing VanguarrBaseUrl or SuggestionsApiKey, skipping suggestions for user={UserName}.",
                 user.Username);
             return [];
+        }
+
+        var cacheSignature = BuildCacheSignature(config);
+        var cacheLifetime = TimeSpan.FromMinutes(Math.Max(1, config.SyncIntervalMinutes));
+        if (_suggestionCache.TryGetValue(user.Id, out var cachedEntry)
+            && string.Equals(cachedEntry.Signature, cacheSignature, StringComparison.Ordinal)
+            && DateTime.UtcNow - cachedEntry.CachedAtUtc < cacheLifetime)
+        {
+            return cachedEntry.Suggestions;
         }
 
         var response = await FetchSuggestionsAsync(user, config, cancellationToken).ConfigureAwait(false);
@@ -84,7 +103,23 @@ public sealed class VanguarrSuggestionCatalogService
                 user.Username);
         }
 
+        _suggestionCache[user.Id] = new CachedSuggestionsEntry(
+            cacheSignature,
+            DateTime.UtcNow,
+            resolvedSuggestions);
+
         return resolvedSuggestions;
+    }
+
+    public async Task<IReadOnlyList<ResolvedVanguarrSuggestion>> GetResolvedSuggestionsAsync(
+        User user,
+        string suggestedMediaType,
+        CancellationToken cancellationToken)
+    {
+        var allSuggestions = await GetResolvedSuggestionsAsync(user, cancellationToken).ConfigureAwait(false);
+        return allSuggestions
+            .Where(item => string.Equals(item.Suggestion.MediaType, suggestedMediaType, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
     public BaseItem? GetLibraryItem(Guid itemId)
@@ -177,6 +212,16 @@ public sealed class VanguarrSuggestionCatalogService
             responseStream,
             _jsonOptions,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string BuildCacheSignature(PluginConfiguration config)
+    {
+        return string.Join(
+            "|",
+            config.VanguarrBaseUrl.Trim(),
+            config.SuggestionsApiKey.Trim(),
+            Math.Max(1, config.SuggestionLimit),
+            Math.Max(1, config.SyncIntervalMinutes));
     }
 
     private BaseItem? ResolveSuggestion(User user, VanguarrSuggestionItem suggestion)

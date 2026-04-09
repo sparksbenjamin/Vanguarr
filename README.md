@@ -27,7 +27,7 @@ Vanguarr is relevant if you're searching for any of these:
 - Learns from real media-server watch history, not generic popularity.
 - Builds persistent user manifests you can inspect, edit, and tune.
 - Pulls candidates from Seer-compatible request stacks such as Jellyseerr and scores them in code.
-- Can surface per-user `Suggested for You` Jellyfin channels through the companion `Vanguarr` plugin without per-user libraries or symlink trees.
+- Can surface per-user `Suggested Movies` and `Suggested Shows` Jellyfin views through the companion `Vanguarr` plugin without per-user libraries or symlink trees.
 - Uses optional TMDb enrichment and optional LLM assistance without surrendering control.
 - Gives operators a dashboard, a War Room log, and a manifest editor out of the box.
 
@@ -84,7 +84,7 @@ flowchart LR
 - Searchable decision log with stored reasoning and request outcomes
 - Editable manifest workflow for operator overrides and explicit feedback
 - Database-backed runtime settings with a live Settings page and prioritized LLM failover
-- Optional Jellyfin companion plugin that exposes per-user `Suggested for You` channels from Vanguarr's indexed library-backed snapshots
+- Optional Jellyfin companion plugin that exposes per-user `Suggested Movies` and `Suggested Shows` views from Vanguarr's indexed library-backed snapshots
 
 ## Web Interface And Endpoints
 
@@ -142,7 +142,7 @@ http://localhost:8000
 
 The included [`docker-compose.yml`](docker-compose.yml) mounts `./data` into `/data`, which means profiles, logs, and the SQLite database stay visible on the host.
 
-If you want the Jellyfin-side install flow for the per-user `Suggested for You` channel, follow [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
+If you want the Jellyfin-side install flow for the native `Suggested Movies` and `Suggested Shows` views, follow [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
 If you want the shortest possible summary for sharing the repo, it is this: Vanguarr is the service that scouts what your media-server users are most likely to want next and quietly files the right requests into the ARR stack.
 
@@ -161,7 +161,7 @@ If you want the Jellyfin `Suggested for You` experience, the shortest working pa
 9. In `Settings` -> `Scheduling`, run `Library Sync Now` once so Vanguarr builds the Jellyfin catalog index.
 10. From the Vanguarr dashboard, run `Profile Architect` once if you want to force an immediate profile refresh.
 
-After that, Vanguarr stores per-user suggestion snapshots from the indexed Jellyfin library, optional Seerr availability webhooks can nudge refreshes, and the Jellyfin plugin exposes each user's `Suggested for You` channel inside Jellyfin.
+After that, Vanguarr stores per-user suggestion snapshots from the indexed Jellyfin library, optional Seerr availability webhooks can nudge refreshes, and the Jellyfin plugin exposes each user's native `Suggested Movies` and `Suggested Shows` views inside Jellyfin.
 
 The full step-by-step plugin guide is in [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
@@ -276,7 +276,7 @@ Useful extra knobs from [`.env.example`](.env.example):
 - `PROFILE_LLM_ENRICHMENT_ENABLED` disables the profile-side adjacent-lane suggestion step if you want a fully deterministic profile build.
 - `PROFILE_LLM_ENRICHMENT_MAX_OUTPUT_TOKENS` keeps that optional profile-side LLM assist intentionally small.
 - `SCHEDULER_ENABLED=false` is the right setting when you want dashboard-driven manual runs only.
-- `LIBRARY_SYNC_ENABLED=true` plus a sensible `LIBRARY_SYNC_CRON` is the simplest way to keep the Jellyfin channel aligned with adds and removals in the real library.
+- `LIBRARY_SYNC_ENABLED=true` plus a sensible `LIBRARY_SYNC_CRON` is the simplest way to keep the Jellyfin suggested views aligned with adds and removals in the real library.
 
 ## How Profiles Work
 
@@ -356,7 +356,7 @@ This layout is what powers the dashboard, War Room, and manifest editor.
 - Vanguarr reads watched history through Jellyfin's normal item APIs.
 - It uses played-state filters and `DatePlayed` sorting on `/Items`.
 - The Jellyfin Playback Reporting plugin is not required.
-- The companion `Vanguarr` Jellyfin plugin exposes per-user `Suggested for You` channels from Vanguarr's indexed-library suggestion snapshots.
+- The companion `Vanguarr` Jellyfin plugin exposes per-user `Suggested Movies` and `Suggested Shows` views from Vanguarr's indexed-library suggestion snapshots.
 - Plugin install and webhook setup instructions live in [`docs/jellyfin-plugin.md`](docs/jellyfin-plugin.md).
 
 #### Plex

@@ -12,5 +12,7 @@ public class PluginConfiguration : BasePluginConfiguration
 
     public int SuggestionLimit { get; set; } = 20;
 
-    public string PlaylistName { get; set; } = "Suggested for You";
+    public string SuggestedMoviesName { get; set; } = "Suggested Movies";
+
+    public string SuggestedShowsName { get; set; } = "Suggested Shows";
 }

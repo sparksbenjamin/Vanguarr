@@ -2,7 +2,9 @@
 
 The Jellyfin plugin name is `Vanguarr`.
 
-It does one job: it asks Vanguarr for the current user's ranked `Suggested for You` items, resolves those suggestions to real Jellyfin library items, and exposes them as a per-user Jellyfin channel that behaves much more like a small library surface than a playlist. It does not create extra Jellyfin libraries, symlink trees, or duplicate metadata entries.
+It does one job: it asks Vanguarr for the current user's ranked suggestions, resolves those suggestions to real Jellyfin library items, and exposes them as two native Jellyfin views: one for movies and one for shows. It does not create extra Jellyfin libraries, symlink trees, or duplicate metadata entries.
+
+Important limitation: stock Jellyfin does not provide a native plugin hook for inventing a brand-new personalized home row in the default client. The clean native surface is a pair of user-specific browseable views that open and play through Jellyfin normally.
 
 ## What You Need
 
@@ -32,12 +34,12 @@ https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/m
 7. Install the `Vanguarr` plugin.
 8. Restart Jellyfin after the install finishes.
 
-The repository URL above assumes these files are pushed to GitHub. If you are testing from a local checkout first, host [`jellyfin-plugin/manifest.json`](../jellyfin-plugin/manifest.json) and [`jellyfin-plugin/dist/vanguarr-1.1.1.0.zip`](../jellyfin-plugin/dist/vanguarr-1.1.1.0.zip) somewhere Jellyfin can reach over HTTP, or update the URLs to match your own Git hosting.
+The repository URL above assumes these files are pushed to GitHub. If you are testing from a local checkout first, host [`jellyfin-plugin/manifest.json`](../jellyfin-plugin/manifest.json) and [`jellyfin-plugin/dist/vanguarr-1.2.0.0.zip`](../jellyfin-plugin/dist/vanguarr-1.2.0.0.zip) somewhere Jellyfin can reach over HTTP, or update the URLs to match your own Git hosting.
 
 If you want to inspect or sideload the package manually, the plugin zip is published in the repo at:
 
 ```text
-https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.1.1.0.zip
+https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.2.0.0.zip
 ```
 
 ## Configure Vanguarr
@@ -69,17 +71,17 @@ After Jellyfin restarts:
 3. Set `Suggestions API Key` to the same token you stored in Vanguarr.
 4. Choose a `Refresh Interval`.
 5. Choose a `Suggestion Limit`.
-6. Keep the channel name as `Suggested for You` or rename it if you want a different label in Jellyfin.
+6. Keep the suggested view names as `Suggested Movies` and `Suggested Shows`, or rename them if you want different Jellyfin labels.
 7. Save the plugin settings.
 
-The plugin registers a single `Suggested for You` Jellyfin channel, but its contents are personalized for the currently signed-in Jellyfin user. The configuration page is shared because the plugin settings are server-wide.
+The plugin registers two native Jellyfin views, and each one is personalized for the currently signed-in Jellyfin user. The configuration page is shared because the plugin settings are server-wide.
 
 That means:
 
-- the `Suggested for You` entry shows up in Jellyfin as its own channel-like library surface
-- opening it shows the current user's ranked suggested movies and shows
-- suggested shows can be browsed into seasons and episodes
-- if you rename the channel in plugin settings, restart Jellyfin once so the new name is registered cleanly
+- `Suggested Movies` shows ranked movie suggestions for the active Jellyfin user
+- `Suggested Shows` shows ranked series suggestions for the active Jellyfin user
+- the items are real Jellyfin library items, so details pages and playback stay native
+- if you rename either view in plugin settings, restart Jellyfin once so the new names are registered cleanly
 
 ## Configure The Seerr Webhook
 
@@ -106,14 +108,14 @@ When Seerr sends an availability event, Vanguarr stores the delivery and can nud
 
 1. In Vanguarr, open `Settings` -> `Scheduling` and run `Library Sync Now` once.
 2. Run `Profile Architect` once from the Vanguarr dashboard if you want to force a fresh profile build immediately.
-3. Open Jellyfin and confirm the per-user `Suggested for You` channel appears under Jellyfin's media/navigation surfaces for that user.
+3. Open Jellyfin and confirm the per-user `Suggested Movies` and `Suggested Shows` views appear under Jellyfin's library/media surfaces for that user.
 
 After that:
 
 - Vanguarr refreshes the indexed Jellyfin catalog on the configured `Library Sync Cron`.
 - Vanguarr rebuilds suggestion snapshots after each successful library sync and after profile refreshes.
 - Seerr availability webhooks are optional and act as nudges instead of the primary library source.
-- Jellyfin refreshes the channel contents on the configured refresh interval.
+- Jellyfin refreshes the resolved suggestion cache on the configured refresh interval.
 - If you want a full rebuild outside the schedule, run `Library Sync Now` or `Suggested For You` manually.
 
 ## Packaging Notes
