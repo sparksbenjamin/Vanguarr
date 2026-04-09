@@ -73,6 +73,7 @@ class BaseAPIClient:
         params: dict[str, Any] | None = None,
         json_body: Any = None,
         headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> Any:
         self._require_base_url()
         request_headers = dict(self.headers)
@@ -80,7 +81,8 @@ class BaseAPIClient:
             request_headers.update(headers)
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            request_timeout = self.timeout if timeout is None else timeout
+            async with httpx.AsyncClient(timeout=request_timeout) as client:
                 response = await client.request(
                     method=method,
                     url=f"{self.base_url}{path}",
@@ -96,7 +98,8 @@ class BaseAPIClient:
                 f"{self.service_name} returned HTTP {status}: {message[:500]}"
             ) from exc
         except httpx.HTTPError as exc:
-            raise ExternalServiceError(f"{self.service_name} request failed: {exc}") from exc
+            detail = str(exc).strip() or exc.__class__.__name__
+            raise ExternalServiceError(f"{self.service_name} request failed: {detail}") from exc
 
         if not response.content:
             return {}

@@ -19,6 +19,7 @@ class JellyfinClient(BaseAPIClient):
     service_name = "Jellyfin"
     provider_key = "jellyfin"
     provider_label = "Jellyfin"
+    library_sync_timeout_seconds = 60.0
 
     def __init__(self, settings: Settings) -> None:
         super().__init__(None)
@@ -137,7 +138,7 @@ class JellyfinClient(BaseAPIClient):
         elif media_type == "tv":
             include_item_types = "Series"
 
-        page_size = min(limit or 200, 200)
+        page_size = min(limit or 150, 150)
         items: list[dict[str, Any]] = []
         start_index = 0
 
@@ -150,8 +151,7 @@ class JellyfinClient(BaseAPIClient):
                 "sortBy": "SortName",
                 "sortOrder": "Ascending",
                 "fields": (
-                    "Overview,Genres,CommunityRating,ProviderIds,ProductionYear,"
-                    "PremiereDate,Taglines,ImageTags"
+                    "Overview,Genres,CommunityRating,ProviderIds,ProductionYear,PremiereDate"
                 ),
             }
             if user_id:
@@ -161,7 +161,12 @@ class JellyfinClient(BaseAPIClient):
             if parent_id:
                 params["parentId"] = parent_id
 
-            payload = await self._request("GET", "/Items", params=params)
+            payload = await self._request(
+                "GET",
+                "/Items",
+                params=params,
+                timeout=self.library_sync_timeout_seconds,
+            )
             batch = payload.get("Items", []) if isinstance(payload, dict) else []
             items.extend(batch)
 
@@ -186,7 +191,11 @@ class JellyfinClient(BaseAPIClient):
         if not settings.jellyfin_api_key:
             raise ClientConfigError("JELLYFIN_API_KEY is required to query Jellyfin libraries.")
 
-        payload = await self._request("GET", "/Library/VirtualFolders")
+        payload = await self._request(
+            "GET",
+            "/Library/VirtualFolders",
+            timeout=self.library_sync_timeout_seconds,
+        )
         folders = payload if isinstance(payload, list) else payload.get("Items", [])
         return [item for item in folders if isinstance(item, dict)]
 
