@@ -1,1 +1,1 @@
-"""Provider integrations for Jellyfin, Seer, and LLM backends."""
+"""Provider integrations for media servers, Seer, and LLM backends."""

@@ -8,7 +8,7 @@
 
 > Vanguarr is the scout of the ARR stack.
 
-Vanguarr is a self-hosted Jellyfin recommendation engine and ARR automation layer. It watches what people actually play, maps that behavior into durable taste manifests, scouts recommendation territory through Seer-compatible request services such as Jellyseerr, and only sends high-confidence requests downstream.
+Vanguarr is a self-hosted media-server recommendation engine and ARR automation layer. It watches what people actually play in Jellyfin or Plex, maps that behavior into durable taste manifests, scouts recommendation territory through Seer-compatible request services such as Jellyseerr, and only sends high-confidence requests downstream.
 
 Instead of handing the whole decision loop to an LLM, Vanguarr keeps the important parts inspectable: profiles are stored on disk, ranking happens in code, request decisions are logged, and the model stays in a narrow assist role. The result is a system that is easier to trust, easier to tune, and easier to operate than a "just ask the model" workflow.
 
@@ -16,7 +16,7 @@ Instead of handing the whole decision loop to an LLM, Vanguarr keeps the importa
 
 Vanguarr is relevant if you're searching for any of these:
 
-- a Jellyfin recommendation engine
+- a Jellyfin or Plex recommendation engine
 - Jellyseerr automation or Seer request automation
 - self-hosted media request automation for the ARR stack
 - watch-history-based AI recommendations for movies and TV
@@ -24,7 +24,7 @@ Vanguarr is relevant if you're searching for any of these:
 
 ## At A Glance
 
-- Learns from real Jellyfin watch history, not generic popularity.
+- Learns from real media-server watch history, not generic popularity.
 - Builds persistent user manifests you can inspect, edit, and tune.
 - Pulls candidates from Seer-compatible request stacks such as Jellyseerr and scores them in code.
 - Uses optional TMDb enrichment and optional LLM assistance without surrendering control.
@@ -44,14 +44,14 @@ Vanguarr is relevant if you're searching for any of these:
 
 Vanguarr runs two cooperating engines:
 
-- `Profile Architect` reads Jellyfin playback history, groups repeat watches, ranks genres, infers format and release-era preferences, optionally asks the LLM for a few adjacent discovery lanes, and writes a persistent profile manifest to disk.
+- `Profile Architect` reads Jellyfin or Plex playback history, groups repeat watches, ranks genres, infers format and release-era preferences, optionally asks the LLM for a few adjacent discovery lanes, and writes a persistent profile manifest to disk.
 - `Decision Engine` builds recommendation seed lanes from top watched, repeat watched, recent, and genre-anchor titles, pulls a blended candidate pool from Seer recommendations plus trending, enriches the best items with TMDb metadata, scores them in code, applies a small LLM adjustment, and requests only titles that clear your threshold.
 
 In plain English: Vanguarr watches, remembers, scouts, scores, explains, and only then requests.
 
 ```mermaid
 flowchart LR
-    A["Jellyfin watch history"] --> B["Profile Architect"]
+    A["Media server watch history"] --> B["Profile Architect"]
     B --> C["Profile JSON manifest"]
     B --> D["Summary block (.txt)"]
     A --> E["Seed lanes<br/>top / repeat / recent / genre-anchor"]
@@ -70,17 +70,19 @@ flowchart LR
 
 ## Feature Highlights
 
-- Positioned for Jellyfin + Arr operators who want automation without mystery
+- Positioned for Jellyfin, Plex, and Arr operators who want automation without mystery
 - FastAPI web application with a built-in operator UI
 - APScheduler-based recurring jobs with manual run controls
 - Jellyfin integration through standard `/Users` and `/Items` APIs
-- No Jellyfin Playback Reporting plugin required
+- Plex integration through playback history and metadata APIs
+- No Jellyfin Playback Reporting plugin required when Jellyfin is the source
 - Seer discovery via recommendations and trending endpoints
 - TMDb enrichment for keywords, talent, brands, franchises, certifications, and providers
 - Hybrid confidence model that blends deterministic scoring with an LLM vote
 - Duplicate protection against already watched, already managed, or already requested media
 - Searchable decision log with stored reasoning and request outcomes
 - Editable manifest workflow for operator overrides and explicit feedback
+- Database-backed runtime settings with a live Settings page and prioritized LLM failover
 
 ## Web Interface And Endpoints
 
@@ -88,9 +90,11 @@ flowchart LR
 | --- | --- |
 | `/` | Main dashboard with health, manual triggers, scheduler state, recent requests, and profile cards |
 | `/logs` | "War Room" decision log with search across usernames, titles, and reasoning |
+| `/settings` | Runtime settings editor backed by the SQLite database |
+| `/settings/save` | Saves runtime settings and applies them live without restarting the app |
 | `/manifest` | Profile manifest editor with live summary preview |
 | `/healthz` | Lightweight container health probe |
-| `/api/health` | Cached JSON health snapshot for Jellyfin, Seer, TMDb, and the active LLM provider |
+| `/api/health` | Cached JSON health snapshot for the active media server, Seer, TMDb, and the active LLM provider |
 | `/actions/profile-architect` | Manual Profile Architect trigger |
 | `/actions/decision-engine` | Manual Decision Engine trigger |
 | `/manifest/save` | Saves the canonical JSON manifest and regenerates its summary block |
@@ -101,7 +105,7 @@ flowchart LR
 
 You need these integrations configured before Vanguarr can make real request decisions:
 
-- Jellyfin server URL and API key
+- Jellyfin or Plex server URL and credential
 - Seer-compatible request service URL and API key
 - writable `./data` directory for runtime state
 
@@ -113,8 +117,8 @@ These are optional but strongly recommended:
 ### Run With Docker Compose
 
 1. Copy [`.env.example`](.env.example) to `.env`.
-2. Fill in the required Jellyfin and Seer values.
-3. Optionally add TMDb and LLM provider settings.
+2. Fill in the required media-server and Seer values.
+3. Optionally add first-start seed values for TMDb, scheduling, or the initial LLM provider.
 4. Start the stack:
 
 ```bash
@@ -127,11 +131,12 @@ docker compose up -d --build
 http://localhost:8000
 ```
 
-6. From the dashboard, run `Profile Architect` once to generate manifests, then run `Decision Engine` to score candidates immediately instead of waiting for the scheduled jobs.
+6. Open `/settings` after first boot if you want to manage runtime configuration in the UI. On startup, Vanguarr seeds missing runtime settings into the database from the environment so existing deployments continue to boot cleanly.
+7. From the dashboard, run `Profile Architect` once to generate manifests, then run `Decision Engine` to score candidates immediately instead of waiting for the scheduled jobs.
 
 The included [`docker-compose.yml`](docker-compose.yml) mounts `./data` into `/data`, which means profiles, logs, and the SQLite database stay visible on the host.
 
-If you want the shortest possible summary for sharing the repo, it is this: Vanguarr is the service that scouts what your Jellyfin users are most likely to want next and quietly files the right requests into the ARR stack.
+If you want the shortest possible summary for sharing the repo, it is this: Vanguarr is the service that scouts what your media-server users are most likely to want next and quietly files the right requests into the ARR stack.
 
 ### Run The Published GHCR Image
 
@@ -151,14 +156,40 @@ services:
 
 ## Configuration
 
-The full configuration surface lives in [`.env.example`](.env.example). These are the settings most operators care about first.
+Vanguarr now uses a hybrid configuration model:
+
+- bootstrap settings stay in the environment because the app needs them before it can reach the database
+- runtime settings are stored in the database and edited live from `/settings`
+- on startup, Vanguarr seeds any missing runtime rows from environment values so older deployments do not break during the transition
+
+### Bootstrap Settings
+
+These should remain environment-managed:
+
+- `DATABASE_URL`
+- `DATA_DIR`
+- `PROFILES_DIR`
+- `LOGS_DIR`
+- `LOG_FILE`
+- `APP_HOST`
+- `APP_PORT`
+
+Everything else can now live in the database-backed runtime settings store.
+
+### Runtime Setting Seeds
+
+The trimmed [`.env.example`](.env.example) includes the most common first-start seed values. You can still pass the older, larger environment surface if you already have it; Vanguarr continues to read those keys and seed missing database rows from them on startup.
 
 ### Core Integrations
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `JELLYFIN_BASE_URL` | Yes | Base Jellyfin URL |
-| `JELLYFIN_API_KEY` | Yes | Needed to list users and read played history |
+| `MEDIA_SERVER_PROVIDER` | Yes | `jellyfin` or `plex` |
+| `JELLYFIN_BASE_URL` | If using Jellyfin | Base Jellyfin URL |
+| `JELLYFIN_API_KEY` | If using Jellyfin | Needed to list users and read played history |
+| `PLEX_BASE_URL` | If using Plex | Base Plex Media Server URL |
+| `PLEX_API_TOKEN` | If using Plex | Needed to read playback history and metadata |
+| `PLEX_CLIENT_IDENTIFIER` | No | Defaults to `vanguarr` and is sent with Plex requests |
 | `SEER_BASE_URL` | Yes | Base URL for a Seer-compatible request service. A trailing `/api/v1` is accepted and normalized away. |
 | `SEER_API_KEY` | Yes | Needed for discovery and request creation |
 | `SEER_REQUEST_USER_ID` | No | Optional request owner override |
@@ -176,21 +207,19 @@ If no TMDb credential is set, Vanguarr still runs. It simply skips TMDb enrichme
 
 ### LLM Providers
 
-| Variable | Required | Notes |
-| --- | --- | --- |
-| `LLM_PROVIDER` | No | `ollama`, `openai`, or `anthropic` |
-| `LLM_MODEL` | No | Model name or LiteLLM-formatted identifier |
-| `OLLAMA_API_BASE` | For Ollama | Defaults to `http://ollama:11434` |
-| `OPENAI_API_KEY` | For OpenAI | Required when `LLM_PROVIDER=openai` |
-| `OPENAI_API_BASE` | No | Optional override |
-| `ANTHROPIC_API_KEY` | For Anthropic | Required when `LLM_PROVIDER=anthropic` |
-| `ANTHROPIC_API_BASE` | No | Optional override |
+You can still seed a single legacy provider from the environment on first boot, but the preferred model is now the `/settings` page:
+
+- add one or more providers
+- assign a priority to each provider
+- enable or disable them independently
+- let Vanguarr fail over in order when the active provider is unavailable
 
 Important behavior:
 
 - LLM support is optional. If the LLM is unavailable, Decision Engine falls back to deterministic scoring and Profile Architect skips the profile-side enrichment step gracefully.
 - Bare Ollama model names like `glm-4.7-flash:latest` are accepted and normalized to LiteLLM form.
-- If `LLM_TIMEOUT_SECONDS` is blank, Vanguarr defaults to `180` seconds for Ollama and `45` seconds for hosted providers.
+- If a provider timeout is blank, Vanguarr defaults to `180` seconds for Ollama and `45` seconds for hosted providers.
+- Startup imports a legacy `LLM_PROVIDER` and `LLM_MODEL` pair into the provider table when no provider rows exist yet.
 
 ### Scheduling And Tuning
 
@@ -200,7 +229,7 @@ Important behavior:
 | `PROFILE_CRON` | `0 3 * * 0` | Weekly Profile Architect run in the configured timezone |
 | `DECISION_CRON` | `0 4 * * *` | Daily Decision Engine run in the configured timezone |
 | `REQUEST_THRESHOLD` | `0.72` | Minimum hybrid confidence required to request media |
-| `PROFILE_HISTORY_LIMIT` | `40` | Number of Jellyfin history items used per user |
+| `PROFILE_HISTORY_LIMIT` | `40` | Number of playback history items used per user |
 | `CANDIDATE_LIMIT` | `160` | Maximum pre-rank candidate pool size |
 | `TRENDING_CANDIDATE_LIMIT` | `100` | Max trending titles mixed into the pool |
 | `DECISION_SHORTLIST_LIMIT` | `15` | Diversified shortlist size before LLM evaluation |
@@ -286,11 +315,19 @@ This layout is what powers the dashboard, War Room, and manifest editor.
 
 ## Deployment Notes
 
-### Jellyfin
+### Media Servers
+
+#### Jellyfin
 
 - Vanguarr reads watched history through Jellyfin's normal item APIs.
 - It uses played-state filters and `DatePlayed` sorting on `/Items`.
 - The Jellyfin Playback Reporting plugin is not required.
+
+#### Plex
+
+- Vanguarr reads watch history through Plex's playback history API.
+- It normalizes Plex metadata into the same internal history shape used by the scoring pipeline.
+- Plex requires a valid `X-Plex-Token`, and Vanguarr sends a stable `X-Plex-Client-Identifier` with requests.
 
 ### Docker, Unraid, And OpenShift-Style Platforms
 

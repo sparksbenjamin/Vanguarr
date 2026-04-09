@@ -41,8 +41,18 @@ class BaseAPIClient:
         headers: dict[str, str] | None = None,
         timeout: float = 15.0,
     ) -> None:
-        self.base_url = (base_url or "").strip().rstrip("/")
         self.timeout = timeout
+        self.base_url = ""
+        self.headers: dict[str, str] = {}
+        self._set_connection(base_url, headers=headers)
+
+    def _set_connection(
+        self,
+        base_url: str | None,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.base_url = (base_url or "").strip().rstrip("/")
         self.headers = {"Accept": "application/json"}
         if headers:
             self.headers.update(headers)

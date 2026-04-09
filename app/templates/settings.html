@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="space-y-5">
+  <section class="surface page-hero rounded-[1.6rem] px-5 py-5 lg:px-6">
+    <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+      <div class="max-w-3xl">
+        <p class="panel-kicker">Runtime Settings</p>
+        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Database-backed control surface</h1>
+        <p class="mt-3 text-sm leading-6 text-[var(--text-soft)] sm:text-[0.96rem]">
+          Bootstrap settings like the database path stay managed by the deployment. The operator-facing runtime settings below are synced into the database on startup, then applied live without restarting the app, including switching between Jellyfin and Plex.
+        </p>
+      </div>
+      <div class="surface rounded-[1.25rem] bg-[rgba(255,255,255,0.03)] px-4 py-4 xl:min-w-[320px]">
+        <p class="panel-kicker">Live Behavior</p>
+        <p class="mt-2 text-sm text-white">Changes here refresh clients, health polling, and the scheduler in-process.</p>
+        <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">Database connection and storage paths are intentionally hidden because they remain bootstrap-only deployment settings.</p>
+      </div>
+    </div>
+  </section>
+
+  <form class="space-y-5" method="post" action="/settings/save">
+    <div class="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+      <div class="space-y-5">
+        {% for section in setting_sections %}
+        <section class="surface rounded-[1.45rem] overflow-hidden">
+          <div class="border-b border-white/5 px-5 py-4">
+            <p class="panel-kicker">{{ section.title }}</p>
+            <h2 class="mt-2 panel-title">{{ section.title }} settings</h2>
+          </div>
+          <div class="grid gap-4 px-5 py-5 md:grid-cols-2">
+            {% for field in section.fields %}
+            {% set value = settings|attr(field.key) %}
+            <div class="{{ 'md:col-span-2' if field.input_type == 'textarea' else '' }}">
+              <label class="mb-2 block text-sm font-medium" for="{{ field.key }}">{{ field.label }}</label>
+              {% if field.input_type == 'checkbox' %}
+              <label class="flex items-start gap-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4 text-sm text-[var(--text-soft)]">
+                <input id="{{ field.key }}" name="{{ field.key }}" type="checkbox" value="true" class="mt-1 h-4 w-4 rounded border-white/20 bg-transparent text-[var(--accent)]" {% if value %}checked{% endif %} />
+                <span>{{ field.description }}</span>
+              </label>
+              {% elif field.input_type == 'select' %}
+              <select id="{{ field.key }}" name="{{ field.key }}" class="field-input text-sm">
+                {% for option_value, option_label in field.choices %}
+                <option value="{{ option_value }}" {% if value == option_value %}selected{% endif %}>{{ option_label }}</option>
+                {% endfor %}
+              </select>
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">{{ field.description }}</p>
+              {% elif field.input_type == 'textarea' %}
+              <textarea id="{{ field.key }}" name="{{ field.key }}" class="field-textarea text-sm" style="min-height: 180px;" placeholder="{{ field.placeholder }}">{{ value if value is not none else "" }}</textarea>
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">{{ field.description }}</p>
+              {% else %}
+              <input
+                id="{{ field.key }}"
+                name="{{ field.key }}"
+                type="{{ field.input_type }}"
+                value="{{ value if value is not none else '' }}"
+                placeholder="{{ field.placeholder }}"
+                step="any"
+                class="field-input text-sm"
+              />
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">{{ field.description }}</p>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+        </section>
+        {% endfor %}
+      </div>
+
+      <div class="space-y-5">
+        <section class="surface rounded-[1.45rem] overflow-hidden">
+          <div class="border-b border-white/5 px-5 py-4">
+            <p class="panel-kicker">LLM Providers</p>
+            <h2 class="mt-2 panel-title">Priority-ordered failover chain</h2>
+          </div>
+          <div class="space-y-4 px-5 py-5">
+            {% for provider in llm_providers %}
+            <input type="hidden" name="provider_row_ids" value="{{ provider.id }}" />
+            <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="font-medium">{{ provider.name }}</p>
+                  <p class="mono mt-1 text-xs text-[var(--text-dim)]">{{ provider.provider }} / priority {{ provider.priority }}</p>
+                </div>
+                <label class="flex items-center gap-2 text-sm text-[var(--text-soft)]">
+                  <input name="provider-{{ provider.id }}-delete" type="checkbox" value="true" class="h-4 w-4 rounded border-white/20 bg-transparent text-[var(--red)]" />
+                  Remove
+                </label>
+              </div>
+
+              <div class="mt-4 grid gap-4 md:grid-cols-2">
+                <div>
+                  <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-name">Label</label>
+                  <input id="provider-{{ provider.id }}-name" name="provider-{{ provider.id }}-name" value="{{ provider.name }}" class="field-input text-sm" />
+                </div>
+                <div>
+                  <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-priority">Priority</label>
+                  <input id="provider-{{ provider.id }}-priority" name="provider-{{ provider.id }}-priority" type="number" value="{{ provider.priority }}" class="field-input text-sm" />
+                </div>
+                <div>
+                  <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-provider">Provider</label>
+                  <select id="provider-{{ provider.id }}-provider" name="provider-{{ provider.id }}-provider" class="field-input text-sm">
+                    {% for option_value, option_label in llm_provider_options %}
+                    <option value="{{ option_value }}" {% if provider.provider == option_value %}selected{% endif %}>{{ option_label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div>
+                  <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-enabled">Enabled</label>
+                  <label class="flex items-center gap-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-[0.9rem] text-sm text-[var(--text-soft)]">
+                    <input id="provider-{{ provider.id }}-enabled" name="provider-{{ provider.id }}-enabled" type="checkbox" value="true" class="h-4 w-4 rounded border-white/20 bg-transparent text-[var(--accent)]" {% if provider.enabled %}checked{% endif %} />
+                    Try this provider in the failover chain.
+                  </label>
+                </div>
+                <div class="md:col-span-2">
+                  <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-model">Model</label>
+                  <input id="provider-{{ provider.id }}-model" name="provider-{{ provider.id }}-model" value="{{ provider.model }}" class="field-input text-sm" />
+                </div>
+                <div>
+                  <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-api_base">API Base</label>
+                  <input id="provider-{{ provider.id }}-api_base" name="provider-{{ provider.id }}-api_base" value="{{ provider.api_base or '' }}" class="field-input text-sm" />
+                </div>
+                <div>
+                  <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-timeout_seconds">Timeout Seconds</label>
+                  <input id="provider-{{ provider.id }}-timeout_seconds" name="provider-{{ provider.id }}-timeout_seconds" type="number" value="{{ provider.timeout_seconds if provider.timeout_seconds is not none else '' }}" class="field-input text-sm" />
+                </div>
+                <div class="md:col-span-2">
+                  <label class="mb-2 block text-sm font-medium" for="provider-{{ provider.id }}-api_key">API Key</label>
+                  <input id="provider-{{ provider.id }}-api_key" name="provider-{{ provider.id }}-api_key" type="password" value="{{ provider.api_key or '' }}" class="field-input text-sm" />
+                </div>
+              </div>
+            </article>
+            {% else %}
+            <div class="empty-state">No LLM providers are saved yet. Add one below to create the first live provider chain.</div>
+            {% endfor %}
+          </div>
+        </section>
+
+        <section class="surface rounded-[1.45rem] overflow-hidden">
+          <div class="border-b border-white/5 px-5 py-4">
+            <p class="panel-kicker">Add Provider</p>
+            <h2 class="mt-2 panel-title">Append one more provider</h2>
+          </div>
+          <div class="grid gap-4 px-5 py-5">
+            <div class="grid gap-4 md:grid-cols-2">
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="provider-new-name">Label</label>
+                <input id="provider-new-name" name="provider-new-name" placeholder="Fallback OpenAI" class="field-input text-sm" />
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="provider-new-priority">Priority</label>
+                <input id="provider-new-priority" name="provider-new-priority" type="number" value="{{ (llm_providers|length) + 1 }}" class="field-input text-sm" />
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="provider-new-provider">Provider</label>
+                <select id="provider-new-provider" name="provider-new-provider" class="field-input text-sm">
+                  {% for option_value, option_label in llm_provider_options %}
+                  <option value="{{ option_value }}">{{ option_label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="provider-new-enabled">Enabled</label>
+                <label class="flex items-center gap-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-[0.9rem] text-sm text-[var(--text-soft)]">
+                  <input id="provider-new-enabled" name="provider-new-enabled" type="checkbox" value="true" class="h-4 w-4 rounded border-white/20 bg-transparent text-[var(--accent)]" checked />
+                  Try this provider after saving.
+                </label>
+              </div>
+              <div class="md:col-span-2">
+                <label class="mb-2 block text-sm font-medium" for="provider-new-model">Model</label>
+                <input id="provider-new-model" name="provider-new-model" placeholder="gpt-5-mini or llama3.1:8b" class="field-input text-sm" />
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="provider-new-api_base">API Base</label>
+                <input id="provider-new-api_base" name="provider-new-api_base" placeholder="http://ollama:11434" class="field-input text-sm" />
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="provider-new-timeout_seconds">Timeout Seconds</label>
+                <input id="provider-new-timeout_seconds" name="provider-new-timeout_seconds" type="number" class="field-input text-sm" />
+              </div>
+              <div class="md:col-span-2">
+                <label class="mb-2 block text-sm font-medium" for="provider-new-api_key">API Key</label>
+                <input id="provider-new-api_key" name="provider-new-api_key" type="password" class="field-input text-sm" />
+              </div>
+            </div>
+            <p class="text-sm leading-6 text-[var(--text-soft)]">Lower priorities run first. If a request or health check fails, Vanguarr moves down the enabled provider chain automatically.</p>
+          </div>
+        </section>
+
+        <section class="surface rounded-[1.45rem] overflow-hidden">
+          <div class="border-b border-white/5 px-5 py-4">
+            <p class="panel-kicker">Save</p>
+            <h2 class="mt-2 panel-title">Apply changes live</h2>
+          </div>
+          <div class="space-y-4 px-5 py-5">
+            <p class="text-sm leading-6 text-[var(--text-soft)]">
+              Saving updates the database-backed runtime settings immediately. Existing deployments keep working because startup still syncs legacy env values into these tables when a key has not been stored yet.
+            </p>
+            <button class="button button-primary w-full" type="submit">Save Runtime Settings</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </form>
+</section>
+{% endblock %}

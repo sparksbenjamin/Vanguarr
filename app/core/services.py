@@ -13,8 +13,8 @@ from urllib.parse import quote, unquote
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.jellyfin import JellyfinClient
 from app.api.llm import LLMClient
+from app.api.media_server import MediaServerClientProtocol
 from app.api.seer import SeerClient
 from app.api.tmdb import TMDbClient
 from app.core.models import DecisionLog, RequestedMedia, TaskRun
@@ -177,14 +177,14 @@ class VanguarrService:
         self,
         *,
         settings: Settings,
-        jellyfin: JellyfinClient,
+        media_server: MediaServerClientProtocol,
         seer: SeerClient,
         tmdb: TMDbClient,
         llm: LLMClient,
         session_factory: sessionmaker[Session],
     ) -> None:
         self.settings = settings
-        self.jellyfin = jellyfin
+        self.media_server = media_server
         self.seer = seer
         self.tmdb = tmdb
         self.llm = llm
@@ -319,14 +319,17 @@ class VanguarrService:
         errors: list[str] = []
 
         try:
-            users = await self.jellyfin.list_users()
+            users = await self.media_server.list_users()
             if username:
                 users = [user for user in users if user.get("Name") == username]
 
             for user in users:
                 current_username = user.get("Name", "unknown")
                 try:
-                    history = await self.jellyfin.get_playback_history(user["Id"], self.settings.profile_history_limit)
+                    history = await self.media_server.get_playback_history(
+                        user["Id"],
+                        self.settings.profile_history_limit,
+                    )
                     stored_payload = self.profile_store.read_payload(current_username)
                     compact_history = self._build_profile_history_context(
                         history,
@@ -361,7 +364,7 @@ class VanguarrService:
 
             if not users:
                 status = "error"
-                summary = "No Jellyfin users matched the requested target."
+                summary = f"No {self.settings.media_server_label} users matched the requested target."
             elif errors:
                 status = "partial"
                 summary = f"Updated {len(updated_users)} profile(s) with {len(errors)} error(s)."
@@ -400,14 +403,17 @@ class VanguarrService:
         exclusions = self._parse_global_exclusions()
 
         try:
-            users = await self.jellyfin.list_users()
+            users = await self.media_server.list_users()
             if username:
                 users = [user for user in users if user.get("Name") == username]
 
             for user in users:
                 current_username = user.get("Name", "unknown")
                 try:
-                    history = await self.jellyfin.get_playback_history(user["Id"], self.settings.profile_history_limit)
+                    history = await self.media_server.get_playback_history(
+                        user["Id"],
+                        self.settings.profile_history_limit,
+                    )
                     history_summary = self._build_profile_history_context(
                         history,
                         top_limit=self.settings.profile_architect_top_titles_limit,
@@ -613,7 +619,7 @@ class VanguarrService:
 
             if not users:
                 status = "error"
-                summary = "No Jellyfin users matched the requested target."
+                summary = f"No {self.settings.media_server_label} users matched the requested target."
             elif errors:
                 status = "partial"
                 summary = (

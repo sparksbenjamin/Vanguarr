@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.api.base import ConnectionCheck
-from app.api.jellyfin import JellyfinClient
 from app.api.llm import LLMClient
+from app.api.media_server import MediaServerClientProtocol
 from app.api.seer import SeerClient
 from app.api.tmdb import TMDbClient
 
@@ -15,19 +15,25 @@ class HealthMonitor:
     def __init__(
         self,
         *,
-        jellyfin: JellyfinClient,
+        media_server: MediaServerClientProtocol,
         seer: SeerClient,
         tmdb: TMDbClient,
         llm: LLMClient,
         ttl_seconds: int = 30,
     ) -> None:
-        self.jellyfin = jellyfin
+        self.media_server = media_server
         self.seer = seer
         self.tmdb = tmdb
         self.llm = llm
         self.ttl_seconds = ttl_seconds
         self._cached_payload: dict[str, Any] | None = None
         self._expires_at: datetime | None = None
+
+    def reset(self, *, ttl_seconds: int | None = None) -> None:
+        if ttl_seconds is not None:
+            self.ttl_seconds = ttl_seconds
+        self._cached_payload = None
+        self._expires_at = None
 
     async def snapshot(self, *, force: bool = False) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
@@ -40,7 +46,7 @@ class HealthMonitor:
             return self._cached_payload
 
         checks = await asyncio.gather(
-            self._safe_check("Jellyfin", self.jellyfin.test_connection()),
+            self._safe_check("Media Server", self.media_server.test_connection()),
             self._safe_check("Seer", self.seer.test_connection()),
             self._safe_check("TMDb", self.tmdb.test_connection()),
             self._safe_check("LLM", self.llm.test_connection()),
@@ -50,7 +56,7 @@ class HealthMonitor:
             "generated_at": now.isoformat(),
             "overall_ok": all(check.ok for check in checks),
             "services": {
-                "jellyfin": checks[0].to_dict(),
+                "media_server": checks[0].to_dict(),
                 "seer": checks[1].to_dict(),
                 "tmdb": checks[2].to_dict(),
                 "llm": checks[3].to_dict(),

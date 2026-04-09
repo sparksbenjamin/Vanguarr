@@ -10,6 +10,19 @@ class SeerClient(BaseAPIClient):
     service_name = "Seer"
 
     def __init__(self, settings: Settings) -> None:
+        super().__init__(None)
+        self.settings = settings
+        self._genre_cache: dict[str, dict[int, str]] = {}
+        self._cache_signature: tuple[str, str, int] | None = None
+        self._refresh_connection()
+
+    def _current_settings(self) -> Settings:
+        if hasattr(self.settings, "snapshot"):
+            return self.settings.snapshot()
+        return self.settings
+
+    def _refresh_connection(self) -> Settings:
+        settings = self._current_settings()
         base_url = (settings.seer_base_url or "").strip().rstrip("/")
         if base_url.endswith("/api/v1"):
             base_url = base_url[:-7]
@@ -18,11 +31,16 @@ class SeerClient(BaseAPIClient):
         if settings.seer_api_key:
             headers["X-Api-Key"] = settings.seer_api_key
 
-        super().__init__(base_url, headers=headers)
-        self.settings = settings
-        self._genre_cache: dict[str, dict[int, str]] = {}
+        signature = (base_url, headers.get("X-Api-Key", ""), settings.candidate_limit)
+        if self._cache_signature != signature:
+            self._genre_cache.clear()
+            self._cache_signature = signature
+
+        self._set_connection(base_url, headers=headers)
+        return settings
 
     async def test_connection(self) -> ConnectionCheck:
+        settings = self._refresh_connection()
         if not self.base_url:
             return ConnectionCheck(
                 service="Seer",
@@ -33,7 +51,7 @@ class SeerClient(BaseAPIClient):
         status = await self._request("GET", "/api/v1/status")
         app_version = status.get("version", "unknown")
 
-        if not self.settings.seer_api_key:
+        if not settings.seer_api_key:
             return ConnectionCheck(
                 service="Seer",
                 ok=False,
@@ -69,12 +87,13 @@ class SeerClient(BaseAPIClient):
         return self._extract_results(payload)
 
     async def request_media(self, media_type: str, media_id: int) -> dict[str, Any]:
-        if not self.settings.seer_api_key:
+        settings = self._refresh_connection()
+        if not settings.seer_api_key:
             raise ClientConfigError("SEER_API_KEY is required to create requests.")
 
         body: dict[str, Any] = {"mediaType": media_type, "mediaId": media_id}
-        if self.settings.seer_request_user_id is not None:
-            body["userId"] = self.settings.seer_request_user_id
+        if settings.seer_request_user_id is not None:
+            body["userId"] = settings.seer_request_user_id
 
         payload = await self._request("POST", "/api/v1/request", json_body=body)
         return payload if isinstance(payload, dict) else {}
@@ -86,8 +105,9 @@ class SeerClient(BaseAPIClient):
         limit: int | None = None,
         trending_limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        max_candidates = limit or self.settings.candidate_limit
-        max_trending = trending_limit or self.settings.trending_candidate_limit
+        settings = self._refresh_connection()
+        max_candidates = limit or settings.candidate_limit
+        max_trending = trending_limit or settings.trending_candidate_limit
 
         movie_genres = await self.get_genre_map("movie")
         tv_genres = await self.get_genre_map("tv")
@@ -155,6 +175,7 @@ class SeerClient(BaseAPIClient):
         return candidates
 
     async def get_genre_map(self, media_type: str) -> dict[int, str]:
+        self._refresh_connection()
         if media_type in self._genre_cache:
             return self._genre_cache[media_type]
 

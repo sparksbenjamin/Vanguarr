@@ -10,16 +10,39 @@ class TMDbClient(BaseAPIClient):
     service_name = "TMDb"
 
     def __init__(self, settings: Settings) -> None:
-        super().__init__(
+        super().__init__(None)
+        self.settings = settings
+        self._details_cache: dict[tuple[str, int], dict[str, Any]] = {}
+        self._cache_signature: tuple[str, str, str, str, str] | None = None
+        self._refresh_connection()
+
+    def _current_settings(self) -> Settings:
+        if hasattr(self.settings, "snapshot"):
+            return self.settings.snapshot()
+        return self.settings
+
+    def _refresh_connection(self) -> Settings:
+        settings = self._current_settings()
+        self._set_connection(
             settings.tmdb_base_url,
             headers=self._build_headers(settings.tmdb_api_read_access_token),
         )
-        self.settings = settings
-        self._details_cache: dict[tuple[str, int], dict[str, Any]] = {}
+        signature = (
+            self.base_url,
+            settings.tmdb_api_read_access_token or "",
+            settings.tmdb_api_key or "",
+            settings.tmdb_language,
+            settings.tmdb_watch_region,
+        )
+        if self._cache_signature != signature:
+            self._details_cache.clear()
+            self._cache_signature = signature
+        return settings
 
     @property
     def enabled(self) -> bool:
-        return bool(self.settings.tmdb_api_read_access_token or self.settings.tmdb_api_key)
+        settings = self._current_settings()
+        return bool(settings.tmdb_api_read_access_token or settings.tmdb_api_key)
 
     @staticmethod
     def _build_headers(read_access_token: str | None) -> dict[str, str]:
@@ -28,11 +51,13 @@ class TMDbClient(BaseAPIClient):
         return {"Authorization": f"Bearer {read_access_token}"}
 
     def _auth_params(self) -> dict[str, Any]:
-        if self.settings.tmdb_api_key:
-            return {"api_key": self.settings.tmdb_api_key}
+        settings = self._current_settings()
+        if settings.tmdb_api_key:
+            return {"api_key": settings.tmdb_api_key}
         return {}
 
     async def test_connection(self) -> ConnectionCheck:
+        settings = self._refresh_connection()
         if not self.enabled:
             return ConnectionCheck(
                 service="TMDb",
@@ -51,12 +76,13 @@ class TMDbClient(BaseAPIClient):
                 "enabled": True,
                 "base_url": self.base_url,
                 "poster_sizes": images.get("poster_sizes", [])[:5],
-                "watch_region": self.settings.tmdb_watch_region,
-                "language": self.settings.tmdb_language,
+                "watch_region": settings.tmdb_watch_region,
+                "language": settings.tmdb_language,
             },
         )
 
     async def get_details(self, media_type: str, media_id: int) -> dict[str, Any]:
+        settings = self._refresh_connection()
         if not self.enabled:
             return {}
 
@@ -73,7 +99,7 @@ class TMDbClient(BaseAPIClient):
             return {}
 
         params = self._auth_params()
-        params["language"] = self.settings.tmdb_language
+        params["language"] = settings.tmdb_language
         params["append_to_response"] = append_parts
 
         payload = await self._request("GET", f"/{media_type}/{int(media_id)}", params=params)

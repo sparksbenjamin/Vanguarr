@@ -16,15 +16,28 @@ class EngineScheduler:
         self.service = service
         self._scheduler: AsyncIOScheduler | None = None
 
+    def _current_settings(self) -> Settings:
+        if hasattr(self.settings, "snapshot"):
+            return self.settings.snapshot(force=True)
+        return self.settings
+
     def start(self) -> None:
-        if self._scheduler is not None or not self.settings.scheduler_enabled:
+        self.refresh()
+
+    def refresh(self) -> None:
+        settings = self._current_settings()
+        if self._scheduler is not None:
+            self._scheduler.shutdown(wait=False)
+            self._scheduler = None
+
+        if not settings.scheduler_enabled:
             return
 
-        timezone = ZoneInfo(self.settings.timezone)
+        timezone = ZoneInfo(settings.timezone)
         scheduler = AsyncIOScheduler(timezone=timezone)
         scheduler.add_job(
             self.service.run_profile_architect,
-            trigger=CronTrigger.from_crontab(self.settings.profile_cron, timezone=timezone),
+            trigger=CronTrigger.from_crontab(settings.profile_cron, timezone=timezone),
             id="profile_architect",
             name="Profile Architect",
             replace_existing=True,
@@ -33,7 +46,7 @@ class EngineScheduler:
         )
         scheduler.add_job(
             self.service.run_decision_engine,
-            trigger=CronTrigger.from_crontab(self.settings.decision_cron, timezone=timezone),
+            trigger=CronTrigger.from_crontab(settings.decision_cron, timezone=timezone),
             id="decision_engine",
             name="Decision Engine",
             replace_existing=True,

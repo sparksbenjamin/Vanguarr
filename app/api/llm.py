@@ -7,49 +7,89 @@ import httpx
 from litellm import acompletion
 
 from app.api.base import ClientConfigError, ConnectionCheck, ExternalServiceError
-from app.core.settings import Settings
+from app.core.settings import LLMProviderSettings, Settings
 
 
 class LLMClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
+    def _current_settings(self) -> Settings:
+        if hasattr(self.settings, "snapshot"):
+            return self.settings.snapshot()
+        return self.settings
+
     async def test_connection(self) -> ConnectionCheck:
-        provider = self.settings.llm_provider.lower()
-        model = self.settings.llm_model
-
-        try:
-            self._validate_config()
-            if provider == "ollama":
-                payload = await self._ping_ollama()
-                models = [item.get("name") for item in payload.get("models", [])[:5]]
-                return ConnectionCheck(
-                    service="LLM",
-                    ok=True,
-                    detail=f"Ollama is reachable for model {model}.",
-                    meta={"provider": provider, "model": model, "models": models},
-                )
-
-            reply = await self.generate_text(
-                system_prompt="You are a health check. Reply with OK.",
-                user_prompt="Respond with OK.",
-                max_tokens=8,
-                temperature=0,
-                timeout_seconds=min(self.settings.effective_llm_timeout_seconds, 8),
-            )
+        settings = self._current_settings()
+        providers = settings.active_llm_providers
+        if not providers:
             return ConnectionCheck(
                 service="LLM",
-                ok="OK" in reply.upper(),
-                detail=f"{provider} responded for model {model}.",
-                meta={"provider": provider, "model": model},
+                ok=False,
+                detail="No LLM providers are configured.",
+                meta={"providers": []},
             )
-        except (ClientConfigError, ExternalServiceError) as exc:
+
+        errors: list[str] = []
+        try:
+            for provider in providers:
+                try:
+                    self._validate_provider_config(settings, provider)
+                    if provider.provider.lower() == "ollama":
+                        payload = await self._ping_ollama(settings, provider)
+                        models = [item.get("name") for item in payload.get("models", [])[:5]]
+                        return ConnectionCheck(
+                            service="LLM",
+                            ok=True,
+                            detail=f"{provider.name} is reachable for model {provider.model}.",
+                            meta={
+                                "provider": provider.provider,
+                                "provider_name": provider.name,
+                                "model": provider.model,
+                                "priority": provider.priority,
+                                "models": models,
+                                "failover_count": max(0, len(providers) - 1),
+                            },
+                        )
+
+                    reply = await self._generate_messages_with_provider(
+                        settings=settings,
+                        provider=provider,
+                        messages=[
+                            {"role": "system", "content": "You are a health check. Reply with OK."},
+                            {"role": "user", "content": "Respond with OK."},
+                        ],
+                        max_tokens=8,
+                        temperature=0,
+                        timeout_seconds=min(self._effective_timeout_seconds(settings, provider), 8),
+                    )
+                    return ConnectionCheck(
+                        service="LLM",
+                        ok="OK" in reply.upper(),
+                        detail=f"{provider.name} responded for model {provider.model}.",
+                        meta={
+                            "provider": provider.provider,
+                            "provider_name": provider.name,
+                            "model": provider.model,
+                            "priority": provider.priority,
+                            "failover_count": max(0, len(providers) - 1),
+                        },
+                    )
+                except (ClientConfigError, ExternalServiceError) as exc:
+                    errors.append(f"{provider.name}: {exc}")
+        except Exception as exc:  # pragma: no cover - defensive top-level catch
             return ConnectionCheck(
                 service="LLM",
                 ok=False,
                 detail=str(exc),
-                meta={"provider": provider, "model": model},
+                meta={"providers": [provider.provider for provider in providers]},
             )
+        return ConnectionCheck(
+            service="LLM",
+            ok=False,
+            detail=f"All configured LLM providers failed. {' | '.join(errors[:3])}",
+            meta={"providers": [provider.provider for provider in providers]},
+        )
 
     async def generate_text(
         self,
@@ -79,20 +119,26 @@ class LLMClient:
         temperature: float | None = None,
         timeout_seconds: int | None = None,
     ) -> str:
-        self._validate_config()
+        settings = self._current_settings()
+        providers = settings.active_llm_providers
+        if not providers:
+            raise ClientConfigError("No LLM providers are configured.")
 
-        kwargs = self._build_completion_kwargs(
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout_seconds=timeout_seconds,
-        )
+        errors: list[str] = []
+        for provider in providers:
+            try:
+                return await self._generate_messages_with_provider(
+                    settings=settings,
+                    provider=provider,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    timeout_seconds=timeout_seconds,
+                )
+            except (ClientConfigError, ExternalServiceError) as exc:
+                errors.append(f"{provider.name}: {exc}")
 
-        try:
-            response = await acompletion(messages=messages, **kwargs)
-        except Exception as exc:  # pragma: no cover - upstream exceptions vary by provider
-            raise ExternalServiceError(f"LLM request failed: {exc}") from exc
-
-        return self._extract_text(response)
+        raise ExternalServiceError(f"LLM request failed across all providers. {' | '.join(errors[:3])}")
 
     async def generate_json(
         self,
@@ -110,57 +156,92 @@ class LLMClient:
         )
         return self._extract_json_object(raw_text)
 
-    def _validate_config(self) -> None:
-        provider = self.settings.llm_provider.lower()
-        if not self.settings.llm_model:
+    async def _generate_messages_with_provider(
+        self,
+        *,
+        settings: Settings,
+        provider: LLMProviderSettings,
+        messages: list[dict[str, Any]],
+        max_tokens: int | None,
+        temperature: float | None,
+        timeout_seconds: int | None,
+    ) -> str:
+        self._validate_provider_config(settings, provider)
+        kwargs = self._build_completion_kwargs(
+            settings=settings,
+            provider=provider,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            response = await acompletion(messages=messages, **kwargs)
+        except Exception as exc:  # pragma: no cover - upstream exceptions vary by provider
+            raise ExternalServiceError(f"LLM request failed via {provider.name}: {exc}") from exc
+        return self._extract_text(response)
+
+    def _validate_provider_config(self, settings: Settings, provider: LLMProviderSettings) -> None:
+        provider_name = provider.provider.lower()
+        if provider_name not in {"ollama", "openai", "anthropic"}:
+            raise ClientConfigError(f"Unsupported LLM provider '{provider.provider}'.")
+        if not provider.model:
             raise ClientConfigError("LLM_MODEL is not configured.")
 
-        if provider == "ollama" and not self.settings.ollama_api_base:
-            raise ClientConfigError("OLLAMA_API_BASE is required when LLM_PROVIDER=ollama.")
-        if provider == "openai" and not self.settings.openai_api_key:
-            raise ClientConfigError("OPENAI_API_KEY is required when LLM_PROVIDER=openai.")
-        if provider == "anthropic" and not self.settings.anthropic_api_key:
-            raise ClientConfigError("ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic.")
+        if provider_name == "ollama" and not self._provider_api_base(settings, provider):
+            raise ClientConfigError("OLLAMA_API_BASE is required when provider=ollama.")
+        if provider_name == "openai" and not self._provider_api_key(settings, provider):
+            raise ClientConfigError("OPENAI_API_KEY is required when provider=openai.")
+        if provider_name == "anthropic" and not self._provider_api_key(settings, provider):
+            raise ClientConfigError("ANTHROPIC_API_KEY is required when provider=anthropic.")
 
     def _build_completion_kwargs(
         self,
         *,
+        settings: Settings | None = None,
+        provider: LLMProviderSettings | None = None,
         max_tokens: int | None,
         temperature: float | None,
         timeout_seconds: int | None,
     ) -> dict[str, Any]:
-        provider = self.settings.llm_provider.lower()
+        if settings is None:
+            settings = self._current_settings()
+        if provider is None:
+            provider = settings.primary_llm_provider or settings.legacy_llm_provider
+        if provider is None:
+            raise ClientConfigError("No LLM providers are configured.")
+        provider_name = provider.provider.lower()
         kwargs: dict[str, Any] = {
-            "model": self._resolve_model_name(),
-            "timeout": timeout_seconds or self.settings.effective_llm_timeout_seconds,
-            "max_tokens": max_tokens or self.settings.llm_max_output_tokens,
-            "temperature": self.settings.llm_temperature if temperature is None else temperature,
+            "model": self._resolve_model_name(provider),
+            "timeout": timeout_seconds or self._effective_timeout_seconds(settings, provider),
+            "max_tokens": max_tokens or settings.llm_max_output_tokens,
+            "temperature": settings.llm_temperature if temperature is None else temperature,
         }
 
-        if provider == "ollama":
-            kwargs["api_base"] = self.settings.ollama_api_base
-        elif provider == "openai":
-            kwargs["api_key"] = self.settings.openai_api_key
-            if self.settings.openai_api_base:
-                kwargs["api_base"] = self.settings.openai_api_base
-        elif provider == "anthropic":
-            kwargs["api_key"] = self.settings.anthropic_api_key
-            if self.settings.anthropic_api_base:
-                kwargs["api_base"] = self.settings.anthropic_api_base
+        api_base = self._provider_api_base(settings, provider)
+        api_key = self._provider_api_key(settings, provider)
+        if provider_name == "ollama":
+            kwargs["api_base"] = api_base
+        elif provider_name in {"openai", "anthropic"}:
+            kwargs["api_key"] = api_key
+            if api_base:
+                kwargs["api_base"] = api_base
 
         return kwargs
 
-    def _resolve_model_name(self) -> str:
-        provider = self.settings.llm_provider.lower()
-        model = self.settings.llm_model.strip()
-        if provider == "ollama" and "/" not in model:
+    def _resolve_model_name(self, provider: LLMProviderSettings) -> str:
+        provider_name = provider.provider.lower()
+        model = provider.model.strip()
+        if provider_name == "ollama" and "/" not in model:
             return f"ollama/{model}"
         return model
 
-    async def _ping_ollama(self) -> dict[str, Any]:
+    async def _ping_ollama(self, settings: Settings, provider: LLMProviderSettings) -> dict[str, Any]:
+        api_base = self._provider_api_base(settings, provider)
+        if not api_base:
+            raise ClientConfigError("OLLAMA_API_BASE is required when provider=ollama.")
         async with httpx.AsyncClient(
-            timeout=min(self.settings.effective_llm_timeout_seconds, 8),
-            base_url=self.settings.ollama_api_base.rstrip("/"),
+            timeout=min(self._effective_timeout_seconds(settings, provider), 8),
+            base_url=api_base.rstrip("/"),
         ) as client:
             try:
                 response = await client.get("/api/tags")
@@ -173,6 +254,34 @@ class LLMClient:
                 raise ExternalServiceError(f"Ollama request failed: {exc}") from exc
 
         return response.json()
+
+    @staticmethod
+    def _provider_api_key(settings: Settings, provider: LLMProviderSettings) -> str | None:
+        if provider.api_key:
+            return provider.api_key
+        provider_name = provider.provider.lower()
+        if provider_name == "openai":
+            return settings.openai_api_key
+        if provider_name == "anthropic":
+            return settings.anthropic_api_key
+        return None
+
+    @staticmethod
+    def _provider_api_base(settings: Settings, provider: LLMProviderSettings) -> str | None:
+        if provider.api_base:
+            return provider.api_base
+        provider_name = provider.provider.lower()
+        if provider_name == "ollama":
+            return settings.ollama_api_base
+        if provider_name == "openai":
+            return settings.openai_api_base
+        if provider_name == "anthropic":
+            return settings.anthropic_api_base
+        return None
+
+    @staticmethod
+    def _effective_timeout_seconds(settings: Settings, provider: LLMProviderSettings) -> int:
+        return settings.resolve_llm_timeout(provider.provider, provider.timeout_seconds)
 
     @staticmethod
     def _extract_text(response: Any) -> str:

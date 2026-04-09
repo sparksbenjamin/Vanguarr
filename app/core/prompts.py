@@ -6,7 +6,7 @@ from typing import Any
 
 PROFILE_ENRICHMENT_SYSTEM_PROMPT = """You are Vanguarr's profile enrichment assistant.
 
-The core viewing profile has already been built in code from actual Jellyfin history.
+The core viewing profile has already been built in code from actual media-server history.
 Your only job is to suggest a few adjacent discovery lanes that are close to the user's proven tastes.
 
 Rules:
