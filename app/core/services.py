@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections import Counter
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.jellyfin import JellyfinClient
 from app.api.llm import LLMClient
 from app.api.seer import SeerClient
+from app.api.tmdb import TMDbClient
 from app.core.models import DecisionLog, RequestedMedia, TaskRun
 from app.core.prompts import (
     build_decision_messages,
@@ -91,7 +93,7 @@ class ProfileStore:
     def _normalize_payload(self, username: str, payload: dict[str, Any]) -> dict[str, Any]:
         normalized = self.default_payload(username)
         normalized.update(payload)
-        normalized["profile_version"] = str(normalized.get("profile_version") or "v4")
+        normalized["profile_version"] = str(normalized.get("profile_version") or "v5")
         normalized["username"] = username
         summary = str(normalized.get("summary_block") or "").strip()
         normalized["summary_block"] = summary or self.default_block(username)
@@ -130,6 +132,10 @@ class ProfileStore:
             },
             "profile_exclusions": [],
             "operator_notes": "",
+            "top_keywords": [],
+            "favorite_people": [],
+            "preferred_brands": [],
+            "favorite_collections": [],
             "summary_block": cls.default_block(username),
         }
 
@@ -173,12 +179,14 @@ class VanguarrService:
         settings: Settings,
         jellyfin: JellyfinClient,
         seer: SeerClient,
+        tmdb: TMDbClient,
         llm: LLMClient,
         session_factory: sessionmaker[Session],
     ) -> None:
         self.settings = settings
         self.jellyfin = jellyfin
         self.seer = seer
+        self.tmdb = tmdb
         self.llm = llm
         self.session_factory = session_factory
         self.profile_store = ProfileStore(settings.profiles_dir)
@@ -232,6 +240,76 @@ class VanguarrService:
             stmt = select(TaskRun).order_by(desc(TaskRun.started_at)).limit(limit)
             return list(session.scalars(stmt))
 
+    def get_recent_requests(self, limit: int = 8) -> list[RequestedMedia]:
+        with self.session_scope() as session:
+            stmt = select(RequestedMedia).order_by(desc(RequestedMedia.created_at)).limit(limit)
+            return list(session.scalars(stmt))
+
+    def get_profile_cards(self, limit: int = 6) -> list[dict[str, Any]]:
+        cards: list[dict[str, Any]] = []
+        for username in self.list_profiles()[:limit]:
+            payload = self.profile_store.read_payload(username)
+            top_titles = [
+                str(item.get("title") or "").strip()
+                for item in payload.get("top_titles", [])[:2]
+                if isinstance(item, dict) and str(item.get("title") or "").strip()
+            ]
+            recent_titles = [
+                str(item.get("title") or "").strip()
+                for item in payload.get("recent_momentum", [])[:2]
+                if isinstance(item, dict) and str(item.get("title") or "").strip()
+            ]
+            cards.append(
+                {
+                    "username": username,
+                    "profile_state": str(payload.get("profile_state") or "default"),
+                    "history_count": int(payload.get("history_count") or 0),
+                    "primary_genres": self._normalize_string_list(payload.get("primary_genres", []), limit=3),
+                    "adjacent_genres": self._normalize_string_list(payload.get("adjacent_genres", []), limit=2),
+                    "favorite_people": self._normalize_string_list(payload.get("favorite_people", []), limit=2),
+                    "top_titles": top_titles,
+                    "recent_titles": recent_titles,
+                    "format_preference": str((payload.get("format_preference") or {}).get("preferred") or "balanced"),
+                }
+            )
+        return cards
+
+    def get_dashboard_snapshot(self) -> dict[str, Any]:
+        now = datetime.utcnow()
+        week_ago = now - timedelta(days=7)
+        with self.session_scope() as session:
+            total_requests = int(session.scalar(select(func.count(RequestedMedia.id))) or 0)
+            total_decisions = int(session.scalar(select(func.count(DecisionLog.id))) or 0)
+            request_users = int(session.scalar(select(func.count(func.distinct(RequestedMedia.username)))) or 0)
+            requests_last_7d = int(
+                session.scalar(
+                    select(func.count(RequestedMedia.id)).where(RequestedMedia.created_at >= week_ago)
+                )
+                or 0
+            )
+            last_request_at = session.scalar(select(func.max(RequestedMedia.created_at)))
+            last_decision_at = session.scalar(select(func.max(DecisionLog.created_at)))
+            request_failures = int(
+                session.scalar(select(func.count(DecisionLog.id)).where(DecisionLog.error.is_not(None))) or 0
+            )
+
+        profiles = self.list_profiles()
+        request_rate = round((total_requests / total_decisions) * 100, 1) if total_decisions else 0.0
+
+        return {
+            "tracked_profiles": len(profiles),
+            "total_requests": total_requests,
+            "total_decisions": total_decisions,
+            "request_rate": request_rate,
+            "request_users": request_users,
+            "requests_last_7d": requests_last_7d,
+            "request_failures": request_failures,
+            "last_request_at": last_request_at,
+            "last_decision_at": last_decision_at,
+            "recent_requests": self.get_recent_requests(limit=6),
+            "profile_cards": self.get_profile_cards(limit=6),
+        }
+
     async def run_profile_architect(self, username: str | None = None) -> dict[str, Any]:
         logger.info("Profile Architect started for target=%s", username or "all-users")
         with self.session_scope() as session:
@@ -254,6 +332,15 @@ class VanguarrService:
                         history,
                         top_limit=self.settings.profile_architect_top_titles_limit,
                         recent_limit=self.settings.profile_architect_recent_momentum_limit,
+                    )
+                    recommendation_seeds = self._build_recommendation_seed_pool(
+                        history,
+                        profile_summary=compact_history,
+                        limit=self.settings.recommendation_seed_limit,
+                    )
+                    compact_history = await self._enrich_profile_summary_with_tmdb(
+                        compact_history,
+                        recommendation_seeds=recommendation_seeds,
                     )
                     enrichment = await self._suggest_profile_enrichment(
                         current_username,
@@ -327,6 +414,15 @@ class VanguarrService:
                         recent_limit=self.settings.profile_architect_recent_momentum_limit,
                     )
                     stored_profile = self.profile_store.read_payload(current_username)
+                    recommendation_seeds = self._build_recommendation_seed_pool(
+                        history,
+                        profile_summary=history_summary,
+                        limit=self.settings.recommendation_seed_limit,
+                    )
+                    history_summary = await self._enrich_profile_summary_with_tmdb(
+                        history_summary,
+                        recommendation_seeds=recommendation_seeds,
+                    )
                     profile_payload = self._build_profile_payload(
                         current_username,
                         history_summary,
@@ -341,11 +437,6 @@ class VanguarrService:
                     ) > 0:
                         self.profile_store.write_payload(current_username, profile_payload)
 
-                    recommendation_seeds = self._build_recommendation_seed_pool(
-                        history,
-                        profile_summary=profile_payload,
-                        limit=self.settings.recommendation_seed_limit,
-                    )
                     viewing_history = self._build_viewing_history_context(
                         history,
                         recommendation_seeds=recommendation_seeds,
@@ -386,6 +477,15 @@ class VanguarrService:
                             continue
 
                         filtered_candidates.append(candidate)
+
+                    filtered_candidates = await self._enrich_candidate_pool_with_tmdb(
+                        filtered_candidates,
+                        limit=self.settings.tmdb_candidate_enrichment_limit,
+                    )
+                    filtered_candidates = self._rank_candidate_pool(
+                        filtered_candidates,
+                        profile_summary=profile_payload,
+                    )
 
                     candidates = self._diversify_candidates(
                         filtered_candidates,
@@ -917,6 +1017,10 @@ class VanguarrService:
             "adjacent_genres": summary.get("adjacent_genres", []),
             "adjacent_themes": summary.get("adjacent_themes", []),
             "seed_lanes": summary.get("seed_lanes", []),
+            "top_keywords": summary.get("top_keywords", [])[:8],
+            "favorite_people": summary.get("favorite_people", [])[:6],
+            "preferred_brands": summary.get("preferred_brands", [])[:6],
+            "favorite_collections": summary.get("favorite_collections", [])[:4],
             "recent_plays": recent_plays,
         }
 
@@ -979,11 +1083,28 @@ class VanguarrService:
             profile_summary.get("adjacent_genres", []),
         )[:6]
         source_lanes = cls._normalize_string_list(candidate.get("source_lanes", []), limit=6)
+        tmdb_details = candidate.get("tmdb_details", {}) if isinstance(candidate.get("tmdb_details"), dict) else {}
+        candidate_keywords = cls._normalize_string_list(tmdb_details.get("keywords", []), limit=10)
+        candidate_people = cls._normalize_string_list(tmdb_details.get("featured_people", []), limit=8)
+        candidate_brands = cls._normalize_string_list(tmdb_details.get("brands", []), limit=6)
+        candidate_collection = str(tmdb_details.get("collection_name") or "").strip()
+        profile_keywords = cls._normalize_string_list(profile_summary.get("top_keywords", []), limit=8)
+        profile_people = cls._normalize_string_list(profile_summary.get("favorite_people", []), limit=6)
+        profile_brands = cls._normalize_string_list(profile_summary.get("preferred_brands", []), limit=6)
+        profile_collections = cls._normalize_string_list(profile_summary.get("favorite_collections", []), limit=4)
+        profile_theme_hints = cls._normalize_string_list(profile_summary.get("adjacent_themes", []), limit=4)
 
         matched_primary = cls._intersect_strings(candidate_genres, primary_genres)
         matched_secondary = cls._intersect_strings(candidate_genres, secondary_genres)
         matched_recent = cls._intersect_strings(candidate_genres, recent_genres)
         matched_discovery = cls._intersect_strings(candidate_genres, discovery_lanes)
+        matched_keywords = cls._intersect_strings(candidate_keywords, profile_keywords)
+        matched_people = cls._intersect_strings(candidate_people, profile_people)
+        matched_brands = cls._intersect_strings(candidate_brands, profile_brands)
+        theme_matches = cls._match_theme_hints(candidate_keywords, profile_theme_hints)
+        collection_match = candidate_collection if candidate_collection and candidate_collection.lower() in {
+            value.lower() for value in profile_collections
+        } else None
 
         source_titles = cls._extract_source_titles(candidate.get("sources", []))
         top_titles = {str(item.get("title") or "").strip().lower() for item in profile_summary.get("top_titles", [])}
@@ -1032,8 +1153,18 @@ class VanguarrService:
             candidate_genres=candidate_genres,
             explicit_feedback=profile_summary.get("explicit_feedback", {}),
         )
+        score_breakdown["tmdb_themes"] = cls._score_tmdb_theme_affinity(
+            matched_keywords=matched_keywords,
+            theme_matches=theme_matches,
+        )
+        score_breakdown["tmdb_people"] = cls._score_tmdb_people_affinity(matched_people)
+        score_breakdown["tmdb_brands"] = cls._score_tmdb_brand_affinity(
+            matched_brands=matched_brands,
+            collection_match=collection_match,
+        )
+        score_breakdown["tmdb_guardrails"] = cls._score_tmdb_guardrails(tmdb_details)
 
-        deterministic_score = round(min(1.0, sum(score_breakdown.values())), 3)
+        deterministic_score = round(max(0.0, min(1.0, sum(score_breakdown.values()))), 3)
         lane_tags = cls._derive_lane_tags(
             sources=candidate.get("sources", []),
             source_lanes=source_lanes,
@@ -1049,6 +1180,11 @@ class VanguarrService:
             "matched_secondary_genres": matched_secondary,
             "matched_recent_genres": matched_recent,
             "matched_discovery_lanes": matched_discovery,
+            "matched_keywords": matched_keywords,
+            "theme_matches": theme_matches,
+            "matched_people": matched_people,
+            "matched_brands": matched_brands,
+            "collection_match": collection_match,
             "source_titles": source_titles,
             "source_lanes": source_lanes,
             "recommended_source_titles": recommended_source_titles,
@@ -1063,6 +1199,11 @@ class VanguarrService:
                 matched_primary=matched_primary,
                 matched_recent=matched_recent,
                 matched_discovery=matched_discovery,
+                matched_keywords=matched_keywords,
+                theme_matches=theme_matches,
+                matched_people=matched_people,
+                matched_brands=matched_brands,
+                collection_match=collection_match,
                 source_titles=source_titles,
                 lane_tags=lane_tags,
                 freshness_fit=freshness_fit,
@@ -1148,7 +1289,10 @@ class VanguarrService:
             f"genres {float(breakdown.get('genre_affinity', 0.0)):.2f}, "
             f"format {float(breakdown.get('format_fit', 0.0)):.2f}, "
             f"freshness {float(breakdown.get('freshness_fit', 0.0)):.2f}, "
-            f"quality {float(breakdown.get('quality', 0.0)):.2f}."
+            f"quality {float(breakdown.get('quality', 0.0)):.2f}, "
+            f"themes {float(breakdown.get('tmdb_themes', 0.0)):.2f}, "
+            f"people {float(breakdown.get('tmdb_people', 0.0)):.2f}, "
+            f"brands {float(breakdown.get('tmdb_brands', 0.0)):.2f}."
         )
         if llm_vote == "UNAVAILABLE":
             return reasoning + " LLM unavailable, so the final decision used the deterministic ranker only."
@@ -1196,6 +1340,125 @@ class VanguarrService:
             "adjacent_themes": self._merge_unique_strings([], adjacent_themes)[:2],
         }
 
+    async def _enrich_profile_summary_with_tmdb(
+        self,
+        history_summary: dict[str, Any],
+        *,
+        recommendation_seeds: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        summary = dict(history_summary)
+        summary.setdefault("top_keywords", [])
+        summary.setdefault("favorite_people", [])
+        summary.setdefault("preferred_brands", [])
+        summary.setdefault("favorite_collections", [])
+
+        if not self.tmdb.enabled or not recommendation_seeds:
+            return summary
+
+        enriched_seeds = await self._enrich_items_with_tmdb(
+            recommendation_seeds,
+            limit=min(self.settings.tmdb_seed_enrichment_limit, len(recommendation_seeds)),
+        )
+
+        keyword_scores: Counter[str] = Counter()
+        people_scores: Counter[str] = Counter()
+        brand_scores: Counter[str] = Counter()
+        collection_scores: Counter[str] = Counter()
+
+        for seed in enriched_seeds:
+            details = seed.get("tmdb_details", {})
+            if not isinstance(details, dict) or not details:
+                continue
+
+            weight = 1.0 + min(2.5, float(seed.get("play_count") or 0) * 0.45)
+            seed_lanes = {str(lane).strip().lower() for lane in seed.get("seed_lanes", [])}
+            if "repeat_watch_seed" in seed_lanes:
+                weight += 0.5
+            if "recent_seed" in seed_lanes:
+                weight += 0.25
+            if "genre_anchor_seed" in seed_lanes:
+                weight += 0.2
+
+            for keyword in self._normalize_string_list(details.get("keywords", []), limit=10):
+                keyword_scores[keyword] += weight
+            for person in self._normalize_string_list(details.get("featured_people", []), limit=8):
+                people_scores[person] += weight
+            for brand in self._normalize_string_list(details.get("brands", []), limit=6):
+                brand_scores[brand] += weight * 0.7
+
+            collection_name = str(details.get("collection_name") or "").strip()
+            if collection_name:
+                collection_scores[collection_name] += weight
+
+        summary["top_keywords"] = self._rank_counter(keyword_scores, limit=8)
+        summary["favorite_people"] = self._rank_counter(people_scores, limit=6)
+        summary["preferred_brands"] = self._rank_counter(brand_scores, limit=6)
+        summary["favorite_collections"] = self._rank_counter(collection_scores, limit=4)
+        return summary
+
+    async def _enrich_candidate_pool_with_tmdb(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if not self.tmdb.enabled or limit <= 0 or not candidates:
+            return candidates
+        return await self._enrich_items_with_tmdb(candidates, limit=min(limit, len(candidates)))
+
+    async def _enrich_items_with_tmdb(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if not self.tmdb.enabled or limit <= 0 or not items:
+            return items
+
+        enriched = [dict(item) for item in items]
+        targets: list[tuple[int, str, int]] = []
+        for index, item in enumerate(enriched[:limit]):
+            media_type = str(item.get("media_type") or "").strip()
+            media_id = item.get("media_id")
+            if media_type not in {"movie", "tv"} or media_id is None:
+                continue
+            if isinstance(item.get("tmdb_details"), dict) and item.get("tmdb_details"):
+                continue
+            targets.append((index, media_type, int(media_id)))
+
+        if not targets:
+            return enriched
+
+        semaphore = asyncio.Semaphore(6)
+
+        async def fetch_details(media_type: str, media_id: int) -> dict[str, Any]:
+            async with semaphore:
+                return await self.tmdb.get_details(media_type, media_id)
+
+        results = await asyncio.gather(
+            *(fetch_details(media_type, media_id) for _index, media_type, media_id in targets),
+            return_exceptions=True,
+        )
+
+        for (index, media_type, media_id), result in zip(targets, results):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "TMDb enrichment skipped media_type=%s media_id=%s reason=%s",
+                    media_type,
+                    media_id,
+                    result,
+                )
+                continue
+            if result:
+                enriched[index]["tmdb_details"] = result
+
+        return enriched
+
+    @staticmethod
+    def _rank_counter(counter: Counter[str], *, limit: int) -> list[str]:
+        ranked = sorted(counter.items(), key=lambda item: (-float(item[1]), item[0].lower()))
+        return [name for name, _score in ranked[:limit]]
+
     @classmethod
     def _build_profile_payload(
         cls,
@@ -1222,6 +1485,10 @@ class VanguarrService:
         payload["recent_genres"] = cls._normalize_string_list(payload.get("recent_genres", []), limit=4)
         payload["ranked_genres"] = cls._normalize_ranked_genres(payload.get("ranked_genres", []), limit=8)
         payload["discovery_lanes"] = cls._normalize_string_list(payload.get("discovery_lanes", []), limit=4)
+        payload["top_keywords"] = cls._normalize_string_list(payload.get("top_keywords", []), limit=8)
+        payload["favorite_people"] = cls._normalize_string_list(payload.get("favorite_people", []), limit=6)
+        payload["preferred_brands"] = cls._normalize_string_list(payload.get("preferred_brands", []), limit=6)
+        payload["favorite_collections"] = cls._normalize_string_list(payload.get("favorite_collections", []), limit=4)
         payload["adjacent_genres"] = cls._merge_unique_strings(
             cls._normalize_string_list(existing.get("adjacent_genres", []), limit=4),
             (enrichment or {}).get("adjacent_genres", []),
@@ -1267,6 +1534,13 @@ class VanguarrService:
         normalized["recent_genres"] = cls._normalize_string_list(normalized.get("recent_genres", []), limit=4)
         normalized["ranked_genres"] = cls._normalize_ranked_genres(normalized.get("ranked_genres", []), limit=8)
         normalized["discovery_lanes"] = cls._normalize_string_list(normalized.get("discovery_lanes", []), limit=4)
+        normalized["top_keywords"] = cls._normalize_string_list(normalized.get("top_keywords", []), limit=8)
+        normalized["favorite_people"] = cls._normalize_string_list(normalized.get("favorite_people", []), limit=6)
+        normalized["preferred_brands"] = cls._normalize_string_list(normalized.get("preferred_brands", []), limit=6)
+        normalized["favorite_collections"] = cls._normalize_string_list(
+            normalized.get("favorite_collections", []),
+            limit=4,
+        )
         normalized["adjacent_genres"] = cls._normalize_string_list(normalized.get("adjacent_genres", []), limit=4)
         normalized["adjacent_themes"] = cls._normalize_string_list(normalized.get("adjacent_themes", []), limit=3)
         normalized["seed_lanes"] = cls._normalize_string_list(normalized.get("seed_lanes", []), limit=8)
@@ -1505,6 +1779,7 @@ class VanguarrService:
         format_preference = history_summary.get("format_preference", {})
         release_year_preference = history_summary.get("release_year_preference", {})
         top_titles = history_summary.get("top_titles", [])
+        favorite_collections = history_summary.get("favorite_collections", [])
         history_count = int(history_summary.get("history_count") or 0)
         unique_titles = int(history_summary.get("unique_titles") or 0)
         preferred = str(format_preference.get("preferred") or "balanced")
@@ -1546,6 +1821,8 @@ class VanguarrService:
 
         if top_titles:
             lines.append(f"Anchor titles: {cls._format_title_entries(top_titles[:3])}.")
+        if favorite_collections:
+            lines.append(f"Recurring franchise pull: {cls._human_join(favorite_collections[:2])}.")
 
         return lines
 
@@ -1579,6 +1856,9 @@ class VanguarrService:
         explicit_feedback = history_summary.get("explicit_feedback", {})
         liked_titles = cls._normalize_string_list(explicit_feedback.get("liked_titles", []), limit=2)
         liked_genres = cls._normalize_string_list(explicit_feedback.get("liked_genres", []), limit=3)
+        top_keywords = cls._normalize_string_list(history_summary.get("top_keywords", []), limit=4)
+        favorite_people = cls._normalize_string_list(history_summary.get("favorite_people", []), limit=3)
+        preferred_brands = cls._normalize_string_list(history_summary.get("preferred_brands", []), limit=3)
 
         average_top_rating = history_summary.get("average_top_rating")
         if average_top_rating is not None:
@@ -1593,6 +1873,13 @@ class VanguarrService:
             lines.append("Genre profile is balanced between a stable core and a smaller amount of exploration.")
         else:
             lines.append("Genre profile is broad enough to support adjacent discovery when tone and format still line up.")
+
+        if top_keywords:
+            lines.append(f"TMDb theme signals repeat around {cls._human_join(top_keywords)}.")
+        if favorite_people:
+            lines.append(f"Recurring talent signals show up around {cls._human_join(favorite_people)}.")
+        if preferred_brands:
+            lines.append(f"Brand or network gravity leans toward {cls._human_join(preferred_brands)}.")
 
         if liked_titles or liked_genres:
             feedback_parts: list[str] = []
@@ -1668,6 +1955,8 @@ class VanguarrService:
         format_preference = history_summary.get("format_preference", {})
         release_year_preference = history_summary.get("release_year_preference", {})
         operator_notes = str(history_summary.get("operator_notes") or "").strip()
+        top_keywords = cls._normalize_string_list(history_summary.get("top_keywords", []), limit=3)
+        favorite_people = cls._normalize_string_list(history_summary.get("favorite_people", []), limit=2)
         preferred = str(format_preference.get("preferred") or "balanced")
         lines: list[str] = []
 
@@ -1688,6 +1977,10 @@ class VanguarrService:
             lines.append("Prefer newer releases when the genre and source affinity are already there.")
         elif release_bias == "catalog":
             lines.append("Do not underrate older catalog titles if they fit the core genre stack.")
+
+        if top_keywords or favorite_people:
+            detail = cls._human_join(top_keywords) if top_keywords else cls._human_join(favorite_people)
+            lines.append(f"Use TMDb metadata to break ties when candidates line up on {detail}.")
 
         if adjacent_genres or adjacent_themes:
             extension = cls._human_join(adjacent_genres) if adjacent_genres else cls._human_join(adjacent_themes)
@@ -2031,6 +2324,60 @@ class VanguarrService:
         return max(-0.12, min(0.12, score))
 
     @staticmethod
+    def _match_theme_hints(candidate_keywords: list[str], theme_hints: list[str]) -> list[str]:
+        matches: list[str] = []
+        for hint in theme_hints:
+            normalized_hint = hint.strip().lower()
+            if not normalized_hint:
+                continue
+            for keyword in candidate_keywords:
+                lowered_keyword = keyword.lower()
+                if normalized_hint in lowered_keyword or lowered_keyword in normalized_hint:
+                    matches.append(hint)
+                    break
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for value in matches:
+            lowered = value.lower()
+            if lowered in seen:
+                continue
+            deduped.append(value)
+            seen.add(lowered)
+        return deduped
+
+    @staticmethod
+    def _score_tmdb_theme_affinity(
+        *,
+        matched_keywords: list[str],
+        theme_matches: list[str],
+    ) -> float:
+        score = 0.0
+        score += min(0.08, 0.03 * len(matched_keywords))
+        score += min(0.04, 0.02 * len(theme_matches))
+        return min(0.1, score)
+
+    @staticmethod
+    def _score_tmdb_people_affinity(matched_people: list[str]) -> float:
+        return min(0.08, 0.03 * len(matched_people))
+
+    @staticmethod
+    def _score_tmdb_brand_affinity(
+        *,
+        matched_brands: list[str],
+        collection_match: str | None,
+    ) -> float:
+        score = min(0.05, 0.025 * len(matched_brands))
+        if collection_match:
+            score += 0.04
+        return min(0.08, score)
+
+    @staticmethod
+    def _score_tmdb_guardrails(tmdb_details: dict[str, Any]) -> float:
+        if bool(tmdb_details.get("adult")):
+            return -0.12
+        return 0.0
+
+    @staticmethod
     def _derive_lane_tags(
         *,
         sources: list[Any],
@@ -2082,6 +2429,11 @@ class VanguarrService:
         matched_primary: list[str],
         matched_recent: list[str],
         matched_discovery: list[str],
+        matched_keywords: list[str],
+        theme_matches: list[str],
+        matched_people: list[str],
+        matched_brands: list[str],
+        collection_match: str | None,
         source_titles: list[str],
         lane_tags: list[str],
         freshness_fit: str,
@@ -2095,6 +2447,15 @@ class VanguarrService:
             parts.append(f"Aligns with recent momentum in {cls._human_join(matched_recent[:2])}.")
         if matched_discovery:
             parts.append(f"Supports controlled exploration into {cls._human_join(matched_discovery[:2])}.")
+        if matched_keywords or theme_matches:
+            keyword_parts = matched_keywords[:2] or theme_matches[:2]
+            parts.append(f"TMDb theme overlap: {cls._human_join(keyword_parts)}.")
+        if matched_people:
+            parts.append(f"Recurring talent match: {cls._human_join(matched_people[:2])}.")
+        if matched_brands:
+            parts.append(f"Brand or network overlap: {cls._human_join(matched_brands[:2])}.")
+        if collection_match:
+            parts.append(f"Franchise overlap via {collection_match}.")
         if freshness_fit not in {"unknown", "balanced"}:
             parts.append(f"Release fit: {freshness_fit}.")
         if not parts:

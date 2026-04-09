@@ -36,6 +36,7 @@ Evaluation guidance:
 - Treat the profile manifest JSON as the canonical persisted taste model.
 - Use the summary block as a compact human-readable view of enduring taste, not as a substitute for the history evidence.
 - Treat the code-derived recommendation features as a strong prior; only push against them when there is a clear mismatch.
+- Treat TMDb enrichment metadata as a secondary evidence layer that can sharpen theme, franchise, and talent matches.
 - A strong match should connect to specific profile signals, not vague popularity.
 - Respect explicit exclusions first.
 - Be skeptical of weak genre overlap without thematic or tonal alignment.
@@ -98,6 +99,7 @@ def build_decision_messages(
         "release_date": candidate.get("release_date"),
         "sources": candidate.get("sources"),
         "media_info": candidate.get("media_info"),
+        "tmdb_details": candidate.get("tmdb_details"),
         "recommendation_features": candidate.get("recommendation_features"),
     }
     constraints_blob = json.dumps(global_exclusions, ensure_ascii=True)

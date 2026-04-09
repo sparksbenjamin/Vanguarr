@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from app.api.jellyfin import JellyfinClient
 from app.api.llm import LLMClient
 from app.api.seer import SeerClient
+from app.api.tmdb import TMDbClient
 from app.core.db import SessionLocal, init_db
 from app.core.health import HealthMonitor
 from app.core.logging import setup_logging
@@ -41,11 +42,13 @@ async def lifespan(app: FastAPI):
     init_db()
     jellyfin = JellyfinClient(settings)
     seer = SeerClient(settings)
+    tmdb = TMDbClient(settings)
     llm = LLMClient(settings)
     service = VanguarrService(
         settings=settings,
         jellyfin=jellyfin,
         seer=seer,
+        tmdb=tmdb,
         llm=llm,
         session_factory=SessionLocal,
     )
@@ -54,11 +57,13 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.jellyfin = jellyfin
     app.state.seer = seer
+    app.state.tmdb = tmdb
     app.state.llm = llm
     app.state.vanguarr = service
     app.state.health_monitor = HealthMonitor(
         jellyfin=jellyfin,
         seer=seer,
+        tmdb=tmdb,
         llm=llm,
         ttl_seconds=settings.health_cache_seconds,
     )
@@ -81,6 +86,13 @@ app = FastAPI(
 async def root(request: Request) -> HTMLResponse:
     service: VanguarrService = request.app.state.vanguarr
     health = await request.app.state.health_monitor.snapshot()
+    dashboard = service.get_dashboard_snapshot()
+    jellyfin_meta = health.get("services", {}).get("jellyfin", {}).get("meta", {})
+    tmdb_meta = health.get("services", {}).get("tmdb", {}).get("meta", {})
+    llm_meta = health.get("services", {}).get("llm", {}).get("meta", {})
+    dashboard["connected_users"] = int(jellyfin_meta.get("users") or 0) if isinstance(jellyfin_meta, dict) else 0
+    dashboard["tmdb_enabled"] = bool(tmdb_meta.get("enabled")) if isinstance(tmdb_meta, dict) else False
+    dashboard["llm_provider"] = str(llm_meta.get("provider") or settings.llm_provider)
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -89,6 +101,7 @@ async def root(request: Request) -> HTMLResponse:
             "page_title": "Vanguarr Dashboard",
             "toast": request.query_params.get("toast"),
             "health": health,
+            "dashboard": dashboard,
             "recent_logs": service.get_logs(limit=8),
             "task_runs": service.get_task_runs(limit=6),
             "profiles": service.list_profiles(),

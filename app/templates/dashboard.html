@@ -1,30 +1,61 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="space-y-5">
-  <section class="surface page-hero rounded-[1.6rem] px-5 py-5 lg:px-6">
-    <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-      <div class="max-w-3xl">
-        <p class="panel-kicker">System Overview</p>
-        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Dashboard</h1>
-        <p class="mt-3 text-sm leading-6 text-[var(--text-soft)] sm:text-[0.96rem]">
-          Watch the upstream connections, launch the two engine passes, and inspect the latest request decisions without bouncing between pages.
-        </p>
-      </div>
-      <div class="flex flex-wrap gap-3">
-        <a class="button button-ghost" href="/logs">Open War Room</a>
-        <a class="button button-primary" href="/manifest">Open Profiles</a>
-      </div>
-    </div>
+{% set jellyfin_users = dashboard.connected_users %}
+{% set tmdb_enabled = dashboard.tmdb_enabled %}
+{% set llm_provider = dashboard.llm_provider %}
+<section class="space-y-6">
+  <section class="surface page-hero rounded-[1.8rem] px-5 py-6 lg:px-7">
+    <div class="grid gap-6 xl:grid-cols-[1.2fr_0.8fr] xl:items-stretch">
+      <div class="flex flex-col justify-between gap-6">
+        <div>
+          <p class="panel-kicker">Control Room</p>
+          <h1 class="mt-3 max-w-3xl text-3xl font-semibold tracking-tight sm:text-[2.5rem]">A cleaner dashboard for what Vanguarr is doing, requesting, and learning.</h1>
+          <p class="mt-4 max-w-3xl text-sm leading-7 text-[var(--text-soft)] sm:text-[0.98rem]">
+            Keep the system health board, but surface the operating story too: how many users are connected, what Vanguarr has requested lately, and the profile signals it is currently steering from.
+          </p>
+        </div>
 
-    <div class="mt-5 flex flex-wrap gap-2 text-xs text-[var(--text-soft)]">
-      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Health polling every {{ settings.health_cache_seconds }}s</span>
-      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Request threshold {{ "%.2f"|format(settings.request_threshold) }}</span>
-      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Mounted runtime data under ./data</span>
+        <div class="flex flex-wrap gap-2">
+          <span class="signal-chip">Health polling every {{ settings.health_cache_seconds }}s</span>
+          <span class="signal-chip">Threshold {{ "%.2f"|format(settings.request_threshold) }}</span>
+          <span class="signal-chip">LLM {{ llm_provider }}</span>
+          <span class="signal-chip">{{ "TMDb enrichment on" if tmdb_enabled else "TMDb enrichment off" }}</span>
+          <span class="signal-chip">{{ "Scheduler enabled" if settings.scheduler_enabled else "Scheduler paused" }}</span>
+        </div>
+
+        <div class="flex flex-wrap gap-3">
+          <a class="button button-primary" href="/manifest">Open Profiles</a>
+          <a class="button button-ghost" href="/logs">Open War Room</a>
+        </div>
+      </div>
+
+      <div class="grid gap-3 sm:grid-cols-2">
+        <article class="hero-stat">
+          <p class="panel-kicker">Connected Users</p>
+          <p class="mt-3 text-3xl font-semibold">{{ jellyfin_users or "0" }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">Live Jellyfin users visible to Vanguarr.</p>
+        </article>
+        <article class="hero-stat">
+          <p class="panel-kicker">Tracked Profiles</p>
+          <p class="mt-3 text-3xl font-semibold">{{ dashboard.tracked_profiles }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">Persisted JSON manifests under `./data/profiles`.</p>
+        </article>
+        <article class="hero-stat">
+          <p class="panel-kicker">Total Requests</p>
+          <p class="mt-3 text-3xl font-semibold">{{ dashboard.total_requests }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">{{ dashboard.requests_last_7d }} in the last 7 days.</p>
+        </article>
+        <article class="hero-stat">
+          <p class="panel-kicker">Request Rate</p>
+          <p class="mt-3 text-3xl font-semibold">{{ "%.1f"|format(dashboard.request_rate) }}%</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">{{ dashboard.total_decisions }} scored decisions on record.</p>
+        </article>
+      </div>
     </div>
   </section>
 
-  <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+  <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
     <article class="metric-card">
       <p class="panel-kicker">System</p>
       <div class="mt-3 flex items-end justify-between gap-4">
@@ -33,121 +64,71 @@
           {{ "Online" if health.overall_ok else "Review" }}
         </span>
       </div>
-      <p class="mt-2 text-sm text-[var(--text-soft)]">Current connection board state</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Current connection board state.</p>
     </article>
     <article class="metric-card">
-      <p class="panel-kicker">Profiles</p>
-      <p class="mt-3 text-2xl font-semibold">{{ profiles|length }}</p>
-      <p class="mt-2 text-sm text-[var(--text-soft)]">Stored JSON manifests on disk</p>
+      <p class="panel-kicker">Request Users</p>
+      <p class="mt-3 text-2xl font-semibold">{{ dashboard.request_users }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Users with at least one recorded request.</p>
     </article>
     <article class="metric-card">
-      <p class="panel-kicker">Automation</p>
-      <p class="mt-3 text-2xl font-semibold">{{ scheduler_jobs|length }}</p>
-      <p class="mt-2 text-sm text-[var(--text-soft)]">Registered scheduler jobs</p>
+      <p class="panel-kicker">Latest Request</p>
+      <p class="mt-3 text-base font-semibold leading-6">{{ dashboard.last_request_at or "No requests yet" }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Most recent successful request timestamp.</p>
     </article>
     <article class="metric-card">
-      <p class="panel-kicker">Decision Feed</p>
-      <p class="mt-3 text-2xl font-semibold">{{ recent_logs|length }}</p>
-      <p class="mt-2 text-sm text-[var(--text-soft)]">Recent hybrid decisions in view</p>
+      <p class="panel-kicker">Failures Logged</p>
+      <p class="mt-3 text-2xl font-semibold">{{ dashboard.request_failures }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Decision rows with an error attached.</p>
     </article>
   </div>
 
-  <div class="grid gap-5 2xl:grid-cols-[1.5fr_0.95fr]">
-    <div class="space-y-5">
-      <section class="surface rounded-[1.45rem] overflow-hidden">
+  <div class="grid gap-6 2xl:grid-cols-[1.35fr_0.95fr]">
+    <div class="space-y-6">
+      <section class="surface rounded-[1.5rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
-          <div class="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+          <div class="flex items-center justify-between gap-4">
             <div>
-              <p class="panel-kicker">Connection Board</p>
-              <h2 class="mt-2 panel-title">Upstream health</h2>
+              <p class="panel-kicker">Requests</p>
+              <h2 class="mt-2 panel-title">Latest requests pushed through Seer</h2>
             </div>
-            <p class="mono text-xs text-[var(--text-dim)]">
-              Last snapshot <span id="health-generated-at" class="text-[var(--text-soft)]">{{ health.generated_at }}</span>
-            </p>
+            <span class="data-chip">{{ dashboard.total_requests }} total</span>
           </div>
         </div>
-        <div class="grid gap-4 px-5 py-5 md:grid-cols-3">
-          {% for key, label in [("jellyfin", "Jellyfin"), ("seer", "Seer"), ("llm", "LLM")] %}
-          {% set item = health.services[key] %}
-          <article class="surface rounded-[1.25rem] bg-[rgba(255,255,255,0.02)] px-4 py-4" data-health-row="{{ key }}">
-            <div class="flex items-start justify-between gap-3">
-              <div class="flex items-center gap-3">
-                <span
-                  class="h-3 w-3 rounded-full"
-                  data-health-dot="{{ key }}"
-                  style="background-color: {{ '#5ad99e' if item.ok else '#ff7f7f' }};"
-                ></span>
-                <div>
-                  <p class="font-medium">{{ label }}</p>
-                  <p class="mono mt-1 text-[11px] uppercase tracking-[0.2em] text-[var(--text-dim)]">{{ key }}</p>
-                </div>
+        <div class="grid gap-3 px-5 py-5 md:grid-cols-2">
+          {% for item in dashboard.recent_requests %}
+          <article class="insight-card">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <p class="font-medium">{{ item.media_title }}</p>
+                <p class="mt-1 text-sm text-[var(--text-soft)]">{{ item.username }}</p>
               </div>
-              <span data-health-badge="{{ key }}" class="status-pill {{ 'status-good' if item.ok else 'status-bad' }}">
-                {{ "Healthy" if item.ok else "Down" }}
-              </span>
+              <span class="status-pill status-good">Requested</span>
             </div>
-            <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]" data-health-detail="{{ key }}">{{ item.detail }}</p>
-            <pre class="mt-4 overflow-x-auto rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/20 p-3 text-xs text-[var(--text-soft)]" data-health-meta="{{ key }}">{{ item.meta | tojson(indent=2) }}</pre>
+            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+              <div class="label-pair">
+                <span class="label">Type</span>
+                <span class="text-sm text-[var(--text-soft)]">{{ item.media_type }}</span>
+              </div>
+              <div class="label-pair">
+                <span class="label">When</span>
+                <span class="text-sm text-[var(--text-soft)]">{{ item.created_at }}</span>
+              </div>
+            </div>
+            <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">{{ item.source }}</p>
           </article>
+          {% else %}
+          <div class="empty-state md:col-span-2">No requests have been recorded yet.</div>
           {% endfor %}
         </div>
       </section>
 
-      <section class="surface rounded-[1.45rem] overflow-hidden">
-        <div class="border-b border-white/5 px-5 py-4">
-          <p class="panel-kicker">Execution History</p>
-          <h2 class="mt-2 panel-title">Recent engine runs</h2>
-        </div>
-        <div class="px-5 py-5">
-          <div class="table-wrap overflow-x-auto">
-            <table class="data-table min-w-full">
-              <thead>
-                <tr>
-                  <th>Engine</th>
-                  <th>Status</th>
-                  <th>Started</th>
-                  <th>Summary</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for run in task_runs %}
-                <tr>
-                  <td>
-                    <p class="font-medium">{{ run.engine.replace("_", " ").title() }}</p>
-                    <p class="mono mt-1 text-xs text-[var(--text-dim)]">task-{{ run.id }}</p>
-                  </td>
-                  <td>
-                    <span class="status-pill {{ 'status-good' if run.status == 'success' else 'status-warn' if run.status == 'partial' or run.status == 'running' else 'status-bad' }}">
-                      {{ run.status }}
-                    </span>
-                  </td>
-                  <td class="mono text-xs text-[var(--text-soft)]">
-                    <div>{{ run.started_at }}</div>
-                    {% if run.finished_at %}
-                    <div class="mt-2 text-[var(--text-dim)]">finished {{ run.finished_at }}</div>
-                    {% endif %}
-                  </td>
-                  <td class="text-sm leading-6 text-[var(--text-soft)]">{{ run.summary }}</td>
-                </tr>
-                {% else %}
-                <tr>
-                  <td colspan="4">
-                    <div class="empty-state">No task runs recorded yet.</div>
-                  </td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section class="surface rounded-[1.45rem] overflow-hidden">
+      <section class="surface rounded-[1.5rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <div class="flex items-center justify-between gap-4">
             <div>
-              <p class="panel-kicker">Decision Feed</p>
-              <h2 class="mt-2 panel-title">Latest hybrid decisions</h2>
+              <p class="panel-kicker">Decisions</p>
+              <h2 class="mt-2 panel-title">Latest scoring outcomes</h2>
             </div>
             <a class="button button-ghost" href="/logs">Open Full Log</a>
           </div>
@@ -177,14 +158,9 @@
                     <span class="status-pill {{ 'status-good' if log.decision == 'REQUEST' else 'status-neutral' }}">
                       {{ log.decision }}
                     </span>
-                    <p class="mono mt-2 text-xs text-[var(--text-dim)]">
-                      conf={{ "%.2f"|format(log.confidence) }} threshold={{ "%.2f"|format(log.threshold) }}
-                    </p>
+                    <p class="mono mt-2 text-xs text-[var(--text-dim)]">conf={{ "%.2f"|format(log.confidence) }}</p>
                   </td>
-                  <td class="text-sm leading-6 text-[var(--text-soft)]">
-                    <p>{{ log.reasoning[:220] }}{% if log.reasoning|length > 220 %}...{% endif %}</p>
-                    <p class="mt-2 text-xs text-[var(--text-dim)]">requested={{ "yes" if log.requested else "no" }}</p>
-                  </td>
+                  <td class="text-sm leading-6 text-[var(--text-soft)]">{{ log.reasoning[:200] }}{% if log.reasoning|length > 200 %}...{% endif %}</td>
                 </tr>
                 {% else %}
                 <tr>
@@ -198,86 +174,174 @@
           </div>
         </div>
       </section>
-    </div>
 
-    <div class="space-y-5">
-      <section class="surface rounded-[1.45rem] overflow-hidden">
+      <section class="surface rounded-[1.5rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
-          <p class="panel-kicker">Manual Operations</p>
-          <h2 class="mt-2 panel-title">Trigger the engines</h2>
-          <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
-            Run either pass manually. Leave the username blank to process every reachable Jellyfin user.
-          </p>
+          <p class="panel-kicker">Execution History</p>
+          <h2 class="mt-2 panel-title">Recent engine runs</h2>
         </div>
-        <div class="space-y-5 px-5 py-5">
-          <form class="space-y-3" method="post" action="/actions/profile-architect">
-            <div>
-              <label class="mb-2 block text-sm font-medium" for="profile-architect-user">Profile Architect target</label>
-              <input id="profile-architect-user" name="username" placeholder="all users" class="field-input text-sm" />
-            </div>
-            <button class="button button-primary w-full" type="submit">Run Profile Architect</button>
-          </form>
-
-          <div class="border-t border-white/5"></div>
-
-          <form class="space-y-3" method="post" action="/actions/decision-engine">
-            <div>
-              <label class="mb-2 block text-sm font-medium" for="decision-engine-user">Decision Engine target</label>
-              <input id="decision-engine-user" name="username" placeholder="all users" class="field-input text-sm" />
-            </div>
-            <button class="button button-amber w-full" type="submit">Run Decision Engine</button>
-          </form>
-        </div>
-      </section>
-
-      <section class="surface rounded-[1.45rem] overflow-hidden">
-        <div class="border-b border-white/5 px-5 py-4">
-          <p class="panel-kicker">Automation</p>
-          <h2 class="mt-2 panel-title">Scheduler queue</h2>
-        </div>
-        <div class="space-y-3 px-5 py-5">
-          {% for job in scheduler_jobs %}
-          <article class="surface rounded-[1.2rem] bg-[rgba(255,255,255,0.02)] px-4 py-4">
-            <div class="flex items-center justify-between gap-4">
+        <div class="grid gap-3 px-5 py-5 md:grid-cols-2">
+          {% for run in task_runs %}
+          <article class="insight-card">
+            <div class="flex items-start justify-between gap-4">
               <div>
-                <p class="font-medium">{{ job.name }}</p>
-                <p class="mono mt-1 text-xs text-[var(--text-dim)]">{{ job.id }}</p>
+                <p class="font-medium">{{ run.engine.replace("_", " ").title() }}</p>
+                <p class="mono mt-1 text-xs text-[var(--text-dim)]">task-{{ run.id }}</p>
               </div>
-              <span class="status-pill {{ 'status-good' if settings.scheduler_enabled else 'status-neutral' }}">
-                {{ "Enabled" if settings.scheduler_enabled else "Disabled" }}
+              <span class="status-pill {{ 'status-good' if run.status == 'success' else 'status-warn' if run.status in ['partial', 'running'] else 'status-bad' }}">
+                {{ run.status }}
               </span>
             </div>
-            <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">{{ job.trigger }}</p>
-            <p class="mono mt-3 text-xs text-[var(--text-dim)]">Next run: {{ job.next_run_time or "Not scheduled" }}</p>
+            <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">{{ run.summary }}</p>
+            <p class="mono mt-4 text-xs text-[var(--text-dim)]">{{ run.started_at }}{% if run.finished_at %} -> {{ run.finished_at }}{% endif %}</p>
           </article>
           {% else %}
-          <div class="empty-state">No scheduler jobs are registered.</div>
+          <div class="empty-state md:col-span-2">No task runs recorded yet.</div>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+
+    <div class="space-y-6">
+      <section class="surface rounded-[1.5rem] overflow-hidden">
+        <div class="border-b border-white/5 px-5 py-4">
+          <div class="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p class="panel-kicker">Connection Board</p>
+              <h2 class="mt-2 panel-title">Live upstream health</h2>
+            </div>
+            <p class="mono text-xs text-[var(--text-dim)]">Last snapshot <span id="health-generated-at" class="text-[var(--text-soft)]">{{ health.generated_at }}</span></p>
+          </div>
+        </div>
+        <div class="grid gap-3 px-5 py-5 sm:grid-cols-2">
+          {% for key, label in [("jellyfin", "Jellyfin"), ("seer", "Seer"), ("tmdb", "TMDb"), ("llm", "LLM")] %}
+          {% set item = health.services[key] %}
+          <article class="insight-card" data-health-row="{{ key }}">
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex items-center gap-3">
+                <span class="h-3 w-3 rounded-full" data-health-dot="{{ key }}" style="background-color: {{ '#5ad99e' if item.ok else '#ff7f7f' }};"></span>
+                <div>
+                  <p class="font-medium">{{ label }}</p>
+                  <p class="mono mt-1 text-[11px] uppercase tracking-[0.2em] text-[var(--text-dim)]">{{ key }}</p>
+                </div>
+              </div>
+              <span data-health-badge="{{ key }}" class="status-pill {{ 'status-good' if item.ok else 'status-bad' }}">{{ "Healthy" if item.ok else "Down" }}</span>
+            </div>
+            <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]" data-health-detail="{{ key }}">{{ item.detail }}</p>
+            <pre class="mt-4 overflow-x-auto rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/20 p-3 text-xs text-[var(--text-soft)]" data-health-meta="{{ key }}">{{ item.meta | tojson(indent=2) }}</pre>
+          </article>
           {% endfor %}
         </div>
       </section>
 
-      <section class="surface rounded-[1.45rem] overflow-hidden">
+      <section class="surface rounded-[1.5rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <div class="flex items-center justify-between gap-4">
             <div>
-              <p class="panel-kicker">Profiles</p>
-              <h2 class="mt-2 panel-title">Profile blocks on disk</h2>
+              <p class="panel-kicker">Knowledge Map</p>
+              <h2 class="mt-2 panel-title">What Vanguarr currently knows about users</h2>
             </div>
             <a class="button button-ghost" href="/manifest">Open Editor</a>
           </div>
         </div>
-        <div class="space-y-2 px-5 py-5">
-          {% for profile in profiles %}
-          <a
-            href="/manifest?username={{ profile }}"
-            class="flex items-center justify-between gap-4 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-3 text-sm text-[var(--text-soft)] transition hover:border-[rgba(84,180,255,0.18)] hover:bg-[var(--accent-soft)] hover:text-white"
-          >
-            <span>{{ profile }}</span>
-            <span class="mono text-xs text-[var(--text-dim)]">profile</span>
-          </a>
+        <div class="space-y-3 px-5 py-5">
+          {% for card in dashboard.profile_cards %}
+          <article class="insight-card">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <p class="font-medium">{{ card.username }}</p>
+                <p class="mt-1 text-sm text-[var(--text-soft)]">{{ card.history_count }} history events / {{ card.format_preference }} bias</p>
+              </div>
+              <span class="status-pill {{ 'status-good' if card.profile_state == 'ready' else 'status-neutral' }}">{{ card.profile_state }}</span>
+            </div>
+
+            <div class="mt-4 flex flex-wrap gap-2">
+              {% for genre in card.primary_genres %}
+              <span class="data-chip">{{ genre }}</span>
+              {% endfor %}
+              {% for genre in card.adjacent_genres %}
+              <span class="data-chip">{{ genre }}</span>
+              {% endfor %}
+            </div>
+
+            {% if card.top_titles %}
+            <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">Anchors: {{ card.top_titles | join(", ") }}</p>
+            {% endif %}
+            {% if card.recent_titles %}
+            <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Recent momentum: {{ card.recent_titles | join(", ") }}</p>
+            {% endif %}
+            {% if card.favorite_people %}
+            <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Recurring talent: {{ card.favorite_people | join(", ") }}</p>
+            {% endif %}
+          </article>
           {% else %}
           <div class="empty-state">No saved profiles yet.</div>
           {% endfor %}
+        </div>
+      </section>
+
+      <section class="surface rounded-[1.5rem] overflow-hidden">
+        <div class="border-b border-white/5 px-5 py-4">
+          <p class="panel-kicker">Operations</p>
+          <h2 class="mt-2 panel-title">Manual runs and current posture</h2>
+        </div>
+        <div class="grid gap-4 px-5 py-5">
+          <article class="insight-card">
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div class="label-pair">
+                <span class="label">Profile cadence</span>
+                <span class="text-sm text-[var(--text-soft)]">{{ settings.profile_cron }}</span>
+              </div>
+              <div class="label-pair">
+                <span class="label">Decision cadence</span>
+                <span class="text-sm text-[var(--text-soft)]">{{ settings.decision_cron }}</span>
+              </div>
+              <div class="label-pair">
+                <span class="label">History limit</span>
+                <span class="text-sm text-[var(--text-soft)]">{{ settings.profile_history_limit }}</span>
+              </div>
+              <div class="label-pair">
+                <span class="label">Candidate funnel</span>
+                <span class="text-sm text-[var(--text-soft)]">{{ settings.candidate_limit }} -> {{ settings.decision_shortlist_limit }}</span>
+              </div>
+            </div>
+          </article>
+
+          <form class="insight-card space-y-3" method="post" action="/actions/profile-architect">
+            <div>
+              <p class="panel-kicker">Profile Architect</p>
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Refresh manifests from Jellyfin viewing history.</p>
+            </div>
+            <input id="profile-architect-user" name="username" placeholder="all users" class="field-input text-sm" />
+            <button class="button button-primary w-full" type="submit">Run Profile Architect</button>
+          </form>
+
+          <form class="insight-card space-y-3" method="post" action="/actions/decision-engine">
+            <div>
+              <p class="panel-kicker">Decision Engine</p>
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Score fresh candidates and push requests when confidence clears the bar.</p>
+            </div>
+            <input id="decision-engine-user" name="username" placeholder="all users" class="field-input text-sm" />
+            <button class="button button-amber w-full" type="submit">Run Decision Engine</button>
+          </form>
+
+          <div class="insight-card">
+            <p class="panel-kicker">Scheduler</p>
+            <div class="mt-3 space-y-3">
+              {% for job in scheduler_jobs %}
+              <div class="rounded-2xl border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-3">
+                <div class="flex items-center justify-between gap-4">
+                  <p class="font-medium">{{ job.name }}</p>
+                  <span class="status-pill {{ 'status-good' if settings.scheduler_enabled else 'status-neutral' }}">{{ "Enabled" if settings.scheduler_enabled else "Disabled" }}</span>
+                </div>
+                <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">{{ job.trigger }}</p>
+                <p class="mono mt-2 text-xs text-[var(--text-dim)]">Next run: {{ job.next_run_time or "Not scheduled" }}</p>
+              </div>
+              {% else %}
+              <div class="empty-state">No scheduler jobs are registered.</div>
+              {% endfor %}
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -287,7 +351,7 @@
 
 {% block scripts %}
 <script>
-  const healthCards = ["jellyfin", "seer", "llm"];
+  const healthCards = ["jellyfin", "seer", "tmdb", "llm"];
 
   function formatMeta(meta) {
     return JSON.stringify(meta ?? {}, null, 2);

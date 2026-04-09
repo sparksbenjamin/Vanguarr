@@ -150,6 +150,91 @@
         opacity: 0.7;
       }
 
+      .hero-stat {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.3rem;
+        border: 1px solid rgba(160, 182, 207, 0.1);
+        background:
+          radial-gradient(circle at top right, rgba(84, 180, 255, 0.14), transparent 48%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+        padding: 1rem 1.05rem;
+      }
+
+      .hero-stat::after {
+        content: "";
+        position: absolute;
+        inset: auto 0 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(84, 180, 255, 0.7), transparent);
+      }
+
+      .signal-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        border-radius: 999px;
+        border: 1px solid rgba(160, 182, 207, 0.12);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text-soft);
+        font-size: 0.75rem;
+        line-height: 1;
+        padding: 0.55rem 0.8rem;
+      }
+
+      .signal-chip::before {
+        content: "";
+        width: 0.45rem;
+        height: 0.45rem;
+        border-radius: 999px;
+        background: var(--accent);
+        box-shadow: 0 0 0 4px rgba(84, 180, 255, 0.1);
+      }
+
+      .insight-card {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.3rem;
+        border: 1px solid rgba(160, 182, 207, 0.1);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.016)),
+          rgba(9, 15, 24, 0.92);
+        padding: 1rem;
+      }
+
+      .insight-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto auto 0;
+        width: 100%;
+        height: 1px;
+        background: linear-gradient(90deg, rgba(84, 180, 255, 0.4), transparent 60%);
+      }
+
+      .label-pair {
+        display: grid;
+        gap: 0.2rem;
+      }
+
+      .label-pair .label {
+        color: var(--text-dim);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      .data-chip {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        border: 1px solid rgba(160, 182, 207, 0.08);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-soft);
+        font-size: 0.76rem;
+        padding: 0.38rem 0.65rem;
+      }
+
       .field-input,
       .field-textarea {
         width: 100%;

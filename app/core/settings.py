@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     trending_candidate_limit: int = 100
     decision_shortlist_limit: int = 15
     recommendation_seed_limit: int = 6
+    tmdb_seed_enrichment_limit: int = 6
+    tmdb_candidate_enrichment_limit: int = 30
     decision_page_size: int = 100
 
     jellyfin_base_url: str | None = None
@@ -50,6 +52,11 @@ class Settings(BaseSettings):
     seer_base_url: str | None = None
     seer_api_key: str | None = None
     seer_request_user_id: int | None = None
+    tmdb_base_url: str = "https://api.themoviedb.org/3"
+    tmdb_api_read_access_token: str | None = None
+    tmdb_api_key: str | None = None
+    tmdb_language: str = "en-US"
+    tmdb_watch_region: str = "US"
 
     llm_provider: str = "ollama"
     llm_model: str = "ollama/llama3.1:8b"
@@ -79,6 +86,13 @@ class Settings(BaseSettings):
     @field_validator("llm_timeout_seconds", mode="before")
     @classmethod
     def blank_timeout_to_none(cls, value: object) -> object:
+        if value in ("", None):
+            return None
+        return value
+
+    @field_validator("tmdb_api_read_access_token", "tmdb_api_key", mode="before")
+    @classmethod
+    def blank_string_to_none(cls, value: object) -> object:
         if value in ("", None):
             return None
         return value

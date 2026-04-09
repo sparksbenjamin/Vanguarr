@@ -48,3 +48,20 @@ def test_decision_funnel_defaults() -> None:
     assert settings.trending_candidate_limit == 100
     assert settings.decision_shortlist_limit == 15
     assert settings.recommendation_seed_limit == 6
+    assert settings.tmdb_seed_enrichment_limit == 6
+    assert settings.tmdb_candidate_enrichment_limit == 30
+
+
+def test_tmdb_defaults() -> None:
+    settings = Settings()
+
+    assert settings.tmdb_base_url == "https://api.themoviedb.org/3"
+    assert settings.tmdb_language == "en-US"
+    assert settings.tmdb_watch_region == "US"
+
+
+def test_blank_tmdb_credentials_become_none() -> None:
+    settings = Settings(TMDB_API_READ_ACCESS_TOKEN="", TMDB_API_KEY="")
+
+    assert settings.tmdb_api_read_access_token is None
+    assert settings.tmdb_api_key is None

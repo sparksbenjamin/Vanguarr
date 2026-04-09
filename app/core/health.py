@@ -8,6 +8,7 @@ from app.api.base import ConnectionCheck
 from app.api.jellyfin import JellyfinClient
 from app.api.llm import LLMClient
 from app.api.seer import SeerClient
+from app.api.tmdb import TMDbClient
 
 
 class HealthMonitor:
@@ -16,11 +17,13 @@ class HealthMonitor:
         *,
         jellyfin: JellyfinClient,
         seer: SeerClient,
+        tmdb: TMDbClient,
         llm: LLMClient,
         ttl_seconds: int = 30,
     ) -> None:
         self.jellyfin = jellyfin
         self.seer = seer
+        self.tmdb = tmdb
         self.llm = llm
         self.ttl_seconds = ttl_seconds
         self._cached_payload: dict[str, Any] | None = None
@@ -39,6 +42,7 @@ class HealthMonitor:
         checks = await asyncio.gather(
             self._safe_check("Jellyfin", self.jellyfin.test_connection()),
             self._safe_check("Seer", self.seer.test_connection()),
+            self._safe_check("TMDb", self.tmdb.test_connection()),
             self._safe_check("LLM", self.llm.test_connection()),
         )
 
@@ -48,7 +52,8 @@ class HealthMonitor:
             "services": {
                 "jellyfin": checks[0].to_dict(),
                 "seer": checks[1].to_dict(),
-                "llm": checks[2].to_dict(),
+                "tmdb": checks[2].to_dict(),
+                "llm": checks[3].to_dict(),
             },
         }
         self._cached_payload = payload

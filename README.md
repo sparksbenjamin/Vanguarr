@@ -8,6 +8,7 @@ Vanguarr is a Dockerized FastAPI service that:
 
 - pulls Jellyfin playback history for each user
 - builds a persistent JSON viewing manifest from grouped watch behavior, ranked genres, format bias, repeat viewing, and recent momentum
+- enriches seed titles and top candidates with TMDb keywords, talent, franchise, and brand metadata
 - optionally asks the LLM for a few adjacent discovery lanes instead of delegating the whole profile
 - pulls blended candidate pools from Seer recommendations seeded by top, repeat-watch, recent, and genre-anchor titles plus a trending pool
 - ranks those candidates in code using ranked-genre affinity, source-lane affinity, format fit, freshness, quality, explicit feedback, and diversity controls
@@ -30,8 +31,8 @@ Vanguarr currently reads watched history from Jellyfin's standard item APIs.
 
 - cadence: weekly cron
 - source: Jellyfin playback history
-- output: `/app/data/profiles/{username}.json` plus `/app/data/profiles/{username}.txt`
-- logic: deterministic profile synthesis from watch counts, ranked genres, grouped titles, repeat viewing, and recent momentum
+- output: `/data/profiles/{username}.json` plus `/data/profiles/{username}.txt`
+- logic: deterministic profile synthesis from watch counts, ranked genres, grouped titles, repeat viewing, recent momentum, and lightweight TMDb seed enrichment
 - optional LLM use: suggest a few adjacent discovery lanes
 - goal: keep a canonical JSON manifest and a compact derived summary under 500 words
 
@@ -39,12 +40,12 @@ Vanguarr currently reads watched history from Jellyfin's standard item APIs.
 
 - cadence: daily cron
 - source: Seer recommendation endpoints plus trending
-- logic: build seed lanes from top, repeat-watch, recent, and genre-anchor behavior, fetch Seer recommendations plus trending, score the pool in code, diversify the shortlist, then apply a light LLM adjustment and explanation pass
+- logic: build seed lanes from top, repeat-watch, recent, and genre-anchor behavior, fetch Seer recommendations plus trending, enrich the strongest pool items with TMDb metadata, score the pool in code, diversify the shortlist, then apply a light LLM adjustment and explanation pass
 - action: POST a Seer request when the hybrid confidence clears the configured threshold
 
 ## Mounted Data
 
-Mount `./data` into the container if you want direct access to the raw runtime artifacts.
+Mount `./data` into `/data` in the container if you want direct access to the raw runtime artifacts.
 
 - SQLite decision history: `./data/vanguarr.db`
 - user profile manifests: `./data/profiles/*.json`
@@ -52,6 +53,12 @@ Mount `./data` into the container if you want direct access to the raw runtime a
 - app log file: `./data/logs/vanguarr.log`
 
 Those files are safe to inspect from the host. The War Room UI reads from the SQLite database, and the Manifest Editor reads and writes the JSON manifests while previewing the derived summary files from the same mounted data path.
+
+## Container Runtime Notes
+
+- The container stores mutable runtime state under `/data`, not `/app`.
+- The image is prepared for arbitrary non-root UIDs that are members of group `0`, which keeps it compatible with OKD/OpenShift-style security contexts as long as `/data` is backed by a writable volume.
+- The base Docker examples assume service-to-service DNS such as `http://ollama:11434`. Do not rely on `host.docker.internal` outside Docker-based runtimes.
 
 ## Web Interface
 
@@ -96,29 +103,30 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/app/data
+      - ./data:/data
     environment:
       APP_ENV: production
       TZ: America/New_York
-      DATA_DIR: /app/data
-      DATABASE_URL: sqlite:////app/data/vanguarr.db
-      PROFILES_DIR: /app/data/profiles
-      LOGS_DIR: /app/data/logs
-      LOG_FILE: /app/data/logs/vanguarr.log
+      DATA_DIR: /data
+      DATABASE_URL: sqlite:////data/vanguarr.db
+      PROFILES_DIR: /data/profiles
+      LOGS_DIR: /data/logs
+      LOG_FILE: /data/logs/vanguarr.log
       JELLYFIN_BASE_URL: http://jellyfin:8096
       JELLYFIN_API_KEY: your-jellyfin-api-key
       SEER_BASE_URL: http://jellyseerr:5055
       SEER_API_KEY: your-seer-api-key
       SEER_REQUEST_USER_ID: ""
+      TMDB_BASE_URL: https://api.themoviedb.org/3
+      TMDB_API_READ_ACCESS_TOKEN: your-tmdb-read-access-token
+      TMDB_WATCH_REGION: US
       GLOBAL_EXCLUSIONS: No Horror,No Reality TV
       REQUEST_THRESHOLD: "0.72"
       LLM_PROVIDER: ollama
       LLM_MODEL: glm-4.7-flash:latest
       LLM_TIMEOUT_SECONDS: "180"
-      OLLAMA_API_BASE: http://host.docker.internal:11434
+      OLLAMA_API_BASE: http://ollama:11434
 ```
 
 ### OpenAI / ChatGPT
@@ -131,23 +139,24 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/app/data
+      - ./data:/data
     environment:
       APP_ENV: production
       TZ: America/New_York
-      DATA_DIR: /app/data
-      DATABASE_URL: sqlite:////app/data/vanguarr.db
-      PROFILES_DIR: /app/data/profiles
-      LOGS_DIR: /app/data/logs
-      LOG_FILE: /app/data/logs/vanguarr.log
+      DATA_DIR: /data
+      DATABASE_URL: sqlite:////data/vanguarr.db
+      PROFILES_DIR: /data/profiles
+      LOGS_DIR: /data/logs
+      LOG_FILE: /data/logs/vanguarr.log
       JELLYFIN_BASE_URL: http://jellyfin:8096
       JELLYFIN_API_KEY: your-jellyfin-api-key
       SEER_BASE_URL: http://jellyseerr:5055
       SEER_API_KEY: your-seer-api-key
       SEER_REQUEST_USER_ID: ""
+      TMDB_BASE_URL: https://api.themoviedb.org/3
+      TMDB_API_READ_ACCESS_TOKEN: your-tmdb-read-access-token
+      TMDB_WATCH_REGION: US
       GLOBAL_EXCLUSIONS: No Horror,No Reality TV
       REQUEST_THRESHOLD: "0.72"
       LLM_PROVIDER: openai
@@ -166,23 +175,24 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/app/data
+      - ./data:/data
     environment:
       APP_ENV: production
       TZ: America/New_York
-      DATA_DIR: /app/data
-      DATABASE_URL: sqlite:////app/data/vanguarr.db
-      PROFILES_DIR: /app/data/profiles
-      LOGS_DIR: /app/data/logs
-      LOG_FILE: /app/data/logs/vanguarr.log
+      DATA_DIR: /data
+      DATABASE_URL: sqlite:////data/vanguarr.db
+      PROFILES_DIR: /data/profiles
+      LOGS_DIR: /data/logs
+      LOG_FILE: /data/logs/vanguarr.log
       JELLYFIN_BASE_URL: http://jellyfin:8096
       JELLYFIN_API_KEY: your-jellyfin-api-key
       SEER_BASE_URL: http://jellyseerr:5055
       SEER_API_KEY: your-seer-api-key
       SEER_REQUEST_USER_ID: ""
+      TMDB_BASE_URL: https://api.themoviedb.org/3
+      TMDB_API_READ_ACCESS_TOKEN: your-tmdb-read-access-token
+      TMDB_WATCH_REGION: US
       GLOBAL_EXCLUSIONS: No Horror,No Reality TV
       REQUEST_THRESHOLD: "0.72"
       LLM_PROVIDER: anthropic
@@ -190,6 +200,26 @@ services:
       ANTHROPIC_API_KEY: your-anthropic-api-key
       ANTHROPIC_API_BASE: https://api.anthropic.com
 ```
+
+### Unraid Host Ollama Override
+
+If Ollama is running directly on the Unraid host instead of another container, add this override to your Docker Compose or template settings:
+
+```yaml
+services:
+  vanguarr:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      OLLAMA_API_BASE: http://host.docker.internal:11434
+```
+
+## Unraid and OKD Notes
+
+- Unraid: bind a host path or appdata share to `/data`. If you run Ollama on the Unraid host, use the `host.docker.internal` override above.
+- OKD: mount a writable PVC at `/data` and point service URLs such as `JELLYFIN_BASE_URL`, `SEER_BASE_URL`, and `OLLAMA_API_BASE` at cluster DNS names or Routes.
+- OKD: with the default SQLite database and in-process scheduler, run a single replica. If you need multiple replicas, disable the built-in scheduler in the web pods and move scheduling plus persistence to cluster-native services.
+- OKD: use health probes against `/healthz`.
 
 ## Runtime Environment Variables
 
@@ -212,6 +242,13 @@ services:
 - `TRENDING_CANDIDATE_LIMIT`
 - `DECISION_SHORTLIST_LIMIT`
 - `RECOMMENDATION_SEED_LIMIT`
+- `TMDB_SEED_ENRICHMENT_LIMIT`
+- `TMDB_CANDIDATE_ENRICHMENT_LIMIT`
+- `TMDB_BASE_URL`
+- `TMDB_API_READ_ACCESS_TOKEN`
+- `TMDB_API_KEY`
+- `TMDB_LANGUAGE`
+- `TMDB_WATCH_REGION`
 - `LLM_PROVIDER`
 - `LLM_MODEL`
 - `LLM_TIMEOUT_SECONDS`
@@ -260,5 +297,7 @@ Local Ollama models can take longer than hosted APIs to finish profile-enrichmen
 - `PROFILE_LLM_ENRICHMENT_MAX_OUTPUT_TOKENS=120` keeps that optional profile-side LLM assist small.
 - Decision Engine now builds a larger blended pool with `CANDIDATE_LIMIT=160`, includes up to `TRENDING_CANDIDATE_LIMIT=100` discovery titles, and cuts it down to a diversified `DECISION_SHORTLIST_LIMIT=15` before calling the LLM.
 - `RECOMMENDATION_SEED_LIMIT=6` controls how many top, repeat-watch, recent, and genre-anchor titles become Seer seed lanes per user.
+- `TMDB_SEED_ENRICHMENT_LIMIT=6` controls how many watched seed titles are enriched to build persistent theme, talent, and franchise signals.
+- `TMDB_CANDIDATE_ENRICHMENT_LIMIT=30` controls how many top-ranked Seer candidates get a second TMDb metadata pass before the final rerank.
 - Profile Architect groups episode watches into show-level counts, emits ranked genres, and weights both durable history and recent momentum by default.
 - Larger local models may also benefit from lowering `PROFILE_HISTORY_LIMIT` or switching to a faster quantization.

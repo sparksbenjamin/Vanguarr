@@ -68,6 +68,7 @@ def test_decision_prompt_includes_viewing_history_block() -> None:
             "release_date": "2026-01-01",
             "sources": ["recommended:Movie Alpha"],
             "media_info": {},
+            "tmdb_details": {"keywords": ["space opera"], "featured_people": ["Actor Prime"]},
             "recommendation_features": {
                 "deterministic_score": 0.83,
                 "lane_tags": ["because_you_watched", "top_genre_lane"],
@@ -82,6 +83,7 @@ def test_decision_prompt_includes_viewing_history_block() -> None:
     assert "Block 3 (Observed Signals): User Viewing History" in prompt
     assert "Movie Alpha" in prompt
     assert "recommendation_features" in prompt
+    assert "tmdb_details" in prompt
     assert "profile manifest and summary" in prompt
 
 
@@ -247,6 +249,10 @@ def test_candidate_pool_ranking_favors_anchor_and_genre_overlap() -> None:
         "format_preference": {"preferred": "tv", "movie_plays": 1, "tv_plays": 4},
         "release_year_preference": {"bias": "recent", "average_year": 2022},
         "ranked_genres": [{"genre": "Sci-Fi", "raw_count": 4, "recent_count": 2, "weighted_score": 5.5}],
+        "top_keywords": ["space opera", "bounty hunter"],
+        "favorite_people": ["Actor Prime", "Showrunner Nova"],
+        "preferred_brands": ["HBO"],
+        "favorite_collections": ["Alpha Saga"],
         "explicit_feedback": {"liked_titles": [], "disliked_titles": [], "liked_genres": [], "disliked_genres": []},
     }
     candidates = [
@@ -261,6 +267,13 @@ def test_candidate_pool_ranking_favors_anchor_and_genre_overlap() -> None:
             "release_date": "2025-01-01",
             "sources": ["recommended:Show Alpha"],
             "source_lanes": ["top_seed", "repeat_watch_seed"],
+            "tmdb_details": {
+                "keywords": ["space opera", "rebellion"],
+                "featured_people": ["Actor Prime", "Director Echo"],
+                "brands": ["HBO"],
+                "collection_name": "Alpha Saga",
+                "adult": False,
+            },
             "media_info": {},
         },
         {
@@ -274,6 +287,12 @@ def test_candidate_pool_ranking_favors_anchor_and_genre_overlap() -> None:
             "release_date": "2010-01-01",
             "sources": ["trending"],
             "source_lanes": ["trending_lane"],
+            "tmdb_details": {
+                "keywords": ["slapstick"],
+                "featured_people": ["Actor Comic"],
+                "brands": ["Studio Lite"],
+                "adult": False,
+            },
             "media_info": {},
         },
     ]
@@ -283,6 +302,9 @@ def test_candidate_pool_ranking_favors_anchor_and_genre_overlap() -> None:
     assert ranked[0]["title"] == "Show Gamma"
     assert ranked[0]["recommendation_features"]["deterministic_score"] > ranked[1]["recommendation_features"]["deterministic_score"]
     assert "because_you_watched" in ranked[0]["recommendation_features"]["lane_tags"]
+    assert "space opera" in ranked[0]["recommendation_features"]["matched_keywords"]
+    assert "Actor Prime" in ranked[0]["recommendation_features"]["matched_people"]
+    assert ranked[0]["recommendation_features"]["collection_match"] == "Alpha Saga"
 
 
 def test_build_recommendation_seed_pool_blends_behavior_lanes() -> None:
