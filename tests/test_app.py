@@ -52,6 +52,16 @@ def test_settings_page_renders() -> None:
     assert 'href="/manifest"' in response.text
 
 
+def test_tuning_settings_page_shows_ai_weight_slider() -> None:
+    with TestClient(app) as client:
+        response = client.get("/settings/tuning")
+
+    assert response.status_code == 200
+    assert "AI Decision Weight" in response.text
+    assert 'type="range"' in response.text
+    assert "% AI /" in response.text
+
+
 def test_settings_root_redirects_to_general() -> None:
     with TestClient(app) as client:
         response = client.get("/settings", follow_redirects=False)

@@ -27,6 +27,9 @@ class SettingFieldDefinition:
     input_type: str = "text"
     placeholder: str = ""
     choices: tuple[tuple[str, str], ...] = ()
+    min_value: str = ""
+    max_value: str = ""
+    step: str = "any"
 
 
 class LLMProviderSettings(BaseModel):
@@ -95,6 +98,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     global_exclusions: str = "No Horror,No Reality TV"
     request_threshold: float = 0.72
+    decision_ai_weight_percent: int = 25
     scheduler_enabled: bool = True
     profile_cron: str = "0 3 * * 0"
     decision_cron: str = "0 4 * * *"
@@ -160,6 +164,16 @@ class Settings(BaseSettings):
         if value in ("", None):
             return None
         return value
+
+    @field_validator("decision_ai_weight_percent", mode="before")
+    @classmethod
+    def validate_decision_ai_weight_percent(cls, value: object) -> object:
+        if value in ("", None):
+            return 25
+        numeric = int(value)
+        if not 0 <= numeric <= 100:
+            raise ValueError("AI decision weight must be between 0 and 100.")
+        return numeric
 
     @field_validator("timezone")
     @classmethod
@@ -511,8 +525,18 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         key="request_threshold",
         label="Request Threshold",
         group="Tuning",
-        description="Minimum hybrid confidence required to request media.",
+        description="Minimum final blended score required to request media.",
         input_type="number",
+    ),
+    SettingFieldDefinition(
+        key="decision_ai_weight_percent",
+        label="AI Decision Weight",
+        group="Tuning",
+        description="Choose how much the final decision score leans on the LLM versus the code-driven score. 0% is all code. 100% is all AI.",
+        input_type="range",
+        min_value="0",
+        max_value="100",
+        step="5",
     ),
     SettingFieldDefinition(
         key="profile_history_limit",

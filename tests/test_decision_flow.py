@@ -467,3 +467,58 @@ def test_diversify_candidates_caps_one_lane_before_backfill() -> None:
     diversified = VanguarrService._diversify_candidates(candidates, limit=3)
 
     assert len(diversified) == 3
+
+
+def test_blend_confidences_uses_ai_weight_slider() -> None:
+    mostly_code = VanguarrService._blend_confidences(
+        deterministic_score=0.40,
+        llm_confidence=0.80,
+        llm_vote="REQUEST",
+        llm_weight_percent=25,
+    )
+    mostly_ai = VanguarrService._blend_confidences(
+        deterministic_score=0.40,
+        llm_confidence=0.80,
+        llm_vote="REQUEST",
+        llm_weight_percent=75,
+    )
+    ignore_vote = VanguarrService._blend_confidences(
+        deterministic_score=0.70,
+        llm_confidence=0.80,
+        llm_vote="IGNORE",
+        llm_weight_percent=50,
+    )
+
+    assert mostly_code == 0.525
+    assert mostly_ai == 0.775
+    assert ignore_vote == 0.4
+
+
+def test_compose_decision_reasoning_uses_final_score_wording_and_threshold_context() -> None:
+    reasoning = VanguarrService._compose_decision_reasoning(
+        {
+            "recommendation_features": {
+                "analysis_summary": "Matches top genres Drama.",
+                "score_breakdown": {
+                    "source_affinity": 0.04,
+                    "genre_affinity": 0.30,
+                    "format_fit": 0.08,
+                    "freshness_fit": 0.07,
+                    "quality": 0.07,
+                    "tmdb_themes": 0.00,
+                    "tmdb_people": 0.00,
+                    "tmdb_brands": 0.00,
+                },
+            }
+        },
+        deterministic_score=0.61,
+        hybrid_confidence=0.67,
+        decision="IGNORE",
+        request_threshold=0.72,
+        llm_vote="REQUEST",
+        llm_reasoning="The title fits the user's current TV preferences.",
+    )
+
+    assert reasoning.startswith("Final score 0.67. Code score 0.61.")
+    assert "stayed below the request threshold of 0.72" in reasoning
+    assert "LLM vote: REQUEST." in reasoning

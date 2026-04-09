@@ -44,6 +44,7 @@ def test_profile_llm_enrichment_defaults() -> None:
 def test_decision_funnel_defaults() -> None:
     settings = Settings()
 
+    assert settings.decision_ai_weight_percent == 25
     assert settings.candidate_limit == 160
     assert settings.trending_candidate_limit == 100
     assert settings.decision_shortlist_limit == 15
@@ -131,3 +132,9 @@ def test_provider_max_output_tokens_blank_or_zero_becomes_none() -> None:
 
     assert blank.max_output_tokens is None
     assert zero.max_output_tokens is None
+
+
+def test_decision_ai_weight_percent_must_stay_within_range() -> None:
+    settings = Settings(decision_ai_weight_percent="75")
+
+    assert settings.decision_ai_weight_percent == 75

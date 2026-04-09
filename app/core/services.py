@@ -567,12 +567,16 @@ class VanguarrService:
                                 deterministic_score=deterministic_score,
                                 llm_confidence=llm_confidence,
                                 llm_vote=llm_vote,
+                                llm_weight_percent=self.settings.decision_ai_weight_percent,
                             )
                             should_request = confidence >= self.settings.request_threshold
                             decision = "REQUEST" if should_request else "IGNORE"
                             reasoning = self._compose_decision_reasoning(
                                 candidate,
+                                deterministic_score=deterministic_score,
                                 hybrid_confidence=confidence,
+                                decision=decision,
+                                request_threshold=self.settings.request_threshold,
                                 llm_vote=llm_vote,
                                 llm_reasoning=llm_reasoning,
                             )
@@ -1290,29 +1294,42 @@ class VanguarrService:
     def _decision_prefilter_threshold(self) -> float:
         return max(0.28, min(0.42, self.settings.request_threshold * 0.55))
 
-    @staticmethod
+    @classmethod
     def _blend_confidences(
+        cls,
         *,
         deterministic_score: float,
         llm_confidence: float | None,
         llm_vote: str,
+        llm_weight_percent: int,
     ) -> float:
+        normalized_code_score = max(0.0, min(1.0, deterministic_score))
         if llm_confidence is None or llm_vote == "UNAVAILABLE":
-            return max(0.0, min(1.0, deterministic_score))
+            return normalized_code_score
 
-        blended = (deterministic_score * 0.75) + (llm_confidence * 0.25)
-        if llm_vote == "REQUEST":
-            blended += 0.04
-        elif llm_vote == "IGNORE" and llm_confidence >= 0.55:
-            blended -= 0.06
+        llm_weight = max(0.0, min(1.0, llm_weight_percent / 100))
+        llm_score = cls._llm_request_score(llm_confidence=llm_confidence, llm_vote=llm_vote)
+        blended = (normalized_code_score * (1.0 - llm_weight)) + (llm_score * llm_weight)
         return max(0.0, min(1.0, round(blended, 3)))
+
+    @staticmethod
+    def _llm_request_score(*, llm_confidence: float, llm_vote: str) -> float:
+        normalized_confidence = max(0.0, min(1.0, llm_confidence))
+        if llm_vote == "REQUEST":
+            return 0.5 + (normalized_confidence * 0.5)
+        if llm_vote == "IGNORE":
+            return 0.5 - (normalized_confidence * 0.5)
+        return 0.5
 
     @classmethod
     def _compose_decision_reasoning(
         cls,
         candidate: dict[str, Any],
         *,
+        deterministic_score: float,
         hybrid_confidence: float,
+        decision: str,
+        request_threshold: float,
         llm_vote: str,
         llm_reasoning: str,
     ) -> str:
@@ -1320,7 +1337,7 @@ class VanguarrService:
         breakdown = features.get("score_breakdown", {})
         summary = str(features.get("analysis_summary") or "Limited alignment signals.")
         reasoning = (
-            f"Code score {hybrid_confidence:.2f}. {summary} "
+            f"Final score {hybrid_confidence:.2f}. Code score {deterministic_score:.2f}. {summary} "
             f"Breakdown: source {float(breakdown.get('source_affinity', 0.0)):.2f}, "
             f"genres {float(breakdown.get('genre_affinity', 0.0)):.2f}, "
             f"format {float(breakdown.get('format_fit', 0.0)):.2f}, "
@@ -1331,7 +1348,11 @@ class VanguarrService:
             f"brands {float(breakdown.get('tmdb_brands', 0.0)):.2f}."
         )
         if llm_vote == "UNAVAILABLE":
-            return reasoning + " LLM unavailable, so the final decision used the deterministic ranker only."
+            return reasoning + " LLM unavailable, so the final score used the code-driven score only."
+        if decision == "IGNORE" and llm_vote == "REQUEST":
+            reasoning += f" The LLM leaned REQUEST, but the final score stayed below the request threshold of {request_threshold:.2f}."
+        elif decision == "REQUEST" and llm_vote == "IGNORE":
+            reasoning += f" The code-driven score still cleared the request threshold of {request_threshold:.2f}."
         if llm_reasoning:
             return reasoning + f" LLM vote: {llm_vote}. {llm_reasoning}"
         return reasoning + f" LLM vote: {llm_vote}."
