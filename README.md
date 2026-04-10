@@ -1,3 +1,5 @@
+(docs/output.jpb)
+
 # 🛡️ Vanguarr
 ### The Scout of the ARR Stack.
 
