@@ -8,6 +8,10 @@
 {{ request.url.include_query_params(page=page_number) }}
 {%- endmacro %}
 
+{% macro sort_indicator(column) -%}
+{% if sort_by == column %}<span aria-hidden="true">{{ '↑' if sort_direction == 'asc' else '↓' }}</span>{% endif %}
+{%- endmacro %}
+
 {% block content %}
 {% set stats = log_feed %}
 <section class="space-y-5">
@@ -17,7 +21,7 @@
         <p class="panel-kicker">War Room</p>
         <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Live decision feed</h1>
         <p class="mt-3 text-sm leading-6 text-[var(--text-soft)] sm:text-[0.96rem]">
-          Watch request decisions and suggestion rows arrive in one stream, sort the evidence by the signal you care about, and page through the history without turning the War Room into an endless scroll.
+          Watch requests and suggestions land in one stream, sort by the signal you care about, and page through the history without turning the War Room into an endless wall of logs.
         </p>
       </div>
       <form class="grid w-full gap-3 sm:grid-cols-[minmax(0,1fr)_auto] xl:max-w-2xl" method="get" action="/logs">
@@ -31,39 +35,41 @@
     </div>
   </section>
 
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <div class="flex flex-wrap gap-2">
-      <a
-        href="{{ request.url.include_query_params(view='all', page=1) }}"
-        class="button {{ 'button-primary' if current_view == 'all' else 'button-ghost' }}"
-        id="war-room-filter-all"
-      >
-        ALL
-        <span class="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-xs" id="war-room-count-all">{{ stats.view_counts.all }}</span>
-      </a>
-      <a
-        href="{{ request.url.include_query_params(view='requests', page=1) }}"
-        class="button {{ 'button-primary' if current_view == 'requests' else 'button-ghost' }}"
-        id="war-room-filter-requests"
-      >
-        Requests
-        <span class="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-xs" id="war-room-count-requests">{{ stats.view_counts.requests }}</span>
-      </a>
-      <a
-        href="{{ request.url.include_query_params(view='suggestions', page=1) }}"
-        class="button {{ 'button-primary' if current_view == 'suggestions' else 'button-ghost' }}"
-        id="war-room-filter-suggestions"
-      >
-        Suggestions
-        <span class="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-xs" id="war-room-count-suggestions">{{ stats.view_counts.suggestions }}</span>
-      </a>
+  <section class="surface rounded-[1.45rem] px-4 py-4 md:px-5">
+    <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+      <div class="flex flex-wrap gap-2">
+        <a
+          href="{{ request.url.include_query_params(view='all', page=1) }}"
+          class="button {{ 'button-primary' if current_view == 'all' else 'button-ghost' }}"
+          id="war-room-filter-all"
+        >
+          ALL
+          <span class="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-xs" id="war-room-count-all">{{ stats.view_counts.all }}</span>
+        </a>
+        <a
+          href="{{ request.url.include_query_params(view='requests', page=1) }}"
+          class="button {{ 'button-primary' if current_view == 'requests' else 'button-ghost' }}"
+          id="war-room-filter-requests"
+        >
+          Requests
+          <span class="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-xs" id="war-room-count-requests">{{ stats.view_counts.requests }}</span>
+        </a>
+        <a
+          href="{{ request.url.include_query_params(view='suggestions', page=1) }}"
+          class="button {{ 'button-primary' if current_view == 'suggestions' else 'button-ghost' }}"
+          id="war-room-filter-suggestions"
+        >
+          Suggestions
+          <span class="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-xs" id="war-room-count-suggestions">{{ stats.view_counts.suggestions }}</span>
+        </a>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-soft)]">
+        <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Sort {{ sort_by }} / {{ sort_direction }}</span>
+        <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Page size {{ stats.page_size }}</span>
+        <span class="rounded-full border border-[rgba(90,217,158,0.2)] bg-[rgba(90,217,158,0.08)] px-3 py-1.5" id="war-room-live-chip">Live refresh every 10s</span>
+      </div>
     </div>
-    <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-soft)]">
-      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Sort {{ sort_by }} / {{ sort_direction }}</span>
-      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Page size {{ stats.page_size }}</span>
-      <span class="rounded-full border border-[rgba(90,217,158,0.2)] bg-[rgba(90,217,158,0.08)] px-3 py-1.5" id="war-room-live-chip">Live refresh on</span>
-    </div>
-  </div>
+  </section>
 
   <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
     <article class="metric-card">
@@ -110,14 +116,14 @@
         <table class="data-table min-w-full">
           <thead>
             <tr>
-              <th><a class="hover:text-white" href="{{ sort_href('created_at') }}">When{% if sort_by == 'created_at' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
-              <th><a class="hover:text-white" href="{{ sort_href('engine') }}">Flow{% if sort_by == 'engine' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
-              <th><a class="hover:text-white" href="{{ sort_href('username') }}">User{% if sort_by == 'username' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
-              <th><a class="hover:text-white" href="{{ sort_href('media_title') }}">Title{% if sort_by == 'media_title' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
-              <th><a class="hover:text-white" href="{{ sort_href('decision') }}">Decision{% if sort_by == 'decision' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
-              <th><a class="hover:text-white" href="{{ sort_href('confidence') }}">Score{% if sort_by == 'confidence' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
-              <th><a class="hover:text-white" href="{{ sort_href('requested') }}">Requested{% if sort_by == 'requested' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
-              <th><a class="hover:text-white" href="{{ sort_href('reasoning') }}">Reasoning{% if sort_by == 'reasoning' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('created_at') }}">When {{ sort_indicator('created_at') }}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('engine') }}">Flow {{ sort_indicator('engine') }}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('username') }}">User {{ sort_indicator('username') }}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('media_title') }}">Title {{ sort_indicator('media_title') }}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('decision') }}">Decision {{ sort_indicator('decision') }}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('confidence') }}">Score {{ sort_indicator('confidence') }}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('requested') }}">Requested {{ sort_indicator('requested') }}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('reasoning') }}">Reasoning {{ sort_indicator('reasoning') }}</a></th>
             </tr>
           </thead>
           <tbody id="war-room-table-body">
@@ -387,7 +393,7 @@
     if (visibleCount) visibleCount.textContent = String((payload.rows || []).length);
     if (totalCount) totalCount.textContent = String(payload.total_rows || 0);
     if (generatedAt) generatedAt.textContent = `updated ${payload.generated_at || ""}`;
-    if (liveChip) liveChip.textContent = "Live refresh on";
+    if (liveChip) liveChip.textContent = "Live refresh every 10s";
 
     applyPaginationState(payload);
   }

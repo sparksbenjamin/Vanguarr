@@ -7,13 +7,13 @@
 {% set media_server_label = dashboard.media_server_label %}
 <section class="space-y-6">
   <section class="surface page-hero rounded-[1.8rem] px-5 py-6 lg:px-7">
-    <div class="grid gap-6 xl:grid-cols-[1.2fr_0.8fr] xl:items-stretch">
+    <div class="grid gap-6 xl:grid-cols-[1.15fr_0.85fr] xl:items-stretch">
       <div class="flex flex-col justify-between gap-6">
         <div>
           <p class="panel-kicker">Control Room</p>
-          <h1 class="mt-3 max-w-3xl text-3xl font-semibold tracking-tight sm:text-[2.5rem]">A cleaner dashboard for what Vanguarr is doing, requesting, and learning.</h1>
+          <h1 class="mt-3 max-w-3xl text-3xl font-semibold tracking-tight sm:text-[2.5rem]">Everything important in one clean command deck.</h1>
           <p class="mt-4 max-w-3xl text-sm leading-7 text-[var(--text-soft)] sm:text-[0.98rem]">
-            Keep the system health board, but surface the operating story too: how many users are visible through the active media server, what Vanguarr has requested lately, and the profile signals it is currently steering from.
+            Watch the system posture, see what Vanguarr is learning from your users, and jump straight into the engines that move requests and suggestions forward.
           </p>
         </div>
 
@@ -28,29 +28,44 @@
         <div class="flex flex-wrap gap-3">
           <a class="button button-primary" href="/manifest">Open Profiles</a>
           <a class="button button-ghost" href="/logs">Open War Room</a>
+          <a class="button button-ghost" href="/settings/general">Open Settings</a>
         </div>
       </div>
 
-      <div class="grid gap-3 sm:grid-cols-2">
+      <div class="grid gap-3">
         <article class="hero-stat">
-          <p class="panel-kicker">Connected Users</p>
-          <p class="mt-3 text-3xl font-semibold">{{ media_server_users or "0" }}</p>
-          <p class="mt-2 text-sm text-[var(--text-soft)]">Users visible through {{ media_server_label }}.</p>
-        </article>
-        <article class="hero-stat">
-          <p class="panel-kicker">Tracked Profiles</p>
-          <p class="mt-3 text-3xl font-semibold">{{ dashboard.tracked_profiles }}</p>
-          <p class="mt-2 text-sm text-[var(--text-soft)]">Persisted JSON manifests under `./data/profiles`.</p>
-        </article>
-        <article class="hero-stat">
-          <p class="panel-kicker">Total Requests</p>
-          <p class="mt-3 text-3xl font-semibold">{{ dashboard.total_requests }}</p>
-          <p class="mt-2 text-sm text-[var(--text-soft)]">{{ dashboard.requests_last_7d }} in the last 7 days.</p>
-        </article>
-        <article class="hero-stat">
-          <p class="panel-kicker">Request Rate</p>
-          <p class="mt-3 text-3xl font-semibold">{{ "%.1f"|format(dashboard.request_rate) }}%</p>
-          <p class="mt-2 text-sm text-[var(--text-soft)]">{{ dashboard.total_decisions }} scored decisions on record.</p>
+          <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p class="panel-kicker">System Snapshot</p>
+              <p class="mt-3 text-2xl font-semibold">Live stack visibility across {{ media_server_label }}</p>
+              <p class="mt-2 max-w-xl text-sm leading-6 text-[var(--text-soft)]">Use this panel as a quick read on who is connected, how much curation state is stored, and how actively Vanguarr is turning that into requests.</p>
+            </div>
+            <span class="status-pill {{ 'status-good' if health.overall_ok else 'status-warn' }}">
+              {{ "Healthy" if health.overall_ok else "Needs review" }}
+            </span>
+          </div>
+          <div class="mt-5 grid gap-3 sm:grid-cols-2">
+            <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+              <p class="panel-kicker">Connected Users</p>
+              <p class="mt-2 text-3xl font-semibold">{{ media_server_users or "0" }}</p>
+              <p class="mt-2 text-sm text-[var(--text-soft)]">Users visible through {{ media_server_label }}.</p>
+            </div>
+            <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+              <p class="panel-kicker">Tracked Profiles</p>
+              <p class="mt-2 text-3xl font-semibold">{{ dashboard.tracked_profiles }}</p>
+              <p class="mt-2 text-sm text-[var(--text-soft)]">Persisted manifests under `./data/profiles`.</p>
+            </div>
+            <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+              <p class="panel-kicker">Total Requests</p>
+              <p class="mt-2 text-3xl font-semibold">{{ dashboard.total_requests }}</p>
+              <p class="mt-2 text-sm text-[var(--text-soft)]">{{ dashboard.requests_last_7d }} in the last 7 days.</p>
+            </div>
+            <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+              <p class="panel-kicker">Request Rate</p>
+              <p class="mt-2 text-3xl font-semibold">{{ "%.1f"|format(dashboard.request_rate) }}%</p>
+              <p class="mt-2 text-sm text-[var(--text-soft)]">{{ dashboard.total_decisions }} scored decisions on record.</p>
+            </div>
+          </div>
         </article>
       </div>
     </div>
@@ -309,32 +324,39 @@
             </div>
           </article>
 
-          <form class="insight-card space-y-3" method="post" action="/actions/profile-architect">
-            <div>
-              <p class="panel-kicker">Profile Architect</p>
-              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Refresh manifests from {{ media_server_label }} viewing history.</p>
-            </div>
-            <input id="profile-architect-user" name="username" placeholder="all users" class="field-input text-sm" />
-            <button class="button button-primary w-full" type="submit">Run Profile Architect</button>
-          </form>
+          <div class="grid gap-4 lg:grid-cols-2">
+            <form class="insight-card space-y-3" method="post" action="/actions/profile-architect">
+              <div>
+                <p class="panel-kicker">Profile Architect</p>
+                <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Refresh manifests from {{ media_server_label }} viewing history.</p>
+              </div>
+              <input id="profile-architect-user" name="username" placeholder="all users" class="field-input text-sm" />
+              <button class="button button-primary w-full" type="submit">Run Profile Architect</button>
+            </form>
 
-          <form class="insight-card space-y-3" method="post" action="/actions/decision-engine">
-            <div>
-              <p class="panel-kicker">Decision Engine</p>
-              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Score fresh candidates and push requests when confidence clears the bar.</p>
-            </div>
-            <input id="decision-engine-user" name="username" placeholder="all users" class="field-input text-sm" />
-            <button class="button button-amber w-full" type="submit">Run Decision Engine</button>
-          </form>
+            <form class="insight-card space-y-3" method="post" action="/actions/decision-engine">
+              <div>
+                <p class="panel-kicker">Decision Engine</p>
+                <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Score fresh candidates and push requests when confidence clears the bar.</p>
+              </div>
+              <input id="decision-engine-user" name="username" placeholder="all users" class="field-input text-sm" />
+              <button class="button button-amber w-full" type="submit">Run Decision Engine</button>
+            </form>
 
-          <form class="insight-card space-y-3" method="post" action="/actions/suggested-for-you">
-            <div>
-              <p class="panel-kicker">Suggested For You</p>
-              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Build per-user available-title snapshots for the Jellyfin Vanguarr plugin and synced playlists.</p>
-            </div>
-            <input id="suggested-for-you-user" name="username" placeholder="all users" class="field-input text-sm" />
-            <button class="button button-primary w-full" type="submit">Refresh Suggested For You</button>
-          </form>
+            <form class="insight-card space-y-3 lg:col-span-2" method="post" action="/actions/suggested-for-you">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p class="panel-kicker">Suggested For You</p>
+                  <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Refresh the Jellyfin-facing suggestion shelves from the current indexed library and user profiles.</p>
+                </div>
+                <a class="button button-ghost w-full sm:w-auto" href="/settings/scheduling">Open Scheduling</a>
+              </div>
+              <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                <input id="suggested-for-you-user" name="username" placeholder="all users" class="field-input text-sm" />
+                <button class="button button-primary w-full md:w-auto" type="submit">Refresh Suggested For You</button>
+              </div>
+            </form>
+          </div>
 
           <div class="insight-card">
             <p class="panel-kicker">Scheduler</p>

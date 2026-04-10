@@ -6,9 +6,9 @@
     <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
       <div class="max-w-3xl">
         <p class="panel-kicker">Profiles</p>
-        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Manifest editor</h1>
+        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Profiles and manifests</h1>
         <p class="mt-3 text-sm leading-6 text-[var(--text-soft)] sm:text-[0.96rem]">
-          Edit the canonical JSON taste manifest, then inspect the derived summary block the engines and operators use for quick review.
+          Tune the canonical JSON taste manifest, inspect the operator-facing summary, and verify exactly what this profile is sending into requests and suggestions.
         </p>
       </div>
       <div class="surface rounded-[1.25rem] bg-[rgba(255,255,255,0.03)] px-4 py-4 xl:min-w-[320px]">
@@ -139,7 +139,7 @@
   </section>
 
   <div class="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
-    <aside class="space-y-5">
+    <aside class="space-y-5 xl:sticky xl:top-24 xl:self-start">
       <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <p class="panel-kicker">Profile Loader</p>
@@ -151,10 +151,13 @@
               <label class="mb-2 block text-sm font-medium" for="manifest-user">Username</label>
               <input id="manifest-user" name="username" value="{{ selected_user }}" placeholder="username" class="field-input text-sm" />
             </div>
-            <button class="button button-primary w-full" type="submit">Load Profile</button>
+            <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <button class="button button-primary w-full" type="submit">Load Profile</button>
+              <a class="button button-ghost w-full" href="/settings/general">Open Settings</a>
+            </div>
           </form>
           <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">
-        Use an existing media-server username to inspect a live profile, or enter a new one to create a fresh scaffold.
+            Use an existing media-server username to inspect a live profile, or enter a new one to create a fresh scaffold.
           </p>
         </div>
       </section>

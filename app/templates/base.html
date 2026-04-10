@@ -523,33 +523,240 @@
         padding: 1.25rem;
       }
 
+      .app-shell {
+        min-height: 100vh;
+      }
+
+      .nav-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        background: rgba(3, 8, 14, 0.72);
+        backdrop-filter: blur(14px);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.22s ease;
+      }
+
+      .app-sidebar {
+        position: fixed;
+        inset: 0 auto 0 0;
+        z-index: 50;
+        display: flex;
+        width: min(320px, 88vw);
+        transform: translateX(-104%);
+        flex-direction: column;
+        border-right: 1px solid rgba(255, 255, 255, 0.05);
+        background: linear-gradient(180deg, rgba(8, 14, 23, 0.98), rgba(7, 12, 20, 0.94));
+        backdrop-filter: blur(22px);
+        transition: transform 0.24s ease;
+      }
+
+      .sidebar-scroll {
+        height: 100%;
+        overflow-y: auto;
+        padding-bottom: 1.5rem;
+      }
+
+      .app-main {
+        min-width: 0;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        background: rgba(6, 11, 18, 0.72);
+        backdrop-filter: blur(18px);
+      }
+
+      .content-shell {
+        margin: 0 auto;
+        width: min(100%, 1600px);
+      }
+
+      .topbar-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        border-radius: 999px;
+        border: 1px solid rgba(160, 182, 207, 0.12);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--text-soft);
+        font-size: 0.78rem;
+        line-height: 1;
+        padding: 0.72rem 0.95rem;
+        transition:
+          border-color 0.18s ease,
+          background-color 0.18s ease,
+          color 0.18s ease,
+          transform 0.18s ease;
+      }
+
+      .topbar-link:hover {
+        transform: translateY(-1px);
+        border-color: rgba(160, 182, 207, 0.2);
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--text);
+      }
+
+      .topbar-link-active {
+        border-color: rgba(84, 180, 255, 0.32);
+        background: rgba(84, 180, 255, 0.13);
+        color: white;
+      }
+
+      .topbar-link-dot {
+        width: 0.4rem;
+        height: 0.4rem;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.9;
+      }
+
+      .mobile-nav-toggle,
+      .mobile-nav-close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 1rem;
+        border: 1px solid rgba(160, 182, 207, 0.12);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text-soft);
+        transition:
+          border-color 0.18s ease,
+          background-color 0.18s ease,
+          color 0.18s ease,
+          transform 0.18s ease;
+      }
+
+      .mobile-nav-toggle:hover,
+      .mobile-nav-close:hover {
+        transform: translateY(-1px);
+        border-color: rgba(160, 182, 207, 0.2);
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text);
+      }
+
+      .mobile-nav-toggle {
+        height: 3rem;
+        width: 3rem;
+      }
+
+      .mobile-nav-close {
+        height: 2.6rem;
+        width: 2.6rem;
+      }
+
+      .sidebar-note {
+        border-radius: 1.3rem;
+        border: 1px solid rgba(160, 182, 207, 0.08);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.016)),
+          rgba(9, 15, 24, 0.92);
+        padding: 1rem;
+      }
+
+      .sidebar-note-list {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .sidebar-note-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        font-size: 0.9rem;
+      }
+
+      .page-toast {
+        border-color: rgba(84, 180, 255, 0.24);
+        background:
+          radial-gradient(circle at top left, rgba(84, 180, 255, 0.16), transparent 46%),
+          linear-gradient(180deg, rgba(84, 180, 255, 0.08), rgba(84, 180, 255, 0.03));
+      }
+
+      body[data-nav-open="true"] {
+        overflow: hidden;
+      }
+
+      body[data-nav-open="true"] .nav-overlay {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      body[data-nav-open="true"] .app-sidebar {
+        transform: translateX(0);
+      }
+
       @media (max-width: 1023px) {
         .field-textarea {
           min-height: 420px;
         }
       }
+
+      @media (min-width: 1024px) {
+        body[data-nav-open="true"] {
+          overflow: auto;
+        }
+
+        .app-shell {
+          display: grid;
+          grid-template-columns: 300px minmax(0, 1fr);
+        }
+
+        .nav-overlay {
+          display: none;
+        }
+
+        .app-sidebar {
+          position: sticky;
+          top: 0;
+          width: auto;
+          transform: none;
+          border-right: 1px solid rgba(255, 255, 255, 0.05);
+        }
+      }
     </style>
   </head>
-  <body class="min-h-screen">
+  <body class="min-h-screen" data-nav-open="false">
     {% set path = request.url.path %}
     {% set settings_group_active = path.startswith('/settings') or path.startswith('/manifest') %}
-    <div class="min-h-screen lg:grid lg:grid-cols-[288px_minmax(0,1fr)]">
-      <aside class="border-b border-white/5 bg-[var(--sidebar)] backdrop-blur-xl lg:min-h-screen lg:border-b-0 lg:border-r lg:border-r-white/5">
-        <div class="flex h-full flex-col">
+    {% set current_area = "Dashboard" if path == "/" else "War Room" if path.startswith('/logs') else "Settings" if path.startswith('/settings') else "Profiles" if path.startswith('/manifest') else "Vanguarr" %}
+    {% set current_summary = "Monitor health, requests, profiles, and task activity from one place." if path == "/" else "Watch live request and suggestion activity without losing the thread." if path.startswith('/logs') else "Tune runtime behavior and integrations without leaving the app." if path.startswith('/settings') else "Inspect, rebuild, and tune per-user taste manifests and suggestion outputs." if path.startswith('/manifest') else "Operate Vanguarr from a single dark-mode control surface." %}
+    <div class="nav-overlay lg:hidden" data-nav-overlay></div>
+    <div class="app-shell">
+      <aside class="app-sidebar" data-app-sidebar>
+        <div class="sidebar-scroll flex h-full flex-col">
           <div class="px-5 pb-5 pt-5">
             <div class="surface rounded-[1.6rem] bg-[var(--sidebar-alt)] px-4 py-4">
-              <div class="flex items-center gap-3">
-                <div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-[rgba(84,180,255,0.22)] bg-[var(--accent-soft)] font-semibold text-[var(--accent-strong)] shadow-[0_0_0_1px_rgba(84,180,255,0.08)]">
-                  VG
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex items-center gap-3">
+                  <div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-[rgba(84,180,255,0.22)] bg-[var(--accent-soft)] font-semibold text-[var(--accent-strong)] shadow-[0_0_0_1px_rgba(84,180,255,0.08)]">
+                    VG
+                  </div>
+                  <div>
+                    <p class="text-lg font-semibold tracking-tight">Vanguarr</p>
+                    <p class="mono text-[11px] uppercase tracking-[0.26em] text-[var(--text-dim)]">Scout of the ARR Stack</p>
+                  </div>
                 </div>
-                <div>
-                  <p class="text-lg font-semibold tracking-tight">Vanguarr</p>
-                  <p class="mono text-[11px] uppercase tracking-[0.26em] text-[var(--text-dim)]">Curation Engine</p>
-                </div>
+                <button type="button" class="mobile-nav-close lg:hidden" data-nav-close aria-label="Close navigation">
+                  <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M5 5l10 10" />
+                    <path d="M15 5L5 15" />
+                  </svg>
+                </button>
               </div>
               <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">
-                A cleaner control surface for persona building, candidate scoring, and request operations.
+                Run profiles, scout requests, and ship personalized suggestions from one calmer, operator-first control surface.
               </p>
+              <div class="mt-4 flex flex-wrap gap-2">
+                <span class="data-chip">Profiles</span>
+                <span class="data-chip">Requests</span>
+                <span class="data-chip">Suggestions</span>
+              </div>
             </div>
           </div>
 
@@ -558,6 +765,7 @@
             <nav class="mt-3 space-y-2 text-sm">
               <a
                 href="/"
+                data-nav-link
                 class="nav-link {{ 'nav-link-active' if path == '/' else 'nav-link-idle' }}"
               >
                 <span class="flex items-center gap-3">
@@ -573,6 +781,7 @@
               </a>
               <a
                 href="/logs"
+                data-nav-link
                 class="nav-link {{ 'nav-link-active' if path.startswith('/logs') else 'nav-link-idle' }}"
               >
                 <span class="flex items-center gap-3">
@@ -622,6 +831,7 @@
                   {% for item in settings_nav_items %}
                   <a
                     href="{{ item.href }}"
+                    data-nav-link
                     class="settings-subnav-link {{ 'settings-subnav-link-active' if active_settings_slug is defined and active_settings_slug == item.slug else 'settings-subnav-link-idle' }}"
                   >
                     <span>{{ item.title }}</span>
@@ -643,27 +853,48 @@
           </div>
 
           <div class="px-4 pt-6">
-            <p class="panel-kicker px-3">System Notes</p>
+            <p class="panel-kicker px-3">Operator View</p>
             <div class="mt-3 space-y-3">
-              <div class="surface rounded-2xl px-4 py-4">
+              <div class="sidebar-note">
                 <div class="flex items-start justify-between gap-3">
                   <div>
                     <p class="panel-kicker">Workflow</p>
-                    <p class="mt-2 text-sm font-medium text-white">Install, connect, monitor, adjust.</p>
+                    <p class="mt-2 text-sm font-medium text-white">Profile, decide, suggest.</p>
                   </div>
                   <span class="status-pill status-good">Ready</span>
                 </div>
-                <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">
-                  The shell is organized around everyday operator tasks instead of generic page sections.
-                </p>
+                <div class="sidebar-note-list mt-4">
+                  <div class="sidebar-note-row">
+                    <span class="text-[var(--text-soft)]">Profiles</span>
+                    <span class="mono text-xs text-white">history -> taste</span>
+                  </div>
+                  <div class="sidebar-note-row">
+                    <span class="text-[var(--text-soft)]">Decisions</span>
+                    <span class="mono text-xs text-white">score -> request</span>
+                  </div>
+                  <div class="sidebar-note-row">
+                    <span class="text-[var(--text-soft)]">Suggestions</span>
+                    <span class="mono text-xs text-white">rank -> shelf</span>
+                  </div>
+                </div>
               </div>
 
-              <div class="surface rounded-2xl px-4 py-4">
+              <div class="sidebar-note">
                 <p class="panel-kicker">Mounted Data</p>
-                <p class="mt-2 mono text-xs text-white">./data/</p>
-                <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">
-                  SQLite history, profile blocks, and logs are all visible on the host for quick inspection.
-                </p>
+                <div class="sidebar-note-list mt-4">
+                  <div class="sidebar-note-row">
+                    <span class="text-[var(--text-soft)]">Root</span>
+                    <span class="mono text-xs text-white">./data</span>
+                  </div>
+                  <div class="sidebar-note-row">
+                    <span class="text-[var(--text-soft)]">Profiles</span>
+                    <span class="mono text-xs text-white">json</span>
+                  </div>
+                  <div class="sidebar-note-row">
+                    <span class="text-[var(--text-soft)]">Events</span>
+                    <span class="mono text-xs text-white">sqlite</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -690,35 +921,122 @@
         </div>
       </aside>
 
-      <div class="min-w-0">
-        <header class="border-b border-white/5 bg-[rgba(7,12,19,0.58)] px-4 py-4 backdrop-blur-xl md:px-6 lg:px-8">
-          <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-            <div>
-              <p class="panel-kicker">Vanguarr Control Surface</p>
-              <p class="mt-2 max-w-3xl text-sm leading-6 text-[var(--text-soft)]">
-                A cleaner operating layer for profile generation, LLM request decisions, and host-visible runtime state.
-              </p>
+      <div class="app-main">
+        <header class="topbar px-4 py-4 md:px-6 lg:px-8">
+          <div class="content-shell flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div class="flex items-start gap-3">
+              <button type="button" class="mobile-nav-toggle lg:hidden" data-nav-toggle aria-label="Open navigation" aria-expanded="false">
+                <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M3.5 5.5h13" />
+                  <path d="M3.5 10h13" />
+                  <path d="M3.5 14.5h13" />
+                </svg>
+              </button>
+              <div>
+                <p class="panel-kicker">Vanguarr Control Surface</p>
+                <p class="mt-2 text-lg font-semibold tracking-tight text-white">{{ current_area }}</p>
+                <p class="mt-1 max-w-3xl text-sm leading-6 text-[var(--text-soft)]">
+                  {{ current_summary }}
+                </p>
+              </div>
             </div>
             <div class="flex flex-wrap items-center gap-2">
-              <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5 text-xs text-[var(--text-soft)]">Data Mount: ./data</span>
-              <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5 text-xs text-[var(--text-soft)]">Health API: /api/health</span>
-              <span class="rounded-full border border-[rgba(84,180,255,0.18)] bg-[var(--accent-soft)] px-3 py-1.5 text-xs text-[var(--accent-strong)]">Dark Admin UI</span>
+              <a href="/" class="topbar-link {{ 'topbar-link-active' if path == '/' else '' }}">
+                <span class="topbar-link-dot"></span>
+                Dashboard
+              </a>
+              <a href="/logs" class="topbar-link {{ 'topbar-link-active' if path.startswith('/logs') else '' }}">
+                <span class="topbar-link-dot"></span>
+                War Room
+              </a>
+              <a href="/manifest" class="topbar-link {{ 'topbar-link-active' if path.startswith('/manifest') else '' }}">
+                <span class="topbar-link-dot"></span>
+                Profiles
+              </a>
+              <a href="{{ '/settings/' + (active_settings_slug if active_settings_slug is defined else 'general') }}" class="topbar-link {{ 'topbar-link-active' if path.startswith('/settings') else '' }}">
+                <span class="topbar-link-dot"></span>
+                Settings
+              </a>
             </div>
           </div>
         </header>
 
         <main class="px-4 py-5 md:px-6 lg:px-8">
+          <div class="content-shell">
           {% if toast %}
-          <div class="surface page-hero mb-5 rounded-[1.35rem] border-[rgba(84,180,255,0.24)] px-4 py-3 text-sm text-white">
+          <div class="surface page-toast mb-5 rounded-[1.35rem] px-4 py-3 text-sm text-white">
             {{ toast }}
           </div>
           {% endif %}
 
           {% block content %}{% endblock %}
+          </div>
         </main>
       </div>
     </div>
 
+    <script>
+      (function () {
+        const body = document.body;
+        const overlay = document.querySelector("[data-nav-overlay]");
+        const toggleButtons = Array.from(document.querySelectorAll("[data-nav-toggle]"));
+        const closeButtons = Array.from(document.querySelectorAll("[data-nav-close]"));
+        const navLinks = Array.from(document.querySelectorAll("[data-nav-link]"));
+        const desktopQuery = window.matchMedia("(min-width: 1024px)");
+
+        function syncNavButtons() {
+          const expanded = body.dataset.navOpen === "true";
+          toggleButtons.forEach((button) => button.setAttribute("aria-expanded", expanded ? "true" : "false"));
+        }
+
+        function setNavOpen(open) {
+          body.dataset.navOpen = open ? "true" : "false";
+          syncNavButtons();
+        }
+
+        toggleButtons.forEach((button) => {
+          button.addEventListener("click", () => setNavOpen(body.dataset.navOpen !== "true"));
+        });
+
+        closeButtons.forEach((button) => {
+          button.addEventListener("click", () => setNavOpen(false));
+        });
+
+        if (overlay) {
+          overlay.addEventListener("click", () => setNavOpen(false));
+        }
+
+        navLinks.forEach((link) => {
+          link.addEventListener("click", () => {
+            if (!desktopQuery.matches) {
+              setNavOpen(false);
+            }
+          });
+        });
+
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            setNavOpen(false);
+          }
+        });
+
+        if (desktopQuery.addEventListener) {
+          desktopQuery.addEventListener("change", (event) => {
+            if (event.matches) {
+              setNavOpen(false);
+            }
+          });
+        } else if (desktopQuery.addListener) {
+          desktopQuery.addListener((event) => {
+            if (event.matches) {
+              setNavOpen(false);
+            }
+          });
+        }
+
+        syncNavButtons();
+      })();
+    </script>
     {% block scripts %}{% endblock %}
   </body>
 </html>
