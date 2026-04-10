@@ -34,12 +34,12 @@ https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/m
 7. Install the `Vanguarr` plugin.
 8. Restart Jellyfin after the install finishes.
 
-The repository URL above assumes these files are pushed to GitHub. If you are testing from a local checkout first, host [`jellyfin-plugin/manifest.json`](../jellyfin-plugin/manifest.json) and [`jellyfin-plugin/dist/vanguarr-1.2.3.0.zip`](../jellyfin-plugin/dist/vanguarr-1.2.3.0.zip) somewhere Jellyfin can reach over HTTP, or update the URLs to match your own Git hosting.
+The repository URL above assumes these files are pushed to GitHub. If you are testing from a local checkout first, host [`jellyfin-plugin/manifest.json`](../jellyfin-plugin/manifest.json) and [`jellyfin-plugin/dist/vanguarr-1.2.4.0.zip`](../jellyfin-plugin/dist/vanguarr-1.2.4.0.zip) somewhere Jellyfin can reach over HTTP, or update the URLs to match your own Git hosting.
 
 If you want to inspect or sideload the package manually, the plugin zip is published in the repo at:
 
 ```text
-https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.2.3.0.zip
+https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.2.4.0.zip
 ```
 
 ## Configure Vanguarr

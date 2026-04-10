@@ -8,12 +8,12 @@
     "category": "General",
     "versions": [
       {
-        "version": "1.2.3.0",
-        "changelog": "- Keeps the native shared Suggested Movies and Suggested Shows folders but makes them advertise themselves to the stock Jellyfin client as normal collection folders.\n- Preserves per-user personalization inside the folder query so each user still gets their own ranked results.\n- Keeps the stock-client-focused setup with no extra Jellyfin plugin dependency.\n",
+        "version": "1.2.4.0",
+        "changelog": "- Fixes the native Suggested Movies and Suggested Shows folders so their suggestion catalog is initialized at startup and the folders populate consistently after Jellyfin restarts.\n- Generates top-level artwork for the suggested views from existing local library art so they no longer appear as empty text-only folders.\n- Keeps the stock-client-focused setup with no extra Jellyfin plugin dependency.\n",
         "targetAbi": "10.11.0",
-        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.2.3.0.zip",
-        "checksum": "9c84b64f8666f20f5d09bec992d16857",
-        "timestamp": "2026-04-09T23:52:24Z"
+        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.2.4.0.zip",
+        "checksum": "4065e5ff0beec09284bedcf15da28d1d",
+        "timestamp": "2026-04-10T00:08:38Z"
       }
     ]
   }
