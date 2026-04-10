@@ -244,24 +244,169 @@ class VanguarrService:
         return json_path
 
     def get_logs(self, *, search: str | None = None, limit: int | None = None) -> list[DecisionLog]:
+        feed = self.get_log_feed(
+            search=search,
+            limit=limit or self.settings.decision_page_size,
+        )
+        return feed["raw_rows"]
+
+    def get_log_feed(
+        self,
+        *,
+        search: str | None = None,
+        view: str = "all",
+        sort_by: str = "created_at",
+        sort_direction: str = "desc",
+        page: int = 1,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        normalized_view = self._normalize_log_view(view)
+        normalized_sort = self._normalize_log_sort(sort_by)
+        normalized_direction = "asc" if str(sort_direction).lower() == "asc" else "desc"
+        page_size = max(1, int(limit or self.settings.decision_page_size))
+        search_value = str(search or "").strip()
+
         with self.session_scope() as session:
-            stmt = select(DecisionLog).order_by(desc(DecisionLog.created_at))
-            if search:
-                like = f"%{search}%"
-                stmt = stmt.where(
-                    or_(
-                        DecisionLog.username.ilike(like),
-                        DecisionLog.media_title.ilike(like),
-                        DecisionLog.reasoning.ilike(like),
-                    )
-                )
-            stmt = stmt.limit(limit or self.settings.decision_page_size)
-            return list(session.scalars(stmt))
+            base_conditions = self._build_log_conditions(search_value)
+            counts = {
+                "all": self._count_logs(session, base_conditions),
+                "requests": self._count_logs(
+                    session,
+                    [*base_conditions, DecisionLog.engine == "decision_engine"],
+                ),
+                "suggestions": self._count_logs(
+                    session,
+                    [*base_conditions, DecisionLog.engine == "suggested_for_you"],
+                ),
+            }
+
+            filtered_conditions = [*base_conditions, *self._view_log_conditions(normalized_view)]
+            total_rows = self._count_logs(session, filtered_conditions)
+            total_pages = max(1, (total_rows + page_size - 1) // page_size) if total_rows else 1
+            current_page = min(max(1, int(page)), total_pages)
+            offset = (current_page - 1) * page_size
+
+            stmt = select(DecisionLog)
+            if filtered_conditions:
+                stmt = stmt.where(*filtered_conditions)
+            stmt = stmt.order_by(*self._log_ordering(normalized_sort, normalized_direction))
+            stmt = stmt.offset(offset).limit(page_size)
+            rows = list(session.scalars(stmt))
+            error_rows = self._count_logs(session, [*filtered_conditions, DecisionLog.error.is_not(None)])
+
+        return {
+            "rows": [self._serialize_log_row(row) for row in rows],
+            "raw_rows": rows,
+            "query": search_value,
+            "view": normalized_view,
+            "sort_by": normalized_sort,
+            "sort_direction": normalized_direction,
+            "page": current_page,
+            "page_size": page_size,
+            "total_rows": total_rows,
+            "total_pages": total_pages,
+            "has_previous": current_page > 1,
+            "has_next": current_page < total_pages,
+            "view_counts": counts,
+            "error_rows": error_rows,
+            "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        }
 
     def get_task_runs(self, limit: int = 10) -> list[TaskRun]:
         with self.session_scope() as session:
             stmt = select(TaskRun).order_by(desc(TaskRun.started_at)).limit(limit)
             return list(session.scalars(stmt))
+
+    @staticmethod
+    def _normalize_log_view(value: str | None) -> str:
+        raw = str(value or "all").strip().lower()
+        if raw in {"requests", "suggestions"}:
+            return raw
+        return "all"
+
+    @staticmethod
+    def _normalize_log_sort(value: str | None) -> str:
+        raw = str(value or "created_at").strip().lower()
+        if raw in {"created_at", "engine", "username", "media_title", "decision", "confidence", "requested", "reasoning"}:
+            return raw
+        return "created_at"
+
+    @classmethod
+    def _build_log_conditions(cls, search: str) -> list[Any]:
+        if not search:
+            return []
+        like = f"%{search}%"
+        return [
+            or_(
+                DecisionLog.username.ilike(like),
+                DecisionLog.media_title.ilike(like),
+                DecisionLog.reasoning.ilike(like),
+                DecisionLog.source.ilike(like),
+                DecisionLog.decision.ilike(like),
+                DecisionLog.engine.ilike(like),
+            )
+        ]
+
+    @staticmethod
+    def _view_log_conditions(view: str) -> list[Any]:
+        if view == "requests":
+            return [DecisionLog.engine == "decision_engine"]
+        if view == "suggestions":
+            return [DecisionLog.engine == "suggested_for_you"]
+        return []
+
+    @staticmethod
+    def _count_logs(session: Session, conditions: list[Any]) -> int:
+        stmt = select(func.count(DecisionLog.id))
+        if conditions:
+            stmt = stmt.where(*conditions)
+        return int(session.scalar(stmt) or 0)
+
+    @staticmethod
+    def _log_ordering(sort_by: str, sort_direction: str) -> tuple[Any, ...]:
+        column = {
+            "created_at": DecisionLog.created_at,
+            "engine": DecisionLog.engine,
+            "username": DecisionLog.username,
+            "media_title": DecisionLog.media_title,
+            "decision": DecisionLog.decision,
+            "confidence": DecisionLog.confidence,
+            "requested": DecisionLog.requested,
+            "reasoning": DecisionLog.reasoning,
+        }.get(sort_by, DecisionLog.created_at)
+
+        primary = column.asc() if sort_direction == "asc" else column.desc()
+        if sort_by == "created_at":
+            return (primary, DecisionLog.id.desc())
+        return (primary, DecisionLog.created_at.desc(), DecisionLog.id.desc())
+
+    @staticmethod
+    def _format_log_timestamp(value: datetime | None) -> str:
+        if value is None:
+            return ""
+        return value.replace(microsecond=0).isoformat(sep=" ")
+
+    @classmethod
+    def _serialize_log_row(cls, row: DecisionLog) -> dict[str, Any]:
+        return {
+            "id": row.id,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "created_at_display": cls._format_log_timestamp(row.created_at),
+            "engine": row.engine,
+            "engine_label": "Suggestion" if row.engine == "suggested_for_you" else "Request",
+            "username": row.username,
+            "media_type": row.media_type,
+            "media_id": row.media_id,
+            "media_title": row.media_title,
+            "source": row.source,
+            "decision": row.decision,
+            "confidence": float(row.confidence or 0.0),
+            "threshold": float(row.threshold or 0.0),
+            "requested": bool(row.requested),
+            "request_id": row.request_id,
+            "reasoning": row.reasoning,
+            "error": row.error,
+        }
 
     def recover_interrupted_tasks(self) -> int:
         with self.session_scope() as session:
@@ -1376,6 +1521,29 @@ class VanguarrService:
                         tvdb_id=self._coerce_int(external_ids.get("tvdb")),
                         imdb_id=str(external_ids.get("imdb") or "").strip() or None,
                         payload_json=json.dumps(candidate, ensure_ascii=True),
+                    )
+                )
+                session.add(
+                    DecisionLog(
+                        engine="suggested_for_you",
+                        username=current_username,
+                        media_type=str(candidate.get("media_type") or "unknown"),
+                        media_id=int(candidate.get("media_id") or 0),
+                        media_title=str(candidate.get("title") or "Unknown"),
+                        source=", ".join(candidate.get("sources", [])) or "library:indexed",
+                        decision="SUGGEST",
+                        confidence=float(
+                            features.get("hybrid_score")
+                            or features.get("final_score")
+                            or features.get("deterministic_score")
+                            or 0.0
+                        ),
+                        threshold=float(self.settings.suggestion_ai_threshold),
+                        requested=False,
+                        request_id=None,
+                        reasoning=reasoning,
+                        payload_json=json.dumps(candidate, ensure_ascii=True),
+                        error=None,
                     )
                 )
 

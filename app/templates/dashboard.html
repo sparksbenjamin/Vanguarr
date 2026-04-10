@@ -153,10 +153,10 @@
                   <td class="text-sm">{{ log.username }}</td>
                   <td>
                     <p class="font-medium">{{ log.media_title }}</p>
-                    <p class="mt-1 text-xs text-[var(--text-dim)]">{{ log.media_type }} / {{ log.source }}</p>
+                    <p class="mt-1 text-xs text-[var(--text-dim)]">{{ log.engine.replace("_", " ").title() }} / {{ log.media_type }} / {{ log.source }}</p>
                   </td>
                   <td>
-                    <span class="status-pill {{ 'status-good' if log.decision == 'REQUEST' else 'status-neutral' }}">
+                    <span class="status-pill {{ 'status-good' if log.decision in ['REQUEST', 'SUGGEST'] else 'status-neutral' }}">
                       {{ log.decision }}
                     </span>
                     <p class="mono mt-2 text-xs text-[var(--text-dim)]">conf={{ "%.2f"|format(log.confidence) }}</p>

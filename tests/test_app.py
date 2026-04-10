@@ -90,6 +90,69 @@ def test_scheduling_settings_page_shows_library_sync_box() -> None:
     assert "Suggestion refresh" in response.text
 
 
+def test_logs_page_shows_filters_and_live_feed_controls() -> None:
+    with TestClient(app) as client:
+        response = client.get("/logs")
+
+    assert response.status_code == 200
+    assert "Live decision feed" in response.text
+    assert "Suggestions" in response.text
+    assert "/api/logs" in response.text
+    assert "Previous" in response.text
+    assert "Next" in response.text
+
+
+def test_logs_api_returns_feed_payload(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_log_feed",
+            lambda **kwargs: {
+                "rows": [
+                    {
+                        "id": 1,
+                        "created_at": "2026-04-10T12:00:00Z",
+                        "created_at_display": "2026-04-10 12:00:00",
+                        "engine": "suggested_for_you",
+                        "engine_label": "Suggestion",
+                        "username": "alice",
+                        "media_type": "movie",
+                        "media_id": 101,
+                        "media_title": "Arrival",
+                        "source": "library:indexed",
+                        "decision": "SUGGEST",
+                        "confidence": 0.88,
+                        "threshold": 0.58,
+                        "requested": False,
+                        "request_id": None,
+                        "reasoning": "Strong fit.",
+                        "error": None,
+                    }
+                ],
+                "raw_rows": [],
+                "query": "arrival",
+                "view": "suggestions",
+                "sort_by": "confidence",
+                "sort_direction": "desc",
+                "page": 1,
+                "page_size": 25,
+                "total_rows": 1,
+                "total_pages": 1,
+                "has_previous": False,
+                "has_next": False,
+                "view_counts": {"all": 5, "requests": 3, "suggestions": 2},
+                "error_rows": 0,
+                "generated_at": "2026-04-10T12:00:00Z",
+            },
+        )
+
+        response = client.get("/api/logs?q=arrival&view=suggestions&sort=confidence&dir=desc&page=1")
+
+    assert response.status_code == 200
+    assert response.json()["view"] == "suggestions"
+    assert response.json()["rows"][0]["decision"] == "SUGGEST"
+
+
 def test_settings_root_redirects_to_general() -> None:
     with TestClient(app) as client:
         response = client.get("/settings", follow_redirects=False)

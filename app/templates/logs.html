@@ -1,55 +1,90 @@
 {% extends "base.html" %}
 
-{% block content %}
-{% set stats = namespace(requests=0, ignores=0, errored=0) %}
-{% for log in logs %}
-  {% if log.decision == "REQUEST" %}
-    {% set stats.requests = stats.requests + 1 %}
-  {% else %}
-    {% set stats.ignores = stats.ignores + 1 %}
-  {% endif %}
-  {% if log.error %}
-    {% set stats.errored = stats.errored + 1 %}
-  {% endif %}
-{% endfor %}
+{% macro sort_href(column) -%}
+{{ request.url.include_query_params(sort=column, dir='asc' if sort_by != column or sort_direction == 'desc' else 'desc', page=1) }}
+{%- endmacro %}
 
+{% macro page_href(page_number) -%}
+{{ request.url.include_query_params(page=page_number) }}
+{%- endmacro %}
+
+{% block content %}
+{% set stats = log_feed %}
 <section class="space-y-5">
   <section class="surface page-hero rounded-[1.6rem] px-5 py-5 lg:px-6">
     <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
       <div class="max-w-3xl">
         <p class="panel-kicker">War Room</p>
-        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Decision log</h1>
+        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Live decision feed</h1>
         <p class="mt-3 text-sm leading-6 text-[var(--text-soft)] sm:text-[0.96rem]">
-          Search stored hybrid outcomes, inspect why a TMDb-enriched lane-scored title was requested or ignored, and review failures without leaving the operational flow.
+          Watch request decisions and suggestion rows arrive in one stream, sort the evidence by the signal you care about, and page through the history without turning the War Room into an endless scroll.
         </p>
       </div>
       <form class="grid w-full gap-3 sm:grid-cols-[minmax(0,1fr)_auto] xl:max-w-2xl" method="get" action="/logs">
-        <input name="q" value="{{ query }}" placeholder="Search usernames, titles, or reasoning" class="field-input text-sm" />
+        <input type="hidden" name="view" value="{{ current_view }}" />
+        <input type="hidden" name="sort" value="{{ sort_by }}" />
+        <input type="hidden" name="dir" value="{{ sort_direction }}" />
+        <input type="hidden" name="page" value="1" />
+        <input id="war-room-search" name="q" value="{{ query }}" placeholder="Search usernames, titles, reasoning, source, or engine" class="field-input text-sm" />
         <button class="button button-primary" type="submit">Search</button>
       </form>
     </div>
   </section>
 
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div class="flex flex-wrap gap-2">
+      <a
+        href="{{ request.url.include_query_params(view='all', page=1) }}"
+        class="button {{ 'button-primary' if current_view == 'all' else 'button-ghost' }}"
+        id="war-room-filter-all"
+      >
+        ALL
+        <span class="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-xs" id="war-room-count-all">{{ stats.view_counts.all }}</span>
+      </a>
+      <a
+        href="{{ request.url.include_query_params(view='requests', page=1) }}"
+        class="button {{ 'button-primary' if current_view == 'requests' else 'button-ghost' }}"
+        id="war-room-filter-requests"
+      >
+        Requests
+        <span class="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-xs" id="war-room-count-requests">{{ stats.view_counts.requests }}</span>
+      </a>
+      <a
+        href="{{ request.url.include_query_params(view='suggestions', page=1) }}"
+        class="button {{ 'button-primary' if current_view == 'suggestions' else 'button-ghost' }}"
+        id="war-room-filter-suggestions"
+      >
+        Suggestions
+        <span class="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-xs" id="war-room-count-suggestions">{{ stats.view_counts.suggestions }}</span>
+      </a>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-soft)]">
+      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Sort {{ sort_by }} / {{ sort_direction }}</span>
+      <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">Page size {{ stats.page_size }}</span>
+      <span class="rounded-full border border-[rgba(90,217,158,0.2)] bg-[rgba(90,217,158,0.08)] px-3 py-1.5" id="war-room-live-chip">Live refresh on</span>
+    </div>
+  </div>
+
   <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
     <article class="metric-card">
       <p class="panel-kicker">Rows</p>
-      <p class="mt-3 text-2xl font-semibold">{{ logs|length }}</p>
-      <p class="mt-2 text-sm text-[var(--text-soft)]">{{ "Filtered results" if query else "Latest stored decisions" }}</p>
+      <p class="mt-3 text-2xl font-semibold" id="war-room-total-rows">{{ stats.total_rows }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Rows matching the current filter and search.</p>
     </article>
     <article class="metric-card">
-      <p class="panel-kicker">Requests</p>
-      <p class="mt-3 text-2xl font-semibold">{{ stats.requests }}</p>
-      <p class="mt-2 text-sm text-[var(--text-soft)]">Decisions marked REQUEST</p>
+      <p class="panel-kicker">Request Logs</p>
+      <p class="mt-3 text-2xl font-semibold" id="war-room-request-rows">{{ stats.view_counts.requests }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Request-side decision rows in this search window.</p>
     </article>
     <article class="metric-card">
-      <p class="panel-kicker">Ignores</p>
-      <p class="mt-3 text-2xl font-semibold">{{ stats.ignores }}</p>
-      <p class="mt-2 text-sm text-[var(--text-soft)]">Decisions marked IGNORE</p>
+      <p class="panel-kicker">Suggestion Logs</p>
+      <p class="mt-3 text-2xl font-semibold" id="war-room-suggestion-rows">{{ stats.view_counts.suggestions }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Suggested For You rows written into the War Room.</p>
     </article>
     <article class="metric-card">
       <p class="panel-kicker">Errors</p>
-      <p class="mt-3 text-2xl font-semibold">{{ stats.errored }}</p>
-      <p class="mt-2 text-sm text-[var(--text-soft)]">Errors visible in this page</p>
+      <p class="mt-3 text-2xl font-semibold" id="war-room-error-rows">{{ stats.error_rows }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Rows in this filtered view that captured an error.</p>
     </article>
   </div>
 
@@ -57,14 +92,15 @@
     <div class="border-b border-white/5 px-5 py-4">
       <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <p class="panel-kicker">Stored Decisions</p>
-          <h2 class="mt-2 panel-title">Search results</h2>
+          <p class="panel-kicker">Operational Feed</p>
+          <h2 class="mt-2 panel-title">Sortable live log stream</h2>
         </div>
         <div class="flex flex-wrap gap-2 text-xs text-[var(--text-soft)]">
           {% if query %}
           <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">query={{ query }}</span>
           {% endif %}
-          <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5">rows={{ logs|length }}</span>
+          <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5" id="war-room-page-indicator">page {{ stats.page }} of {{ stats.total_pages }}</span>
+          <span class="rounded-full border border-[rgba(160,182,207,0.12)] bg-white/5 px-3 py-1.5" id="war-room-generated-at">updated {{ stats.generated_at }}</span>
         </div>
       </div>
     </div>
@@ -74,26 +110,30 @@
         <table class="data-table min-w-full">
           <thead>
             <tr>
-              <th>When</th>
-              <th>User</th>
-              <th>Title</th>
-              <th>Decision</th>
-              <th>Confidence</th>
-              <th>Requested</th>
-              <th>Reasoning</th>
+              <th><a class="hover:text-white" href="{{ sort_href('created_at') }}">When{% if sort_by == 'created_at' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('engine') }}">Flow{% if sort_by == 'engine' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('username') }}">User{% if sort_by == 'username' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('media_title') }}">Title{% if sort_by == 'media_title' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('decision') }}">Decision{% if sort_by == 'decision' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('confidence') }}">Score{% if sort_by == 'confidence' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('requested') }}">Requested{% if sort_by == 'requested' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
+              <th><a class="hover:text-white" href="{{ sort_href('reasoning') }}">Reasoning{% if sort_by == 'reasoning' %} {{ '↑' if sort_direction == 'asc' else '↓' }}{% endif %}</a></th>
             </tr>
           </thead>
-          <tbody>
-            {% for log in logs %}
+          <tbody id="war-room-table-body">
+            {% for log in stats.rows %}
             <tr>
-              <td class="mono text-xs text-[var(--text-soft)]">{{ log.created_at }}</td>
+              <td class="mono text-xs text-[var(--text-soft)]">{{ log.created_at_display }}</td>
+              <td>
+                <span class="status-pill {{ 'status-good' if log.engine == 'suggested_for_you' else 'status-neutral' }}">{{ log.engine_label }}</span>
+              </td>
               <td class="text-sm">{{ log.username }}</td>
               <td>
                 <p class="font-medium">{{ log.media_title }}</p>
                 <p class="mt-1 text-xs text-[var(--text-dim)]">{{ log.media_type }} / {{ log.source }}</p>
               </td>
               <td>
-                <span class="status-pill {{ 'status-good' if log.decision == 'REQUEST' else 'status-neutral' }}">
+                <span class="status-pill {{ 'status-good' if log.decision in ['REQUEST', 'SUGGEST'] else 'status-neutral' }}">
                   {{ log.decision }}
                 </span>
               </td>
@@ -115,8 +155,8 @@
             </tr>
             {% else %}
             <tr>
-              <td colspan="7">
-                <div class="empty-state">No decision logs matched your query yet.</div>
+              <td colspan="8">
+                <div class="empty-state">No War Room rows matched this view yet.</div>
               </td>
             </tr>
             {% endfor %}
@@ -124,22 +164,22 @@
         </table>
       </div>
 
-      <div class="space-y-3 xl:hidden">
-        {% for log in logs %}
+      <div class="space-y-3 xl:hidden" id="war-room-mobile-list">
+        {% for log in stats.rows %}
         <article class="surface rounded-[1.2rem] bg-[rgba(255,255,255,0.02)] px-4 py-4">
           <div class="flex items-start justify-between gap-4">
             <div>
               <p class="font-medium">{{ log.media_title }}</p>
               <p class="mt-1 text-sm text-[var(--text-soft)]">{{ log.username }}</p>
-              <p class="mt-1 text-xs text-[var(--text-dim)]">{{ log.media_type }} / {{ log.source }}</p>
+              <p class="mt-1 text-xs text-[var(--text-dim)]">{{ log.engine_label }} / {{ log.media_type }} / {{ log.source }}</p>
             </div>
-            <span class="status-pill {{ 'status-good' if log.decision == 'REQUEST' else 'status-neutral' }}">
+            <span class="status-pill {{ 'status-good' if log.decision in ['REQUEST', 'SUGGEST'] else 'status-neutral' }}">
               {{ log.decision }}
             </span>
           </div>
           <div class="mt-4 grid gap-2 text-xs text-[var(--text-soft)] sm:grid-cols-3">
-            <p><span class="text-[var(--text-dim)]">When</span><br>{{ log.created_at }}</p>
-            <p><span class="text-[var(--text-dim)]">Confidence</span><br>{{ "%.2f"|format(log.confidence) }}</p>
+            <p><span class="text-[var(--text-dim)]">When</span><br>{{ log.created_at_display }}</p>
+            <p><span class="text-[var(--text-dim)]">Score</span><br>{{ "%.2f"|format(log.confidence) }}</p>
             <p><span class="text-[var(--text-dim)]">Requested</span><br>{{ "yes" if log.requested else "no" }}</p>
           </div>
           <details class="mt-4">
@@ -155,10 +195,226 @@
           </details>
         </article>
         {% else %}
-        <div class="empty-state">No decision logs matched your query yet.</div>
+        <div class="empty-state">No War Room rows matched this view yet.</div>
         {% endfor %}
+      </div>
+    </div>
+
+    <div class="border-t border-white/5 px-5 py-4">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p class="text-sm text-[var(--text-soft)]">
+          Showing <span id="war-room-visible-count">{{ stats.rows|length }}</span> row(s) from <span id="war-room-total-count">{{ stats.total_rows }}</span> total.
+        </p>
+        <div class="flex items-center gap-3">
+          <a
+            id="war-room-prev-link"
+            href="{{ page_href(stats.page - 1 if stats.has_previous else stats.page) }}"
+            class="button {{ 'button-ghost' if stats.has_previous else 'button-ghost opacity-50 pointer-events-none' }}"
+          >
+            Previous
+          </a>
+          <span class="mono text-xs text-[var(--text-dim)]" id="war-room-page-text">Page {{ stats.page }} / {{ stats.total_pages }}</span>
+          <a
+            id="war-room-next-link"
+            href="{{ page_href(stats.page + 1 if stats.has_next else stats.page) }}"
+            class="button {{ 'button-ghost' if stats.has_next else 'button-ghost opacity-50 pointer-events-none' }}"
+          >
+            Next
+          </a>
+        </div>
       </div>
     </div>
   </section>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const warRoomState = {
+    q: {{ query|tojson }},
+    view: {{ current_view|tojson }},
+    sort: {{ sort_by|tojson }},
+    dir: {{ sort_direction|tojson }},
+    page: {{ current_page|tojson }},
+  };
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function pillClassForDecision(decision) {
+    return ["REQUEST", "SUGGEST"].includes(String(decision || "").toUpperCase()) ? "status-good" : "status-neutral";
+  }
+
+  function pillClassForEngine(engine) {
+    return String(engine || "") === "suggested_for_you" ? "status-good" : "status-neutral";
+  }
+
+  function buildTableRows(rows) {
+    if (!rows.length) {
+      return `
+        <tr>
+          <td colspan="8">
+            <div class="empty-state">No War Room rows matched this view yet.</div>
+          </td>
+        </tr>
+      `;
+    }
+
+    return rows.map((log) => `
+      <tr>
+        <td class="mono text-xs text-[var(--text-soft)]">${escapeHtml(log.created_at_display)}</td>
+        <td><span class="status-pill ${pillClassForEngine(log.engine)}">${escapeHtml(log.engine_label)}</span></td>
+        <td class="text-sm">${escapeHtml(log.username)}</td>
+        <td>
+          <p class="font-medium">${escapeHtml(log.media_title)}</p>
+          <p class="mt-1 text-xs text-[var(--text-dim)]">${escapeHtml(log.media_type)} / ${escapeHtml(log.source)}</p>
+        </td>
+        <td><span class="status-pill ${pillClassForDecision(log.decision)}">${escapeHtml(log.decision)}</span></td>
+        <td class="mono text-xs text-[var(--text-soft)]">${Number(log.confidence || 0).toFixed(2)}</td>
+        <td class="text-sm text-[var(--text-soft)]">${log.requested ? "yes" : "no"}</td>
+        <td class="text-sm text-[var(--text-soft)]">
+          <details class="group">
+            <summary class="cursor-pointer text-[var(--accent-strong)] transition group-open:text-white">Open reasoning</summary>
+            <div class="mt-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/20 p-4">
+              <p class="whitespace-pre-wrap leading-6">${escapeHtml(log.reasoning)}</p>
+              ${log.error ? `<p class="mt-3 rounded-xl border border-[rgba(255,127,127,0.22)] bg-[rgba(255,127,127,0.08)] px-3 py-2 text-sm text-[var(--red)]">Error: ${escapeHtml(log.error)}</p>` : ""}
+            </div>
+          </details>
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  function buildMobileRows(rows) {
+    if (!rows.length) {
+      return `<div class="empty-state">No War Room rows matched this view yet.</div>`;
+    }
+
+    return rows.map((log) => `
+      <article class="surface rounded-[1.2rem] bg-[rgba(255,255,255,0.02)] px-4 py-4">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <p class="font-medium">${escapeHtml(log.media_title)}</p>
+            <p class="mt-1 text-sm text-[var(--text-soft)]">${escapeHtml(log.username)}</p>
+            <p class="mt-1 text-xs text-[var(--text-dim)]">${escapeHtml(log.engine_label)} / ${escapeHtml(log.media_type)} / ${escapeHtml(log.source)}</p>
+          </div>
+          <span class="status-pill ${pillClassForDecision(log.decision)}">${escapeHtml(log.decision)}</span>
+        </div>
+        <div class="mt-4 grid gap-2 text-xs text-[var(--text-soft)] sm:grid-cols-3">
+          <p><span class="text-[var(--text-dim)]">When</span><br>${escapeHtml(log.created_at_display)}</p>
+          <p><span class="text-[var(--text-dim)]">Score</span><br>${Number(log.confidence || 0).toFixed(2)}</p>
+          <p><span class="text-[var(--text-dim)]">Requested</span><br>${log.requested ? "yes" : "no"}</p>
+        </div>
+        <details class="mt-4">
+          <summary class="cursor-pointer text-sm text-[var(--accent-strong)]">Open reasoning</summary>
+          <div class="mt-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/20 p-4">
+            <p class="whitespace-pre-wrap text-sm leading-6 text-[var(--text-soft)]">${escapeHtml(log.reasoning)}</p>
+            ${log.error ? `<p class="mt-3 rounded-xl border border-[rgba(255,127,127,0.22)] bg-[rgba(255,127,127,0.08)] px-3 py-2 text-sm text-[var(--red)]">Error: ${escapeHtml(log.error)}</p>` : ""}
+          </div>
+        </details>
+      </article>
+    `).join("");
+  }
+
+  function buildLogsUrl(pageNumber) {
+    const params = new URLSearchParams();
+    if (warRoomState.q) params.set("q", warRoomState.q);
+    params.set("view", warRoomState.view);
+    params.set("sort", warRoomState.sort);
+    params.set("dir", warRoomState.dir);
+    params.set("page", String(pageNumber));
+    return `/logs?${params.toString()}`;
+  }
+
+  function applyPaginationState(payload) {
+    warRoomState.page = payload.page;
+
+    const previous = document.getElementById("war-room-prev-link");
+    const next = document.getElementById("war-room-next-link");
+    const pageText = document.getElementById("war-room-page-text");
+    const indicator = document.getElementById("war-room-page-indicator");
+
+    if (pageText) {
+      pageText.textContent = `Page ${payload.page} / ${payload.total_pages}`;
+    }
+    if (indicator) {
+      indicator.textContent = `page ${payload.page} of ${payload.total_pages}`;
+    }
+    if (previous) {
+      previous.href = buildLogsUrl(Math.max(1, payload.page - 1));
+      previous.className = `button ${payload.has_previous ? "button-ghost" : "button-ghost opacity-50 pointer-events-none"}`;
+    }
+    if (next) {
+      next.href = buildLogsUrl(Math.min(payload.total_pages || 1, payload.page + 1));
+      next.className = `button ${payload.has_next ? "button-ghost" : "button-ghost opacity-50 pointer-events-none"}`;
+    }
+  }
+
+  function applyWarRoomFeed(payload) {
+    const tableBody = document.getElementById("war-room-table-body");
+    const mobileList = document.getElementById("war-room-mobile-list");
+    const totalRows = document.getElementById("war-room-total-rows");
+    const requestRows = document.getElementById("war-room-request-rows");
+    const suggestionRows = document.getElementById("war-room-suggestion-rows");
+    const errorRows = document.getElementById("war-room-error-rows");
+    const countAll = document.getElementById("war-room-count-all");
+    const countRequests = document.getElementById("war-room-count-requests");
+    const countSuggestions = document.getElementById("war-room-count-suggestions");
+    const visibleCount = document.getElementById("war-room-visible-count");
+    const totalCount = document.getElementById("war-room-total-count");
+    const generatedAt = document.getElementById("war-room-generated-at");
+    const liveChip = document.getElementById("war-room-live-chip");
+
+    if (tableBody) {
+      tableBody.innerHTML = buildTableRows(payload.rows || []);
+    }
+    if (mobileList) {
+      mobileList.innerHTML = buildMobileRows(payload.rows || []);
+    }
+    if (totalRows) totalRows.textContent = String(payload.total_rows || 0);
+    if (requestRows) requestRows.textContent = String(payload.view_counts?.requests || 0);
+    if (suggestionRows) suggestionRows.textContent = String(payload.view_counts?.suggestions || 0);
+    if (errorRows) errorRows.textContent = String(payload.error_rows || 0);
+    if (countAll) countAll.textContent = String(payload.view_counts?.all || 0);
+    if (countRequests) countRequests.textContent = String(payload.view_counts?.requests || 0);
+    if (countSuggestions) countSuggestions.textContent = String(payload.view_counts?.suggestions || 0);
+    if (visibleCount) visibleCount.textContent = String((payload.rows || []).length);
+    if (totalCount) totalCount.textContent = String(payload.total_rows || 0);
+    if (generatedAt) generatedAt.textContent = `updated ${payload.generated_at || ""}`;
+    if (liveChip) liveChip.textContent = "Live refresh on";
+
+    applyPaginationState(payload);
+  }
+
+  async function refreshWarRoom() {
+    try {
+      const params = new URLSearchParams();
+      if (warRoomState.q) params.set("q", warRoomState.q);
+      params.set("view", warRoomState.view);
+      params.set("sort", warRoomState.sort);
+      params.set("dir", warRoomState.dir);
+      params.set("page", String(warRoomState.page));
+      const response = await fetch(`/api/logs?${params.toString()}`, { headers: { "Accept": "application/json" } });
+      if (!response.ok) {
+        throw new Error(`War Room refresh failed with ${response.status}`);
+      }
+      const payload = await response.json();
+      applyWarRoomFeed(payload);
+    } catch (error) {
+      const liveChip = document.getElementById("war-room-live-chip");
+      if (liveChip) {
+        liveChip.textContent = "Live refresh delayed";
+      }
+      console.debug("War Room refresh skipped", error);
+    }
+  }
+
+  window.setInterval(refreshWarRoom, 10000);
+</script>
 {% endblock %}

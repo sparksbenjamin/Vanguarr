@@ -432,9 +432,24 @@ async def seer_webhook(request: Request) -> JSONResponse:
 
 
 @app.get("/logs", response_class=HTMLResponse)
-async def logs(request: Request, q: str = "") -> HTMLResponse:
+async def logs(
+    request: Request,
+    q: str = "",
+    view: str = "all",
+    sort: str = "created_at",
+    dir: str = "desc",
+    page: int = 1,
+) -> HTMLResponse:
     service: VanguarrService = request.app.state.vanguarr
     settings = current_settings(request.app)
+    log_feed = service.get_log_feed(
+        search=q,
+        view=view,
+        sort_by=sort,
+        sort_direction=dir,
+        page=page,
+        limit=settings.decision_page_size,
+    )
     return templates.TemplateResponse(
         request=request,
         name="logs.html",
@@ -442,10 +457,38 @@ async def logs(request: Request, q: str = "") -> HTMLResponse:
             "request": request,
             "page_title": "Vanguarr War Room",
             "toast": request.query_params.get("toast"),
-            "query": q,
-            "logs": service.get_logs(search=q, limit=settings.decision_page_size),
+            "log_feed": log_feed,
+            "query": log_feed["query"],
+            "current_view": log_feed["view"],
+            "sort_by": log_feed["sort_by"],
+            "sort_direction": log_feed["sort_direction"],
+            "current_page": log_feed["page"],
         },
     )
+
+
+@app.get("/api/logs")
+async def logs_api(
+    request: Request,
+    q: str = "",
+    view: str = "all",
+    sort: str = "created_at",
+    dir: str = "desc",
+    page: int = 1,
+) -> JSONResponse:
+    service: VanguarrService = request.app.state.vanguarr
+    settings = current_settings(request.app)
+    feed = service.get_log_feed(
+        search=q,
+        view=view,
+        sort_by=sort,
+        sort_direction=dir,
+        page=page,
+        limit=settings.decision_page_size,
+    )
+    payload = dict(feed)
+    payload.pop("raw_rows", None)
+    return JSONResponse(payload)
 
 
 @app.get("/settings")

@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
-from app.core.models import LibraryMedia, SuggestedMedia, TaskRun
+from app.core.models import DecisionLog, LibraryMedia, SuggestedMedia, TaskRun
 from app.core.prompts import build_decision_messages, build_profile_enrichment_messages, build_suggestion_messages
 from app.core.settings import Settings
 from app.core.services import ProfileStore, VanguarrService, normalize_jellyfin_user_id
@@ -775,3 +775,91 @@ def test_get_suggestions_matches_hyphenated_jellyfin_user_id(tmp_path) -> None:
 
     assert len(results) == 1
     assert results[0].title == "Arrival"
+
+
+def test_get_log_feed_supports_filter_sort_and_paging(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+        decision_page_size=2,
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        session.add_all(
+            [
+                DecisionLog(
+                    engine="decision_engine",
+                    username="alice",
+                    media_type="movie",
+                    media_id=1,
+                    media_title="Arrival",
+                    source="recommended",
+                    decision="REQUEST",
+                    confidence=0.92,
+                    threshold=0.72,
+                    requested=True,
+                    reasoning="Strong fit.",
+                    payload_json="{}",
+                ),
+                DecisionLog(
+                    engine="suggested_for_you",
+                    username="bob",
+                    media_type="tv",
+                    media_id=2,
+                    media_title="Severance",
+                    source="library:indexed",
+                    decision="SUGGEST",
+                    confidence=0.88,
+                    threshold=0.58,
+                    requested=False,
+                    reasoning="Great adjacent match.",
+                    payload_json="{}",
+                ),
+                DecisionLog(
+                    engine="decision_engine",
+                    username="carol",
+                    media_type="movie",
+                    media_id=3,
+                    media_title="Dune",
+                    source="trending",
+                    decision="IGNORE",
+                    confidence=0.41,
+                    threshold=0.72,
+                    requested=False,
+                    reasoning="Too broad.",
+                    payload_json="{}",
+                    error="LLM timeout",
+                ),
+            ]
+        )
+        session.commit()
+
+    feed = service.get_log_feed(view="suggestions", sort_by="media_title", sort_direction="asc", page=1, limit=5)
+
+    assert feed["view"] == "suggestions"
+    assert feed["total_rows"] == 1
+    assert feed["view_counts"]["all"] == 3
+    assert feed["view_counts"]["requests"] == 2
+    assert feed["view_counts"]["suggestions"] == 1
+    assert feed["rows"][0]["media_title"] == "Severance"
+    assert feed["rows"][0]["engine_label"] == "Suggestion"
+
+    paged = service.get_log_feed(view="all", sort_by="created_at", sort_direction="desc", page=2, limit=2)
+
+    assert paged["page"] == 2
+    assert paged["total_pages"] == 2
+    assert len(paged["rows"]) == 1
