@@ -38,16 +38,11 @@ In plain English: Vanguarr watches, learns, scouts, scores, and reports back bef
 
 ## 🚀 Quick Start
 
-1. Copy [`.env.example`](.env.example) to `.env`.
-2. Add your media server and Seer-compatible service credentials.
-3. Start Vanguarr with Docker Compose or one of the deployment examples below.
+1. Pick the deployment path that fits your stack.
+2. Add your media server, Seer-compatible service, and optional LLM credentials.
+3. Start Vanguarr.
 4. Open the dashboard and run `Profile Architect`.
 5. Run `Decision Engine` to score candidates immediately.
-
-```bash
-cp .env.example .env
-docker compose up -d --build
-```
 
 Then open:
 
@@ -55,7 +50,23 @@ Then open:
 http://localhost:8000
 ```
 
-If you want a packaged deployment starting point instead of building from source, use one of these examples.
+Pick the path that matches how you run the rest of your stack:
+
+* `Docker Compose` is the fastest default for most self-hosted setups.
+* `OKD` is the right fit if you already run your apps on OpenShift or Kubernetes.
+* `Unraid` is the easiest path if your media stack already lives in Unraid and you want persistent appdata storage.
+
+If you want to build and run Vanguarr directly from this repo instead of using the published container image, use the manual path below.
+
+<details>
+<summary><strong>Manual Repo Deployment</strong></summary>
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+</details>
 
 <details>
 <summary><strong>Docker Compose Example</strong></summary>
