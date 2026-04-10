@@ -56,15 +56,22 @@ Pick the path that matches how you run the rest of your stack:
 * `OKD` is the right fit if you already run your apps on OpenShift or Kubernetes.
 * `Unraid` is the easiest path if your media stack already lives in Unraid and you want persistent appdata storage.
 
+After Vanguarr is up, finish the real setup from the web UI in `/settings`:
+
+* connect Jellyfin or Plex
+* connect Jellyseerr, Overseerr, or another Seer-compatible service
+* add TMDb and LLM providers if you want enrichment and blended AI scoring
+
 If you want to build and run Vanguarr directly from this repo instead of using the published container image, use the manual path below.
 
 <details>
 <summary><strong>Manual Repo Deployment</strong></summary>
 
 ```bash
-cp .env.example .env
 docker compose up -d --build
 ```
+
+If you want to seed first-boot values from environment variables, copy [`.env.example`](.env.example) to `.env` before you start the stack. Otherwise, Vanguarr will boot on its built-in defaults and you can finish setup from the UI.
 
 </details>
 
@@ -79,19 +86,11 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    environment:
-      TZ: America/New_York
-      MEDIA_SERVER_PROVIDER: jellyfin
-      JELLYFIN_BASE_URL: http://jellyfin:8096
-      JELLYFIN_API_KEY: your-jellyfin-api-key
-      SEER_BASE_URL: http://jellyseerr:5055
-      SEER_API_KEY: your-seer-api-key
-      SUGGESTIONS_API_KEY: change-me
-      LLM_PROVIDER: ollama
-      OLLAMA_API_BASE: http://ollama:11434
     volumes:
       - ./data:/data
 ```
+
+Then open `http://localhost:8000` and finish the integrations in `/settings`.
 
 </details>
 
@@ -109,30 +108,6 @@ spec:
   resources:
     requests:
       storage: 5Gi
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: vanguarr-config
-data:
-  TZ: America/New_York
-  MEDIA_SERVER_PROVIDER: jellyfin
-  JELLYFIN_BASE_URL: http://jellyfin:8096
-  SEER_BASE_URL: http://jellyseerr:5055
-  SUGGESTIONS_ENABLED: "true"
-  LIBRARY_SYNC_ENABLED: "true"
-  LLM_PROVIDER: ollama
-  OLLAMA_API_BASE: http://ollama:11434
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: vanguarr-secrets
-type: Opaque
-stringData:
-  JELLYFIN_API_KEY: your-jellyfin-api-key
-  SEER_API_KEY: your-seer-api-key
-  SUGGESTIONS_API_KEY: change-me
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -154,11 +129,6 @@ spec:
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
-          envFrom:
-            - configMapRef:
-                name: vanguarr-config
-            - secretRef:
-                name: vanguarr-secrets
           volumeMounts:
             - name: data
               mountPath: /data
@@ -190,6 +160,8 @@ spec:
     targetPort: 8000
 ```
 
+Once the route is live, open Vanguarr and configure your integrations from `/settings`.
+
 </details>
 
 <details>
@@ -206,19 +178,11 @@ services:
       - "8000:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    environment:
-      TZ: America/New_York
-      MEDIA_SERVER_PROVIDER: jellyfin
-      JELLYFIN_BASE_URL: http://192.168.1.10:8096
-      JELLYFIN_API_KEY: your-jellyfin-api-key
-      SEER_BASE_URL: http://192.168.1.11:5055
-      SEER_API_KEY: your-seer-api-key
-      SUGGESTIONS_API_KEY: change-me
-      LLM_PROVIDER: ollama
-      OLLAMA_API_BASE: http://host.docker.internal:11434
     volumes:
       - /mnt/user/appdata/vanguarr:/data
 ```
+
+If Ollama is running on the Unraid host, you can still use `host.docker.internal` later from the Vanguarr settings UI.
 
 </details>
 
