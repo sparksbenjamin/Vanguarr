@@ -40,7 +40,7 @@ In plain English: Vanguarr watches, learns, scouts, scores, and reports back bef
 
 1. Copy [`.env.example`](.env.example) to `.env`.
 2. Add your media server and Seer-compatible service credentials.
-3. Start Vanguarr with Docker Compose.
+3. Start Vanguarr with Docker Compose or one of the deployment examples below.
 4. Open the dashboard and run `Profile Architect`.
 5. Run `Decision Engine` to score candidates immediately.
 
@@ -54,6 +54,162 @@ Then open:
 ```text
 http://localhost:8000
 ```
+
+If you want a packaged deployment starting point instead of building from source, use one of these examples.
+
+<details>
+<summary><strong>Docker Compose Example</strong></summary>
+
+```yaml
+services:
+  vanguarr:
+    image: ghcr.io/sparksbenjamin/vanguarr:latest
+    container_name: vanguarr
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      TZ: America/New_York
+      MEDIA_SERVER_PROVIDER: jellyfin
+      JELLYFIN_BASE_URL: http://jellyfin:8096
+      JELLYFIN_API_KEY: your-jellyfin-api-key
+      SEER_BASE_URL: http://jellyseerr:5055
+      SEER_API_KEY: your-seer-api-key
+      SUGGESTIONS_API_KEY: change-me
+      LLM_PROVIDER: ollama
+      OLLAMA_API_BASE: http://ollama:11434
+    volumes:
+      - ./data:/data
+```
+
+</details>
+
+<details>
+<summary><strong>OKD Example</strong></summary>
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vanguarr-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vanguarr-config
+data:
+  TZ: America/New_York
+  MEDIA_SERVER_PROVIDER: jellyfin
+  JELLYFIN_BASE_URL: http://jellyfin:8096
+  SEER_BASE_URL: http://jellyseerr:5055
+  SUGGESTIONS_ENABLED: "true"
+  LIBRARY_SYNC_ENABLED: "true"
+  LLM_PROVIDER: ollama
+  OLLAMA_API_BASE: http://ollama:11434
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vanguarr-secrets
+type: Opaque
+stringData:
+  JELLYFIN_API_KEY: your-jellyfin-api-key
+  SEER_API_KEY: your-seer-api-key
+  SUGGESTIONS_API_KEY: change-me
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vanguarr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vanguarr
+  template:
+    metadata:
+      labels:
+        app: vanguarr
+    spec:
+      containers:
+        - name: vanguarr
+          image: ghcr.io/sparksbenjamin/vanguarr:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: vanguarr-config
+            - secretRef:
+                name: vanguarr-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: vanguarr-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vanguarr
+spec:
+  selector:
+    app: vanguarr
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: vanguarr
+spec:
+  to:
+    kind: Service
+    name: vanguarr
+  port:
+    targetPort: 8000
+```
+
+</details>
+
+<details>
+<summary><strong>Unraid Example</strong></summary>
+
+```yaml
+services:
+  vanguarr:
+    image: ghcr.io/sparksbenjamin/vanguarr:latest
+    container_name: vanguarr
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: America/New_York
+      MEDIA_SERVER_PROVIDER: jellyfin
+      JELLYFIN_BASE_URL: http://192.168.1.10:8096
+      JELLYFIN_API_KEY: your-jellyfin-api-key
+      SEER_BASE_URL: http://192.168.1.11:5055
+      SEER_API_KEY: your-seer-api-key
+      SUGGESTIONS_API_KEY: change-me
+      LLM_PROVIDER: ollama
+      OLLAMA_API_BASE: http://host.docker.internal:11434
+    volumes:
+      - /mnt/user/appdata/vanguarr:/data
+```
+
+</details>
 
 From there:
 
