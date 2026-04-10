@@ -186,6 +186,20 @@ public sealed class VanguarrSuggestedViewsRegistrar
                 cancellationToken)
             .GetAwaiter()
             .GetResult();
+
+        var savedImagePath = Path.Combine(folder.Path, "folder.png");
+        if (!File.Exists(savedImagePath))
+        {
+            return;
+        }
+
+        folder.SetImagePath(ImageType.Primary, savedImagePath);
+        folder.UpdateToRepositoryAsync(ItemUpdateType.MetadataImport, cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+        _providerManager.SaveMetadataAsync(folder, ItemUpdateType.MetadataImport)
+            .GetAwaiter()
+            .GetResult();
     }
 
     private static string? GetArtworkPath(BaseItem item)

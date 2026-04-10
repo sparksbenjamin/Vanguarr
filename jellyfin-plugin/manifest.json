@@ -8,12 +8,12 @@
     "category": "General",
     "versions": [
       {
-        "version": "1.2.4.0",
-        "changelog": "- Fixes the native Suggested Movies and Suggested Shows folders so their suggestion catalog is initialized at startup and the folders populate consistently after Jellyfin restarts.\n- Generates top-level artwork for the suggested views from existing local library art so they no longer appear as empty text-only folders.\n- Keeps the stock-client-focused setup with no extra Jellyfin plugin dependency.\n",
+        "version": "1.2.5.0",
+        "changelog": "- Persists the generated folder artwork onto the native Suggested Movies and Suggested Shows view metadata so the stock Jellyfin web client can actually render the art.\n- Keeps the startup catalog initialization fix so the suggested folders still populate consistently after Jellyfin restarts.\n- Keeps the stock-client-focused setup with no extra Jellyfin plugin dependency.\n",
         "targetAbi": "10.11.0",
-        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.2.4.0.zip",
-        "checksum": "4065e5ff0beec09284bedcf15da28d1d",
-        "timestamp": "2026-04-10T00:08:38Z"
+        "sourceUrl": "https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.2.5.0.zip",
+        "checksum": "1526fc0b677d570d616c5a12ff77a108",
+        "timestamp": "2026-04-10T00:23:47Z"
       }
     ]
   }
