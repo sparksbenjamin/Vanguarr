@@ -1,4 +1,4 @@
-(docs/output.jpb)
+[([docs/output.jpb](https://github.com/sparksbenjamin/Vanguarr/blob/main/docs/output.jpg))](https://github.com/sparksbenjamin/Vanguarr/blob/main/docs/output.jpg)
 
 # 🛡️ Vanguarr
 ### The Scout of the ARR Stack.
