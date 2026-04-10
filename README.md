@@ -128,7 +128,21 @@ spec:
           image: ghcr.io/sparksbenjamin/vanguarr:latest
           imagePullPolicy: Always
           ports:
-            - containerPort: 8000
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
           volumeMounts:
             - name: data
               mountPath: /data
@@ -145,8 +159,10 @@ spec:
   selector:
     app: vanguarr
   ports:
-    - port: 8000
-      targetPort: 8000
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
 ---
 apiVersion: route.openshift.io/v1
 kind: Route
@@ -157,10 +173,10 @@ spec:
     kind: Service
     name: vanguarr
   port:
-    targetPort: 8000
+    targetPort: http
 ```
 
-Once the route is live, open Vanguarr and configure your integrations from `/settings`.
+Once the route is live, open Vanguarr and configure your integrations from `/settings`. If your cluster terminates TLS at the Route layer, you can add a `tls` block here without changing the app container.
 
 </details>
 
