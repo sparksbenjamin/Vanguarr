@@ -619,6 +619,22 @@ def test_select_suggestion_ai_candidates_uses_threshold_and_limit() -> None:
     assert [candidate["title"] for candidate in selected] == ["Top Pick", "Strong Pick"]
 
 
+def test_filter_suggestion_candidates_for_display_uses_final_score_threshold() -> None:
+    candidates = [
+        {"title": "High Final", "recommendation_features": {"deterministic_score": 0.81, "hybrid_score": 0.84}},
+        {"title": "Borderline Final", "recommendation_features": {"deterministic_score": 0.58, "hybrid_score": 0.58}},
+        {"title": "Low Final", "recommendation_features": {"deterministic_score": 0.71, "hybrid_score": 0.41}},
+        {"title": "Low Deterministic", "recommendation_features": {"deterministic_score": 0.33}},
+    ]
+
+    eligible = VanguarrService._filter_suggestion_candidates_for_display(
+        candidates,
+        threshold=0.58,
+    )
+
+    assert [candidate["title"] for candidate in eligible] == ["High Final", "Borderline Final"]
+
+
 def test_suggestion_exclusion_context_filters_recent_repeat_and_in_progress_titles() -> None:
     history = [
         {

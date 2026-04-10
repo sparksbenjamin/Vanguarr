@@ -1517,8 +1517,12 @@ class VanguarrService:
             viewing_history=viewing_history,
             cached_llm_votes=existing_ai_cache,
         )
+        display_candidates = self._filter_suggestion_candidates_for_display(
+            ai_candidates,
+            threshold=self.settings.suggestion_ai_threshold,
+        )
         selected_candidates = self._diversify_candidates(
-            self._sort_suggestion_candidates(ai_candidates),
+            self._sort_suggestion_candidates(display_candidates),
             limit=max(1, int(self.settings.suggestions_limit)),
         )
 
@@ -1583,6 +1587,7 @@ class VanguarrService:
             "username": current_username,
             "stored": len(selected_candidates),
             "scored": len(filtered_candidates),
+            "eligible": len(display_candidates),
             "ai_scored": ai_scored,
             "ai_reused": ai_reused,
         }
@@ -2491,6 +2496,28 @@ class VanguarrService:
             )
         )
         return ranked
+
+    @classmethod
+    def _filter_suggestion_candidates_for_display(
+        cls,
+        candidates: list[dict[str, Any]],
+        *,
+        threshold: float,
+    ) -> list[dict[str, Any]]:
+        floor = max(0.0, min(1.0, float(threshold)))
+        eligible: list[dict[str, Any]] = []
+        for candidate in candidates:
+            features = candidate.get("recommendation_features", {})
+            final_score = float(
+                features.get("hybrid_score")
+                or features.get("final_score")
+                or features.get("deterministic_score")
+                or 0.0
+            )
+            if final_score < floor:
+                continue
+            eligible.append(dict(candidate))
+        return eligible
 
     @classmethod
     def _finalize_suggestion_candidate(cls, candidate: dict[str, Any]) -> dict[str, Any]:
