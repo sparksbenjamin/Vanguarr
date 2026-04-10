@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from app.api.base import BaseAPIClient, ClientConfigError, ConnectionCheck
+from app.api.base import BaseAPIClient, ClientConfigError, ConnectionCheck, ExternalServiceError
 from app.core.settings import Settings
+
+
+logger = logging.getLogger("vanguarr.seer")
 
 
 class SeerClient(BaseAPIClient):
@@ -112,8 +116,16 @@ class SeerClient(BaseAPIClient):
         max_genre = settings.genre_candidate_limit if genre_limit is None else max(0, int(genre_limit))
         max_trending = settings.trending_candidate_limit if trending_limit is None else max(0, int(trending_limit))
 
-        movie_genres = await self.get_genre_map("movie")
-        tv_genres = await self.get_genre_map("tv")
+        try:
+            movie_genres = await self.get_genre_map("movie")
+        except ExternalServiceError as exc:
+            logger.warning("Seer movie genre lookup failed reason=%s", exc)
+            movie_genres = {}
+        try:
+            tv_genres = await self.get_genre_map("tv")
+        except ExternalServiceError as exc:
+            logger.warning("Seer TV genre lookup failed reason=%s", exc)
+            tv_genres = {}
 
         candidates: list[dict[str, Any]] = []
         seen: dict[tuple[str, int], dict[str, Any]] = {}
@@ -151,7 +163,19 @@ class SeerClient(BaseAPIClient):
                 continue
 
             added_for_seed = 0
-            for item in await self.get_recommendations(media_type, int(media_id)):
+            try:
+                recommendations = await self.get_recommendations(media_type, int(media_id))
+            except ExternalServiceError as exc:
+                logger.warning(
+                    "Seer recommendations failed media_type=%s media_id=%s title=%s reason=%s",
+                    media_type,
+                    media_id,
+                    seed_title,
+                    exc,
+                )
+                recommendations = []
+
+            for item in recommendations:
                 if add_candidate(item, f"recommended:{seed_title}", seed_lanes):
                     added_for_seed += 1
                 if len(candidates) >= max_candidates:
@@ -193,7 +217,18 @@ class SeerClient(BaseAPIClient):
 
                     page = 1
                     while len(candidates) < max_candidates and genre_added < max_genre and added_for_seed < per_genre_limit:
-                        results = await self.get_genre_discover(media_type, genre_id, page=page)
+                        try:
+                            results = await self.get_genre_discover(media_type, genre_id, page=page)
+                        except ExternalServiceError as exc:
+                            logger.warning(
+                                "Seer genre discover failed media_type=%s genre=%s genre_id=%s page=%s reason=%s",
+                                media_type,
+                                genre_name,
+                                genre_id,
+                                page,
+                                exc,
+                            )
+                            break
                         if not results:
                             break
 
@@ -216,7 +251,11 @@ class SeerClient(BaseAPIClient):
         page = 1
         trending_added = 0
         while len(candidates) < max_candidates:
-            trending_results = await self.get_trending(page=page)
+            try:
+                trending_results = await self.get_trending(page=page)
+            except ExternalServiceError as exc:
+                logger.warning("Seer trending fetch failed page=%s reason=%s", page, exc)
+                break
             if not trending_results:
                 break
 
