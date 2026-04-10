@@ -54,6 +54,30 @@ Return only JSON with this schema:
 """
 
 
+SUGGESTION_ENGINE_SYSTEM_PROMPT = """You are Vanguarr's Suggested For You ranking assistant.
+
+The candidate title is already available in the user's library.
+Vanguarr has already filtered out titles the user is actively watching or repeatedly revisiting.
+Your job is to decide whether this title deserves a high spot in Suggested For You right now.
+
+Evaluation guidance:
+- Score against the user's observed viewing history and durable profile signals first.
+- Treat the code-derived recommendation features as a strong prior.
+- Prefer strong, specific matches over broad genre overlap.
+- Favor discovery and close-adjacent fits, not comfort rewatches.
+- Confidence must be a number between 0 and 1.
+
+Return only JSON with this schema:
+{
+  "decision": "RECOMMEND" or "PASS",
+  "confidence": 0.0,
+  "reasoning": "One concise paragraph.",
+  "matched_signals": ["signal"],
+  "blocked_by": ["reason or fatigue risk"]
+}
+"""
+
+
 def build_profile_enrichment_messages(
     username: str,
     history_summary: dict[str, Any],
@@ -128,5 +152,57 @@ Block 5 (Constraints): Global Exclusions
 {constraints_blob}
 
 Decide whether this candidate should be requested. Base the score on the viewing history and code-derived recommendation features first, then use the profile manifest and summary to reinforce or challenge the match.""",
+        },
+    ]
+
+
+def build_suggestion_messages(
+    *,
+    username: str,
+    profile_payload: dict[str, Any],
+    viewing_history: dict[str, Any],
+    candidate: dict[str, Any],
+) -> list[dict[str, str]]:
+    summary_block = str(profile_payload.get("summary_block") or "").strip()
+    profile_manifest = {
+        key: value
+        for key, value in profile_payload.items()
+        if key != "summary_block"
+    }
+    payload = {
+        "media_type": candidate.get("media_type"),
+        "media_id": candidate.get("media_id"),
+        "title": candidate.get("title"),
+        "overview": candidate.get("overview"),
+        "genres": candidate.get("genres"),
+        "rating": candidate.get("rating"),
+        "release_date": candidate.get("release_date"),
+        "sources": candidate.get("sources"),
+        "media_info": candidate.get("media_info"),
+        "tmdb_details": candidate.get("tmdb_details"),
+        "recommendation_features": candidate.get("recommendation_features"),
+    }
+    viewing_history_blob = json.dumps(viewing_history, indent=2, ensure_ascii=True)
+    profile_blob = json.dumps(profile_manifest, indent=2, ensure_ascii=True)
+    payload_blob = json.dumps(payload, indent=2, ensure_ascii=True)
+
+    return [
+        {"role": "system", "content": SUGGESTION_ENGINE_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": f"""Block 1 (Target): Canonical User Profile JSON
+User: {username}
+{profile_blob}
+
+Block 2 (Target Summary): Derived Profile Summary
+{summary_block}
+
+Block 3 (Observed Signals): User Viewing History
+{viewing_history_blob}
+
+Block 4 (Candidate): Available Library Title
+{payload_blob}
+
+Decide whether this available title belongs near the top of Suggested For You right now.""",
         },
     ]

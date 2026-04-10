@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     decision_page_size: int = 100
     suggestions_enabled: bool = True
     suggestions_limit: int = 20
+    suggestion_ai_threshold: float = 0.58
+    suggestion_ai_candidate_limit: int = 24
+    suggestion_recent_cooldown_days: int = 14
+    suggestion_repeat_watch_cutoff: int = 3
 
     media_server_provider: str = "jellyfin"
     jellyfin_base_url: str | None = None
@@ -180,6 +184,36 @@ class Settings(BaseSettings):
         numeric = int(value)
         if not 0 <= numeric <= 100:
             raise ValueError("AI decision weight must be between 0 and 100.")
+        return numeric
+
+    @field_validator("suggestion_ai_threshold", mode="before")
+    @classmethod
+    def validate_suggestion_ai_threshold(cls, value: object) -> object:
+        if value in ("", None):
+            return 0.58
+        numeric = float(value)
+        if not 0 <= numeric <= 1:
+            raise ValueError("Suggestion AI threshold must be between 0 and 1.")
+        return round(numeric, 3)
+
+    @field_validator("suggestion_ai_candidate_limit", "suggestion_recent_cooldown_days", mode="before")
+    @classmethod
+    def validate_non_negative_tuning_ints(cls, value: object) -> object:
+        if value in ("", None):
+            return value
+        numeric = int(value)
+        if numeric < 0:
+            raise ValueError("Suggestion tuning values must be zero or greater.")
+        return numeric
+
+    @field_validator("suggestion_repeat_watch_cutoff", mode="before")
+    @classmethod
+    def validate_repeat_watch_cutoff(cls, value: object) -> object:
+        if value in ("", None):
+            return 3
+        numeric = int(value)
+        if numeric < 1:
+            raise ValueError("Suggestion repeat watch cutoff must be at least 1.")
         return numeric
 
     @field_validator("timezone")
@@ -679,6 +713,43 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         group="Tuning",
         description="How many ranked available titles are stored per user for the Jellyfin plugin.",
         input_type="number",
+    ),
+    SettingFieldDefinition(
+        key="suggestion_ai_threshold",
+        label="Suggestion AI Threshold",
+        group="Tuning",
+        description="Only suggestions at or above this code score are sent to the LLM for a blended final vote.",
+        input_type="number",
+        min_value="0",
+        max_value="1",
+        step="0.01",
+    ),
+    SettingFieldDefinition(
+        key="suggestion_ai_candidate_limit",
+        label="Suggestion AI Candidate Limit",
+        group="Tuning",
+        description="Maximum number of available titles per user that can receive the AI suggestion vote.",
+        input_type="number",
+        min_value="0",
+        step="1",
+    ),
+    SettingFieldDefinition(
+        key="suggestion_recent_cooldown_days",
+        label="Suggestion Recent Cooldown Days",
+        group="Tuning",
+        description="Hide titles from Suggested For You for this many days after the user watches them.",
+        input_type="number",
+        min_value="0",
+        step="1",
+    ),
+    SettingFieldDefinition(
+        key="suggestion_repeat_watch_cutoff",
+        label="Suggestion Repeat Watch Cutoff",
+        group="Tuning",
+        description="Treat titles watched at least this many times as rewatch territory and exclude them from suggestions.",
+        input_type="number",
+        min_value="1",
+        step="1",
     ),
     SettingFieldDefinition(
         key="llm_temperature",

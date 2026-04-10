@@ -59,6 +59,10 @@ def test_suggested_for_you_defaults() -> None:
 
     assert settings.suggestions_enabled is True
     assert settings.suggestions_limit == 20
+    assert settings.suggestion_ai_threshold == 0.58
+    assert settings.suggestion_ai_candidate_limit == 24
+    assert settings.suggestion_recent_cooldown_days == 14
+    assert settings.suggestion_repeat_watch_cutoff == 3
     assert settings.library_sync_enabled is True
     assert settings.library_sync_cron == "0 */4 * * *"
 
@@ -155,3 +159,9 @@ def test_decision_ai_weight_percent_must_stay_within_range() -> None:
     settings = Settings(decision_ai_weight_percent="75")
 
     assert settings.decision_ai_weight_percent == 75
+
+
+def test_suggestion_ai_threshold_must_stay_within_range() -> None:
+    settings = Settings(suggestion_ai_threshold="0.67")
+
+    assert settings.suggestion_ai_threshold == 0.67

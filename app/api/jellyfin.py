@@ -119,6 +119,30 @@ class JellyfinClient(BaseAPIClient):
         )
         return payload.get("Items", []) if isinstance(payload, dict) else []
 
+    async def get_resumable_items(self, user_id: str, limit: int = 150) -> list[dict[str, Any]]:
+        settings = self._refresh_connection()
+        if not settings.jellyfin_api_key:
+            raise ClientConfigError("JELLYFIN_API_KEY is required to query resumable items.")
+
+        payload = await self._request(
+            "GET",
+            "/Items",
+            params={
+                "userId": user_id,
+                "limit": max(1, int(limit)),
+                "recursive": "true",
+                "includeItemTypes": "Movie,Episode",
+                "filters": "IsResumable",
+                "sortBy": "DatePlayed",
+                "sortOrder": "Descending",
+                "fields": (
+                    "Overview,Genres,CommunityRating,ProviderIds,ProductionYear,"
+                    "PremiereDate,SeriesName,UserData"
+                ),
+            },
+        )
+        return payload.get("Items", []) if isinstance(payload, dict) else []
+
     async def get_library_items(
         self,
         *,

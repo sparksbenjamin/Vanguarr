@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
 from app.core.models import LibraryMedia, SuggestedMedia, TaskRun
-from app.core.prompts import build_decision_messages, build_profile_enrichment_messages
+from app.core.prompts import build_decision_messages, build_profile_enrichment_messages, build_suggestion_messages
 from app.core.settings import Settings
 from app.core.services import ProfileStore, VanguarrService, normalize_jellyfin_user_id
 
@@ -94,6 +94,45 @@ def test_decision_prompt_includes_viewing_history_block() -> None:
     assert "recommendation_features" in prompt
     assert "tmdb_details" in prompt
     assert "profile manifest and summary" in prompt
+
+
+def test_suggestion_prompt_uses_available_title_context() -> None:
+    messages = build_suggestion_messages(
+        username="alice",
+        profile_payload={
+            "profile_version": "v5",
+            "profile_state": "ready",
+            "username": "alice",
+            "primary_genres": ["Sci-Fi"],
+            "summary_block": "[VANGUARR_PROFILE_SUMMARY_V1]\nUser: alice",
+        },
+        viewing_history={
+            "history_count": 12,
+            "top_titles": [{"title": "Show Alpha", "play_count": 3}],
+            "recent_momentum": [{"title": "Movie Beta", "play_count": 1}],
+        },
+        candidate={
+            "media_type": "movie",
+            "media_id": 303,
+            "title": "Movie Gamma",
+            "overview": "Gamma overview",
+            "genres": ["Sci-Fi"],
+            "rating": 8.8,
+            "release_date": "2026-01-01",
+            "sources": ["library:indexed"],
+            "media_info": {"status": "available"},
+            "tmdb_details": {"keywords": ["space opera"]},
+            "recommendation_features": {"deterministic_score": 0.83},
+        },
+    )
+
+    prompt = messages[1]["content"]
+
+    assert "Suggested For You" in messages[0]["content"]
+    assert "Block 3 (Observed Signals): User Viewing History" in prompt
+    assert "Block 4 (Candidate): Available Library Title" in prompt
+    assert "Movie Gamma" in prompt
+    assert "library:indexed" in prompt
 
 
 def test_profile_history_context_compacts_repeated_titles() -> None:
@@ -560,6 +599,99 @@ def test_blend_confidences_uses_ai_weight_slider() -> None:
     assert mostly_code == 0.525
     assert mostly_ai == 0.775
     assert ignore_vote == 0.4
+
+
+def test_select_suggestion_ai_candidates_uses_threshold_and_limit() -> None:
+    candidates = [
+        {"title": "Top Pick", "recommendation_features": {"deterministic_score": 0.91}},
+        {"title": "Strong Pick", "recommendation_features": {"deterministic_score": 0.79}},
+        {"title": "Borderline Pick", "recommendation_features": {"deterministic_score": 0.58}},
+        {"title": "Low Pick", "recommendation_features": {"deterministic_score": 0.31}},
+    ]
+
+    selected = VanguarrService._select_suggestion_ai_candidates(
+        candidates,
+        threshold=0.58,
+        limit=2,
+    )
+
+    assert [candidate["title"] for candidate in selected] == ["Top Pick", "Strong Pick"]
+
+
+def test_suggestion_exclusion_context_filters_recent_repeat_and_in_progress_titles() -> None:
+    history = [
+        {
+            "Name": "Movie Fresh",
+            "Type": "Movie",
+            "ProviderIds": {"Tmdb": "101"},
+            "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+        },
+        {
+            "Name": "Movie Old",
+            "Type": "Movie",
+            "ProviderIds": {"Tmdb": "202"},
+            "UserData": {"LastPlayedDate": "2026-02-01T10:00:00Z"},
+        },
+        {
+            "Name": "Show Loop",
+            "SeriesName": "Show Loop",
+            "Type": "Episode",
+            "ProviderIds": {"Tmdb": "303"},
+            "UserData": {"LastPlayedDate": "2026-03-20T10:00:00Z"},
+        },
+        {
+            "Name": "Show Loop",
+            "SeriesName": "Show Loop",
+            "Type": "Episode",
+            "ProviderIds": {"Tmdb": "303"},
+            "UserData": {"LastPlayedDate": "2026-03-18T10:00:00Z"},
+        },
+    ]
+    in_progress = [
+        {
+            "Name": "Episode 4",
+            "SeriesName": "Show Active",
+            "Type": "Episode",
+            "ProviderIds": {"Tmdb": "404"},
+            "UserData": {"PlaybackPositionTicks": 12345},
+        }
+    ]
+
+    context = VanguarrService._build_suggestion_exclusion_context(
+        history,
+        in_progress,
+        recent_cooldown_days=14,
+        repeat_watch_cutoff=2,
+    )
+
+    assert (
+        VanguarrService._suggestion_exclusion_reason(
+            {"media_type": "movie", "title": "Movie Fresh", "external_ids": {"tmdb": "101"}},
+            context,
+        )
+        == "recently_watched"
+    )
+    assert (
+        VanguarrService._suggestion_exclusion_reason(
+            {"media_type": "tv", "title": "Show Loop", "external_ids": {"tmdb": "303"}},
+            context,
+        )
+        == "repeat_watch"
+    )
+    assert (
+        VanguarrService._suggestion_exclusion_reason(
+            {"media_type": "tv", "title": "Show Active", "external_ids": {"tmdb": "404"}},
+            context,
+        )
+        == "in_progress"
+    )
+    assert (
+        VanguarrService._suggestion_exclusion_reason(
+            {"media_type": "movie", "title": "Movie Old", "external_ids": {"tmdb": "202"}},
+            context,
+        )
+        == "already_watched"
+    )
 
 
 def test_compose_decision_reasoning_uses_final_score_wording_and_threshold_context() -> None:

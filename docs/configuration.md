@@ -79,6 +79,10 @@ Important behavior:
 | `LIBRARY_SYNC_CRON` | `0 */4 * * *` | Jellyfin library sync schedule |
 | `SUGGESTIONS_ENABLED` | `true` | Enables per-user suggestion snapshots |
 | `SUGGESTIONS_LIMIT` | `20` | Number of ranked available titles stored per user |
+| `SUGGESTION_AI_THRESHOLD` | `0.58` | Minimum deterministic score required before a suggestion gets an AI vote |
+| `SUGGESTION_AI_CANDIDATE_LIMIT` | `24` | Max available titles per user that can be LLM-scored for Suggested For You |
+| `SUGGESTION_RECENT_COOLDOWN_DAYS` | `14` | Days to suppress recently watched titles from Suggested For You |
+| `SUGGESTION_REPEAT_WATCH_CUTOFF` | `3` | Watch count at which a title is treated as rewatch territory instead of discovery |
 | `REQUEST_THRESHOLD` | `0.72` | Minimum hybrid confidence required to request |
 | `PROFILE_HISTORY_LIMIT` | `40` | Watch-history items considered per user |
 | `CANDIDATE_LIMIT` | `160` | Pre-rank candidate pool limit |

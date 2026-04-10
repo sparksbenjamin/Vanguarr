@@ -32,6 +32,7 @@ from app.core.models import (
 from app.core.prompts import (
     build_decision_messages,
     build_profile_enrichment_messages,
+    build_suggestion_messages,
 )
 from app.core.settings import Settings
 
@@ -1311,19 +1312,36 @@ class VanguarrService:
         ) > 0:
             self.profile_store.write_payload(current_username, profile_payload)
 
+        viewing_history = self._build_viewing_history_context(
+            history,
+            recommendation_seeds=recommendation_seeds,
+            profile_summary=profile_payload,
+        )
         available_candidates = await self._build_available_library_candidates(jellyfin_user_id)
-        watched_external_keys = self._build_watched_external_keys(history)
+        in_progress_items = await self._load_in_progress_items(jellyfin_user_id)
+        exclusion_context = self._build_suggestion_exclusion_context(
+            history,
+            in_progress_items,
+            recent_cooldown_days=self.settings.suggestion_recent_cooldown_days,
+            repeat_watch_cutoff=self.settings.suggestion_repeat_watch_cutoff,
+        )
         filtered_candidates = [
             candidate
             for candidate in available_candidates
-            if not self._candidate_matches_external_keys(candidate, watched_external_keys)
+            if self._suggestion_exclusion_reason(candidate, exclusion_context) is None
         ]
         ranked_candidates = self._rank_candidate_pool(
             filtered_candidates,
             profile_summary=profile_payload,
         )
-        selected_candidates = self._diversify_candidates(
+        ai_candidates = await self._score_suggestion_candidates_with_ai(
             ranked_candidates,
+            username=current_username,
+            profile_payload=profile_payload,
+            viewing_history=viewing_history,
+        )
+        selected_candidates = self._diversify_candidates(
+            self._sort_suggestion_candidates(ai_candidates),
             limit=max(1, int(self.settings.suggestions_limit)),
         )
 
@@ -1335,10 +1353,7 @@ class VanguarrService:
 
             for index, candidate in enumerate(selected_candidates, start=1):
                 features = candidate.get("recommendation_features", {})
-                reasoning = (
-                    f"Score {float(features.get('deterministic_score') or 0.0):.2f}. "
-                    f"{str(features.get('analysis_summary') or 'Limited alignment signals.').strip()}"
-                ).strip()
+                reasoning = self._compose_suggestion_reasoning(candidate)
                 external_ids = candidate.get("external_ids", {}) if isinstance(candidate.get("external_ids"), dict) else {}
                 session.add(
                     SuggestedMedia(
@@ -1349,7 +1364,12 @@ class VanguarrService:
                         title=str(candidate.get("title") or "Unknown"),
                         overview=str(candidate.get("overview") or ""),
                         production_year=self._parse_release_year(candidate.get("release_date")),
-                        score=float(features.get("deterministic_score") or 0.0),
+                        score=float(
+                            features.get("hybrid_score")
+                            or features.get("final_score")
+                            or features.get("deterministic_score")
+                            or 0.0
+                        ),
                         reasoning=reasoning,
                         state="available",
                         tmdb_id=self._coerce_int(external_ids.get("tmdb")),
@@ -1363,6 +1383,12 @@ class VanguarrService:
             "username": current_username,
             "stored": len(selected_candidates),
             "scored": len(filtered_candidates),
+            "ai_scored": sum(
+                1
+                for candidate in ai_candidates
+                if str(candidate.get("recommendation_features", {}).get("llm_vote") or "UNAVAILABLE")
+                != "UNAVAILABLE"
+            ),
         }
 
     async def _build_available_library_candidates(self, jellyfin_user_id: str) -> list[dict[str, Any]]:
@@ -1391,6 +1417,102 @@ class VanguarrService:
             if candidate is not None:
                 candidates.append(candidate)
         return candidates
+
+    async def _load_in_progress_items(self, jellyfin_user_id: str) -> list[dict[str, Any]]:
+        try:
+            client = self._jellyfin_client()
+        except RuntimeError:
+            return []
+
+        try:
+            return await client.get_resumable_items(jellyfin_user_id, limit=150)
+        except Exception as exc:
+            logger.warning(
+                "Suggested For You in-progress lookup skipped user=%s reason=%s",
+                jellyfin_user_id,
+                exc,
+            )
+            return []
+
+    async def _score_suggestion_candidates_with_ai(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        username: str,
+        profile_payload: dict[str, Any],
+        viewing_history: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        annotated = [dict(candidate) for candidate in candidates]
+        if not annotated:
+            return annotated
+
+        shortlist = self._select_suggestion_ai_candidates(
+            annotated,
+            threshold=self.settings.suggestion_ai_threshold,
+            limit=self.settings.suggestion_ai_candidate_limit,
+        )
+        if not shortlist:
+            for candidate in annotated:
+                self._finalize_suggestion_candidate(candidate)
+            return annotated
+
+        shortlist = await self._enrich_candidate_pool_with_tmdb(
+            shortlist,
+            limit=min(self.settings.tmdb_candidate_enrichment_limit, len(shortlist)),
+        )
+        shortlist = self._rank_candidate_pool(shortlist, profile_summary=profile_payload)
+
+        scored_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+        for candidate in shortlist:
+            features = candidate.setdefault("recommendation_features", {})
+            deterministic_score = float(features.get("deterministic_score") or 0.0)
+            llm_vote = "UNAVAILABLE"
+            llm_confidence: float | None = None
+            llm_reasoning = ""
+
+            try:
+                llm_payload = await self.llm.generate_json(
+                    messages=build_suggestion_messages(
+                        username=username,
+                        profile_payload=profile_payload,
+                        viewing_history=viewing_history,
+                        candidate=candidate,
+                    ),
+                    temperature=0,
+                    purpose="decision",
+                )
+                llm_vote = str(llm_payload.get("decision", "PASS")).upper()
+                if llm_vote not in {"RECOMMEND", "PASS"}:
+                    llm_vote = "PASS"
+                llm_confidence = self._coerce_float(llm_payload.get("confidence"))
+                llm_reasoning = str(llm_payload.get("reasoning", "No reasoning provided.")).strip()
+            except Exception as exc:
+                logger.warning(
+                    "Suggested For You LLM fallback triggered user=%s title=%s reason=%s",
+                    username,
+                    candidate.get("title", "unknown"),
+                    exc,
+                )
+
+            hybrid_score = self._blend_suggestion_confidences(
+                deterministic_score=deterministic_score,
+                llm_confidence=llm_confidence,
+                llm_vote=llm_vote,
+                llm_weight_percent=self.settings.decision_ai_weight_percent,
+            )
+            features["llm_vote"] = llm_vote
+            features["llm_confidence"] = llm_confidence
+            features["llm_reasoning"] = llm_reasoning
+            features["hybrid_score"] = hybrid_score
+            features["final_score"] = hybrid_score
+            scored_by_key[self._candidate_key(candidate)] = candidate
+
+        merged: list[dict[str, Any]] = []
+        for candidate in annotated:
+            merged_candidate = scored_by_key.get(self._candidate_key(candidate), candidate)
+            self._finalize_suggestion_candidate(merged_candidate)
+            merged.append(merged_candidate)
+        return merged
 
     def _start_task(self, session: Session, engine_name: str) -> TaskRun:
         task = TaskRun(
@@ -2116,6 +2238,59 @@ class VanguarrService:
 
         return selected
 
+    @classmethod
+    def _select_suggestion_ai_candidates(
+        cls,
+        candidates: list[dict[str, Any]],
+        *,
+        threshold: float,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+
+        shortlisted: list[dict[str, Any]] = []
+        threshold_value = max(0.0, min(1.0, float(threshold)))
+        for candidate in candidates:
+            score = float(candidate.get("recommendation_features", {}).get("deterministic_score") or 0.0)
+            if score < threshold_value:
+                continue
+            shortlisted.append(dict(candidate))
+            if len(shortlisted) >= limit:
+                break
+        return shortlisted
+
+    @classmethod
+    def _sort_suggestion_candidates(cls, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ranked = [dict(candidate) for candidate in candidates]
+        ranked.sort(
+            key=lambda item: (
+                -float(
+                    item.get("recommendation_features", {}).get("hybrid_score")
+                    or item.get("recommendation_features", {}).get("final_score")
+                    or item.get("recommendation_features", {}).get("deterministic_score")
+                    or 0.0
+                ),
+                -float(item.get("recommendation_features", {}).get("deterministic_score") or 0.0),
+                -float(item.get("rating") or 0.0),
+                str(item.get("title") or "").lower(),
+            )
+        )
+        return ranked
+
+    @classmethod
+    def _finalize_suggestion_candidate(cls, candidate: dict[str, Any]) -> dict[str, Any]:
+        features = candidate.setdefault("recommendation_features", {})
+        deterministic_score = float(features.get("deterministic_score") or 0.0)
+        final_score = float(features.get("hybrid_score") or features.get("final_score") or deterministic_score)
+        features["deterministic_score"] = deterministic_score
+        features["hybrid_score"] = final_score
+        features["final_score"] = final_score
+        features["llm_vote"] = str(features.get("llm_vote") or "UNAVAILABLE")
+        if features.get("llm_reasoning") is None:
+            features["llm_reasoning"] = ""
+        return candidate
+
     def _decision_prefilter_threshold(self) -> float:
         return max(0.28, min(0.42, self.settings.request_threshold * 0.55))
 
@@ -2136,6 +2311,27 @@ class VanguarrService:
         llm_score = cls._llm_request_score(llm_confidence=llm_confidence, llm_vote=llm_vote)
         blended = (normalized_code_score * (1.0 - llm_weight)) + (llm_score * llm_weight)
         return max(0.0, min(1.0, round(blended, 3)))
+
+    @classmethod
+    def _blend_suggestion_confidences(
+        cls,
+        *,
+        deterministic_score: float,
+        llm_confidence: float | None,
+        llm_vote: str,
+        llm_weight_percent: int,
+    ) -> float:
+        request_vote = "UNAVAILABLE"
+        if llm_vote == "RECOMMEND":
+            request_vote = "REQUEST"
+        elif llm_vote == "PASS":
+            request_vote = "IGNORE"
+        return cls._blend_confidences(
+            deterministic_score=deterministic_score,
+            llm_confidence=llm_confidence,
+            llm_vote=request_vote,
+            llm_weight_percent=llm_weight_percent,
+        )
 
     @staticmethod
     def _llm_request_score(*, llm_confidence: float, llm_vote: str) -> float:
@@ -2181,6 +2377,32 @@ class VanguarrService:
         if llm_reasoning:
             return reasoning + f" LLM vote: {llm_vote}. {llm_reasoning}"
         return reasoning + f" LLM vote: {llm_vote}."
+
+    @classmethod
+    def _compose_suggestion_reasoning(cls, candidate: dict[str, Any]) -> str:
+        features = candidate.get("recommendation_features", {})
+        breakdown = features.get("score_breakdown", {})
+        deterministic_score = float(features.get("deterministic_score") or 0.0)
+        hybrid_score = float(features.get("hybrid_score") or features.get("final_score") or deterministic_score)
+        summary = str(features.get("analysis_summary") or "Limited alignment signals.").strip()
+        reasoning = (
+            f"Suggestion score {hybrid_score:.2f}. Code score {deterministic_score:.2f}. {summary} "
+            f"Breakdown: source {float(breakdown.get('source_affinity', 0.0)):.2f}, "
+            f"genres {float(breakdown.get('genre_affinity', 0.0)):.2f}, "
+            f"format {float(breakdown.get('format_fit', 0.0)):.2f}, "
+            f"freshness {float(breakdown.get('freshness_fit', 0.0)):.2f}, "
+            f"quality {float(breakdown.get('quality', 0.0)):.2f}, "
+            f"themes {float(breakdown.get('tmdb_themes', 0.0)):.2f}, "
+            f"people {float(breakdown.get('tmdb_people', 0.0)):.2f}, "
+            f"brands {float(breakdown.get('tmdb_brands', 0.0)):.2f}."
+        )
+        llm_vote = str(features.get("llm_vote") or "UNAVAILABLE")
+        llm_reasoning = str(features.get("llm_reasoning") or "").strip()
+        if llm_vote == "UNAVAILABLE":
+            return reasoning + " AI vote unavailable, so the shelf order used the code-driven score only."
+        if llm_reasoning:
+            return reasoning + f" AI vote: {llm_vote}. {llm_reasoning}"
+        return reasoning + f" AI vote: {llm_vote}."
 
     async def _suggest_profile_enrichment(
         self,
@@ -2298,12 +2520,18 @@ class VanguarrService:
         targets: list[tuple[int, str, int]] = []
         for index, item in enumerate(enriched[:limit]):
             media_type = str(item.get("media_type") or "").strip()
-            media_id = item.get("media_id")
-            if media_type not in {"movie", "tv"} or media_id is None:
+            tmdb_id = None
+            external_ids = item.get("external_ids", {}) if isinstance(item.get("external_ids"), dict) else {}
+            if external_ids.get("tmdb") not in (None, ""):
+                tmdb_id = self._coerce_int(external_ids.get("tmdb"))
+            elif item.get("media_id") is not None:
+                tmdb_id = self._coerce_int(item.get("media_id"))
+
+            if media_type not in {"movie", "tv"} or tmdb_id is None:
                 continue
             if isinstance(item.get("tmdb_details"), dict) and item.get("tmdb_details"):
                 continue
-            targets.append((index, media_type, int(media_id)))
+            targets.append((index, media_type, int(tmdb_id)))
 
         if not targets:
             return enriched
@@ -3549,6 +3777,125 @@ class VanguarrService:
                 watched.add((media_type, provider_key, provider_id))
         return watched
 
+    @classmethod
+    def _build_suggestion_exclusion_context(
+        cls,
+        history: list[dict[str, Any]],
+        in_progress_items: list[dict[str, Any]],
+        *,
+        recent_cooldown_days: int,
+        repeat_watch_cutoff: int,
+    ) -> dict[str, set[tuple[str, str]] | set[tuple[str, str, str]]]:
+        watched_external_keys: set[tuple[str, str, str]] = set()
+        recent_external_keys: set[tuple[str, str, str]] = set()
+        repeat_external_keys: set[tuple[str, str, str]] = set()
+        in_progress_external_keys: set[tuple[str, str, str]] = set()
+
+        watched_title_keys: set[tuple[str, str]] = set()
+        recent_title_keys: set[tuple[str, str]] = set()
+        repeat_title_keys: set[tuple[str, str]] = set()
+        in_progress_title_keys: set[tuple[str, str]] = set()
+
+        repeat_threshold = max(1, int(repeat_watch_cutoff))
+        recent_cutoff_ts = 0.0
+        if int(recent_cooldown_days) > 0:
+            recent_cutoff_ts = (datetime.utcnow() - timedelta(days=int(recent_cooldown_days))).timestamp()
+
+        external_counts: Counter[tuple[str, str, str]] = Counter()
+        title_counts: Counter[tuple[str, str]] = Counter()
+
+        for item in history:
+            media_type = cls._map_history_media_type(item.get("Type"))
+            if media_type not in {"movie", "tv"}:
+                continue
+
+            title_key = cls._history_title_key(item)
+            if title_key is not None:
+                watched_title_keys.add(title_key)
+                title_counts[title_key] += 1
+
+            external_ids = cls._extract_external_ids(item)
+            external_keys = [(media_type, provider_key, provider_id) for provider_key, provider_id in external_ids.items()]
+            for key in external_keys:
+                watched_external_keys.add(key)
+                external_counts[key] += 1
+
+            if recent_cutoff_ts > 0 and cls._to_timestamp(item.get("UserData", {}).get("LastPlayedDate")) >= recent_cutoff_ts:
+                if title_key is not None:
+                    recent_title_keys.add(title_key)
+                recent_external_keys.update(external_keys)
+
+        for key, count in external_counts.items():
+            if count >= repeat_threshold:
+                repeat_external_keys.add(key)
+        for key, count in title_counts.items():
+            if count >= repeat_threshold:
+                repeat_title_keys.add(key)
+
+        for item in in_progress_items:
+            media_type = cls._map_history_media_type(item.get("Type"))
+            if media_type not in {"movie", "tv"}:
+                continue
+
+            title_key = cls._history_title_key(item)
+            if title_key is not None:
+                in_progress_title_keys.add(title_key)
+
+            external_ids = cls._extract_external_ids(item)
+            for provider_key, provider_id in external_ids.items():
+                in_progress_external_keys.add((media_type, provider_key, provider_id))
+
+        return {
+            "watched_external_keys": watched_external_keys,
+            "watched_title_keys": watched_title_keys,
+            "recent_external_keys": recent_external_keys,
+            "recent_title_keys": recent_title_keys,
+            "repeat_external_keys": repeat_external_keys,
+            "repeat_title_keys": repeat_title_keys,
+            "in_progress_external_keys": in_progress_external_keys,
+            "in_progress_title_keys": in_progress_title_keys,
+        }
+
+    @classmethod
+    def _suggestion_exclusion_reason(
+        cls,
+        candidate: dict[str, Any],
+        context: dict[str, set[tuple[str, str]] | set[tuple[str, str, str]]],
+    ) -> str | None:
+        if cls._candidate_matches_external_keys(
+            candidate,
+            context.get("in_progress_external_keys", set()),  # type: ignore[arg-type]
+        ) or cls._candidate_matches_title_keys(
+            candidate,
+            context.get("in_progress_title_keys", set()),  # type: ignore[arg-type]
+        ):
+            return "in_progress"
+        if cls._candidate_matches_external_keys(
+            candidate,
+            context.get("recent_external_keys", set()),  # type: ignore[arg-type]
+        ) or cls._candidate_matches_title_keys(
+            candidate,
+            context.get("recent_title_keys", set()),  # type: ignore[arg-type]
+        ):
+            return "recently_watched"
+        if cls._candidate_matches_external_keys(
+            candidate,
+            context.get("repeat_external_keys", set()),  # type: ignore[arg-type]
+        ) or cls._candidate_matches_title_keys(
+            candidate,
+            context.get("repeat_title_keys", set()),  # type: ignore[arg-type]
+        ):
+            return "repeat_watch"
+        if cls._candidate_matches_external_keys(
+            candidate,
+            context.get("watched_external_keys", set()),  # type: ignore[arg-type]
+        ) or cls._candidate_matches_title_keys(
+            candidate,
+            context.get("watched_title_keys", set()),  # type: ignore[arg-type]
+        ):
+            return "already_watched"
+        return None
+
     @staticmethod
     def _candidate_matches_external_keys(
         candidate: dict[str, Any],
@@ -3560,6 +3907,27 @@ class VanguarrService:
             if (media_type, str(provider_key), str(provider_id)) in watched_external_keys:
                 return True
         return False
+
+    @staticmethod
+    def _candidate_matches_title_keys(
+        candidate: dict[str, Any],
+        title_keys: set[tuple[str, str]],
+    ) -> bool:
+        media_type = str(candidate.get("media_type") or "")
+        title = str(candidate.get("title") or "").strip().lower()
+        if not media_type or not title:
+            return False
+        return (media_type, title) in title_keys
+
+    @classmethod
+    def _history_title_key(cls, item: dict[str, Any]) -> tuple[str, str] | None:
+        media_type = cls._map_history_media_type(item.get("Type"))
+        if media_type not in {"movie", "tv"}:
+            return None
+        title = cls._seed_title(item, media_type).strip().lower()
+        if not title:
+            return None
+        return media_type, title
 
     @staticmethod
     def _extract_tmdb_id(item: dict[str, Any]) -> int | None:
