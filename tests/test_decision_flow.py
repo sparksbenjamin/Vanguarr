@@ -5,8 +5,9 @@ import asyncio
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from app.api.seer import SeerRequestResult
 from app.core.db import Base
-from app.core.models import DecisionLog, LibraryMedia, SuggestedMedia, TaskRun
+from app.core.models import DecisionLog, LibraryMedia, RequestedMedia, SuggestedMedia, TaskRun
 from app.core.prompts import build_decision_messages, build_profile_enrichment_messages, build_suggestion_messages
 from app.core.settings import Settings
 from app.core.services import ProfileStore, VanguarrService, normalize_jellyfin_user_id
@@ -1162,3 +1163,109 @@ def test_suggestion_ai_cache_reuses_existing_llm_vote(tmp_path) -> None:
     assert features["llm_vote"] == "RECOMMEND"
     assert features["llm_reasoning"] == "Still a strong adjacent match."
     assert features["hybrid_score"] > features["deterministic_score"]
+
+
+def test_run_decision_engine_does_not_mark_noop_tv_request_as_requested(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+        request_threshold=0.7,
+        tmdb_candidate_enrichment_limit=0,
+    )
+
+    class FakeMediaServer:
+        async def list_users(self) -> list[dict]:
+            return [{"Id": "user-1", "Name": "alice"}]
+
+        async def get_playback_history(self, user_id: str, limit: int) -> list[dict]:
+            return []
+
+    class FakeSeer:
+        async def discover_candidates(self, *args, **kwargs) -> list[dict]:
+            return [
+                {
+                    "media_type": "tv",
+                    "media_id": 1932395,
+                    "title": "Test Show",
+                    "overview": "A test series.",
+                    "genres": ["Drama"],
+                    "sources": ["recommended:Seed Show"],
+                    "source_lanes": ["top_seed"],
+                    "media_info": {},
+                    "external_ids": {"tmdb": "1932395", "tvdb": "12345"},
+                }
+            ]
+
+        async def request_media(self, media_type: str, media_id: int, *, tvdb_id: int | None = None) -> SeerRequestResult:
+            assert media_type == "tv"
+            assert media_id == 1932395
+            assert tvdb_id == 12345
+            return SeerRequestResult(
+                created=False,
+                request_id=None,
+                status_code=202,
+                message="No seasons available to request",
+                payload={"message": "No seasons available to request"},
+            )
+
+    class FakeLLM:
+        async def generate_json(self, *args, **kwargs) -> dict:
+            return {
+                "decision": "REQUEST",
+                "confidence": 0.95,
+                "reasoning": "Strong fit for the user.",
+            }
+
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=FakeSeer(),
+        tmdb=SimpleNamespace(),
+        llm=FakeLLM(),
+        session_factory=session_factory,
+    )
+
+    async def passthrough_profile_summary(summary: dict, *, recommendation_seeds: list[dict]) -> dict:
+        return summary
+
+    async def passthrough_candidates(candidates: list[dict], *, limit: int) -> list[dict]:
+        return candidates
+
+    def ranked_candidates(candidates: list[dict], *, profile_summary: dict) -> list[dict]:
+        ranked: list[dict] = []
+        for candidate in candidates:
+            enriched = dict(candidate)
+            enriched["recommendation_features"] = {
+                "deterministic_score": 0.91,
+                "analysis_summary": "Strong drama match.",
+                "score_breakdown": {},
+                "lane_tags": ["because_you_watched"],
+            }
+            ranked.append(enriched)
+        return ranked
+
+    service._enrich_profile_summary_with_tmdb = passthrough_profile_summary  # type: ignore[method-assign]
+    service._enrich_candidate_pool_with_tmdb = passthrough_candidates  # type: ignore[method-assign]
+    service._rank_candidate_pool = ranked_candidates  # type: ignore[method-assign]
+    service._diversify_candidates = lambda candidates, limit: list(candidates)  # type: ignore[method-assign]
+
+    result = asyncio.run(service.run_decision_engine("alice"))
+
+    with session_factory() as session:
+        logs = list(session.scalars(select(DecisionLog)))
+        requests = list(session.scalars(select(RequestedMedia)))
+
+    assert result["status"] == "success"
+    assert result["requested"] == 0
+    assert len(requests) == 0
+    assert len(logs) == 1
+    assert logs[0].decision == "REQUEST"
+    assert logs[0].requested is False
+    assert logs[0].request_id is None
+    assert "Request outcome: No seasons available to request" in logs[0].reasoning

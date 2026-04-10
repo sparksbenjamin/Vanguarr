@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import patch
 
 from app.api.base import ExternalServiceError
 from app.api.seer import SeerClient
@@ -246,5 +247,99 @@ def test_discover_candidates_continues_when_recommendation_seed_fails() -> None:
         assert candidates[0]["sources"] == ["genre:Drama"]
         assert candidates[1]["sources"] == ["genre:Drama"]
         assert candidates[2]["sources"] == ["trending"]
+
+    asyncio.run(scenario())
+
+
+def test_request_media_tv_defaults_to_season_one_and_returns_request_id() -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = {"content-type": "application/json"}
+            self.content = b"{}"
+            self.reason_phrase = "Created"
+            self.text = ""
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeAsyncClient:
+        last_json: dict | None = None
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def request(self, *, method: str, url: str, json: dict, headers: dict):
+            FakeAsyncClient.last_json = json
+            return FakeResponse(201, {"id": 42, "status": 2})
+
+    async def scenario() -> None:
+        settings = Settings(
+            seer_base_url="http://seer.local",
+            seer_api_key="token",
+            seer_request_user_id=12,
+        )
+        client = SeerClient(settings)
+
+        with patch("app.api.seer.httpx.AsyncClient", FakeAsyncClient):
+            result = await client.request_media("tv", 1932395, tvdb_id=12345)
+
+        assert result.created is True
+        assert result.request_id == 42
+        assert FakeAsyncClient.last_json == {
+            "mediaType": "tv",
+            "mediaId": 1932395,
+            "seasons": [1],
+            "tvdbId": 12345,
+            "userId": 12,
+        }
+
+    asyncio.run(scenario())
+
+
+def test_request_media_returns_not_created_for_no_seasons_available() -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = {"content-type": "application/json"}
+            self.content = b"{}"
+            self.reason_phrase = "Accepted"
+            self.text = ""
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def request(self, *, method: str, url: str, json: dict, headers: dict):
+            return FakeResponse(202, {"message": "No seasons available to request"})
+
+    async def scenario() -> None:
+        settings = Settings(seer_base_url="http://seer.local", seer_api_key="token")
+        client = SeerClient(settings)
+
+        with patch("app.api.seer.httpx.AsyncClient", FakeAsyncClient):
+            result = await client.request_media("tv", 1932395)
+
+        assert result.created is False
+        assert result.request_id is None
+        assert result.status_code == 202
+        assert "No seasons available" in result.message
 
     asyncio.run(scenario())

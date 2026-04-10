@@ -876,21 +876,41 @@ class VanguarrService:
 
                             request_id: int | None = None
                             error: str | None = None
+                            request_created = False
+                            request_note = ""
                             if should_request:
                                 try:
-                                    response = await self.seer.request_media(
+                                    external_ids = (
+                                        candidate.get("external_ids", {})
+                                        if isinstance(candidate.get("external_ids"), dict)
+                                        else {}
+                                    )
+                                    request_result = await self.seer.request_media(
                                         candidate["media_type"],
                                         candidate["media_id"],
+                                        tvdb_id=self._coerce_int(external_ids.get("tvdb")),
                                     )
-                                    request_id = response.get("id")
-                                    requested_media_keys.add(self._candidate_key(candidate))
-                                    logger.info(
-                                        "Decision Engine requested media user=%s title=%s type=%s request_id=%s",
-                                        current_username,
-                                        candidate["title"],
-                                        candidate["media_type"],
-                                        request_id,
-                                    )
+                                    request_id = request_result.request_id
+                                    if request_result.created:
+                                        request_created = True
+                                        requested_media_keys.add(self._candidate_key(candidate))
+                                        logger.info(
+                                            "Decision Engine requested media user=%s title=%s type=%s request_id=%s",
+                                            current_username,
+                                            candidate["title"],
+                                            candidate["media_type"],
+                                            request_id,
+                                        )
+                                    else:
+                                        request_note = request_result.message or "Seer did not create a request."
+                                        logger.info(
+                                            "Decision Engine request skipped user=%s title=%s type=%s status=%s reason=%s",
+                                            current_username,
+                                            candidate["title"],
+                                            candidate["media_type"],
+                                            request_result.status_code,
+                                            request_note,
+                                        )
                                 except Exception as exc:
                                     error = str(exc)
                                     errors.append(f"{current_username}::{candidate['title']}: {exc}")
@@ -900,8 +920,11 @@ class VanguarrService:
                                         candidate["title"],
                                     )
 
+                            if request_note:
+                                reasoning = f"{reasoning} Request outcome: {request_note}"
+
                             with self.session_scope() as session:
-                                if should_request and error is None:
+                                if should_request and error is None and request_created:
                                     requested += 1
                                     session.add(
                                         RequestedMedia(
@@ -924,7 +947,7 @@ class VanguarrService:
                                         decision=decision,
                                         confidence=confidence,
                                         threshold=self.settings.request_threshold,
-                                        requested=should_request and error is None,
+                                        requested=should_request and error is None and request_created,
                                         request_id=request_id,
                                         reasoning=reasoning,
                                         payload_json=json.dumps(candidate, ensure_ascii=True),

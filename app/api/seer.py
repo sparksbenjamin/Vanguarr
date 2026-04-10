@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from typing import Any
+
+import httpx
 
 from app.api.base import BaseAPIClient, ClientConfigError, ConnectionCheck, ExternalServiceError
 from app.core.settings import Settings
 
 
 logger = logging.getLogger("vanguarr.seer")
+
+
+@dataclass(slots=True)
+class SeerRequestResult:
+    created: bool
+    request_id: int | None
+    status_code: int
+    message: str = ""
+    payload: dict[str, Any] | None = None
 
 
 class SeerClient(BaseAPIClient):
@@ -90,17 +102,62 @@ class SeerClient(BaseAPIClient):
         payload = await self._request("GET", path)
         return self._extract_results(payload)
 
-    async def request_media(self, media_type: str, media_id: int) -> dict[str, Any]:
+    async def request_media(
+        self,
+        media_type: str,
+        media_id: int,
+        *,
+        tvdb_id: int | None = None,
+    ) -> SeerRequestResult:
         settings = self._refresh_connection()
         if not settings.seer_api_key:
             raise ClientConfigError("SEER_API_KEY is required to create requests.")
 
         body: dict[str, Any] = {"mediaType": media_type, "mediaId": media_id}
+        if media_type == "tv":
+            body["seasons"] = [1]
+            if tvdb_id is not None:
+                body["tvdbId"] = tvdb_id
         if settings.seer_request_user_id is not None:
             body["userId"] = settings.seer_request_user_id
 
-        payload = await self._request("POST", "/api/v1/request", json_body=body)
-        return payload if isinstance(payload, dict) else {}
+        self._require_base_url()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.request(
+                    method="POST",
+                    url=f"{self.base_url}/api/v1/request",
+                    json=body,
+                    headers=self.headers,
+                )
+        except httpx.HTTPError as exc:
+            detail = str(exc).strip() or exc.__class__.__name__
+            raise ExternalServiceError(f"{self.service_name} request failed: {detail}") from exc
+
+        payload = self._decode_response_payload(response)
+        request_id = self._coerce_request_id(payload)
+        message = self._request_result_message(payload, response)
+
+        if 200 <= response.status_code < 300 and request_id is not None:
+            return SeerRequestResult(
+                created=True,
+                request_id=request_id,
+                status_code=response.status_code,
+                message=message,
+                payload=payload if isinstance(payload, dict) else {},
+            )
+
+        if response.status_code in {202, 409} or (200 <= response.status_code < 300 and request_id is None):
+            return SeerRequestResult(
+                created=False,
+                request_id=None,
+                status_code=response.status_code,
+                message=message or "Seer did not create a request.",
+                payload=payload if isinstance(payload, dict) else {},
+            )
+
+        message = self._request_result_message(payload, response)
+        raise ExternalServiceError(f"{self.service_name} returned HTTP {response.status_code}: {message[:500]}")
 
     async def discover_candidates(
         self,
@@ -418,3 +475,38 @@ class SeerClient(BaseAPIClient):
             "sources": [source],
             "source_lanes": list(source_lanes),
         }
+
+    @staticmethod
+    def _decode_response_payload(response: httpx.Response) -> Any:
+        if not response.content:
+            return {}
+
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type:
+            return response.json()
+
+        return response.text
+
+    @staticmethod
+    def _coerce_request_id(payload: Any) -> int | None:
+        if not isinstance(payload, dict):
+            return None
+
+        raw_id = payload.get("id")
+        try:
+            return int(raw_id) if raw_id is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _request_result_message(payload: Any, response: httpx.Response) -> str:
+        if isinstance(payload, dict):
+            for key in ("message", "error", "detail"):
+                value = payload.get(key)
+                if value is not None and str(value).strip():
+                    return str(value).strip()
+
+        if isinstance(payload, str) and payload.strip():
+            return payload.strip()
+
+        return response.reason_phrase or "Unknown response"
