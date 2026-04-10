@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import secrets
@@ -683,6 +684,7 @@ async def manifest(request: Request, username: str = "") -> HTMLResponse:
         if selected_user
         else []
     )
+    profile_task_snapshots = service.get_profile_task_snapshots(selected_user) if selected_user else {}
     return templates.TemplateResponse(
         request=request,
         name="manifest.html",
@@ -699,6 +701,7 @@ async def manifest(request: Request, username: str = "") -> HTMLResponse:
             "profile_summary_path": profile_summary_path,
             "suggestions_preview": suggestions_preview,
             "suggestions_limit": settings.suggestions_limit,
+            "profile_task_snapshots": profile_task_snapshots,
         },
     )
 
@@ -735,6 +738,100 @@ async def manifest_action_suggested_for_you(
 
     _started, message = request.app.state.background_runner.launch_suggested_for_you(cleaned_username)
     return redirect_with_toast("/manifest", message, username=cleaned_username)
+
+
+@app.get("/api/manifest/task-status")
+async def manifest_task_status(request: Request, username: str = "") -> JSONResponse:
+    cleaned_username = username.strip()
+    engines = ("profile_architect", "decision_engine", "suggested_for_you")
+    service: VanguarrService = request.app.state.vanguarr
+    return JSONResponse(
+        {
+            "ok": True,
+            "username": cleaned_username,
+            "tasks": service.get_profile_task_snapshots(cleaned_username),
+            "active_tasks": {
+                engine: service.get_task_snapshot(engine)
+                for engine in engines
+            },
+            "global_running": {
+                engine: request.app.state.background_runner.is_running(engine)
+                for engine in engines
+            },
+        }
+    )
+
+
+@app.post("/api/manifest/actions/profile-architect")
+async def manifest_action_profile_architect_api(
+    request: Request,
+    username: str = Form(""),
+) -> JSONResponse:
+    cleaned_username = username.strip()
+    if not cleaned_username:
+        return JSONResponse({"ok": False, "detail": "Select a profile before running Profile Architect."}, status_code=400)
+
+    started, detail = request.app.state.background_runner.launch_profile_architect(cleaned_username)
+    if started:
+        await asyncio.sleep(0)
+    service: VanguarrService = request.app.state.vanguarr
+    return JSONResponse(
+        {
+            "ok": True,
+            "started": started,
+            "detail": detail,
+            "task": service.get_task_snapshot_for_target("profile_architect", cleaned_username),
+            "active_task": service.get_task_snapshot("profile_architect"),
+        }
+    )
+
+
+@app.post("/api/manifest/actions/decision-engine")
+async def manifest_action_decision_engine_api(
+    request: Request,
+    username: str = Form(""),
+) -> JSONResponse:
+    cleaned_username = username.strip()
+    if not cleaned_username:
+        return JSONResponse({"ok": False, "detail": "Select a profile before running Decision Engine."}, status_code=400)
+
+    started, detail = request.app.state.background_runner.launch_decision_engine(cleaned_username)
+    if started:
+        await asyncio.sleep(0)
+    service: VanguarrService = request.app.state.vanguarr
+    return JSONResponse(
+        {
+            "ok": True,
+            "started": started,
+            "detail": detail,
+            "task": service.get_task_snapshot_for_target("decision_engine", cleaned_username),
+            "active_task": service.get_task_snapshot("decision_engine"),
+        }
+    )
+
+
+@app.post("/api/manifest/actions/suggested-for-you")
+async def manifest_action_suggested_for_you_api(
+    request: Request,
+    username: str = Form(""),
+) -> JSONResponse:
+    cleaned_username = username.strip()
+    if not cleaned_username:
+        return JSONResponse({"ok": False, "detail": "Select a profile before refreshing suggestions."}, status_code=400)
+
+    started, detail = request.app.state.background_runner.launch_suggested_for_you(cleaned_username)
+    if started:
+        await asyncio.sleep(0)
+    service: VanguarrService = request.app.state.vanguarr
+    return JSONResponse(
+        {
+            "ok": True,
+            "started": started,
+            "detail": detail,
+            "task": service.get_task_snapshot_for_target("suggested_for_you", cleaned_username),
+            "active_task": service.get_task_snapshot("suggested_for_you"),
+        }
+    )
 
 
 @app.post("/actions/profile-architect")

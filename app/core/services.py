@@ -6,6 +6,7 @@ import json
 import logging
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -530,6 +531,33 @@ class VanguarrService:
             )
         return self._serialize_task_run(task)
 
+    def get_task_snapshot_for_target(self, engine_name: str, username: str | None = None) -> dict[str, Any]:
+        target_username = str(username or "").strip().casefold()
+        if not target_username:
+            return self.get_task_snapshot(engine_name)
+
+        with self.session_scope() as session:
+            tasks = list(
+                session.scalars(
+                    select(TaskRun)
+                    .where(TaskRun.engine == engine_name)
+                    .order_by(desc(TaskRun.started_at))
+                    .limit(40)
+                )
+            )
+
+        for task in tasks:
+            if self._task_target_username(task).casefold() == target_username:
+                return self._serialize_task_run(task)
+        return self._serialize_task_run(None)
+
+    def get_profile_task_snapshots(self, username: str | None) -> dict[str, dict[str, Any]]:
+        engines = ("profile_architect", "decision_engine", "suggested_for_you")
+        return {
+            engine: self.get_task_snapshot_for_target(engine, username)
+            for engine in engines
+        }
+
     async def install_jellyfin_plugin(self) -> dict[str, Any]:
         if self.settings.normalized_media_server_provider != "jellyfin":
             raise ClientConfigError(
@@ -609,19 +637,60 @@ class VanguarrService:
         with self.session_scope() as session:
             task = self._start_task(session, "profile_architect")
 
+        target_username = str(username or "").strip()
         updated_users: list[str] = []
         suggestion_refreshes = 0
         suggestion_targets: list[dict[str, Any]] = []
         errors: list[str] = []
+        total_steps = 0
+        completed_steps = 0
 
         try:
             users = await self.media_server.list_users()
             if username:
                 users = [user for user in users if user.get("Name") == username]
 
+            total_steps = len(users) * (2 if self.settings.suggestions_enabled else 1)
+            self._update_task(
+                task.id,
+                status="running",
+                summary=(
+                    f"Preparing Profile Architect for {target_username}."
+                    if target_username
+                    else f"Preparing Profile Architect for {len(users)} user(s)."
+                ),
+                progress_current=0,
+                progress_total=total_steps,
+                current_label=target_username or "Preparing profiles",
+                detail_payload={
+                    "target_username": target_username,
+                    "processed_users": 0,
+                    "total_users": len(users),
+                    "updated_users": [],
+                    "suggestion_refreshes": 0,
+                    "errors": [],
+                },
+            )
+
             for user in users:
                 current_username = user.get("Name", "unknown")
                 try:
+                    self._update_task(
+                        task.id,
+                        status="running",
+                        summary=f"Building profile manifest for {current_username}.",
+                        progress_current=completed_steps,
+                        progress_total=total_steps,
+                        current_label=current_username,
+                        detail_payload={
+                            "target_username": target_username,
+                            "processed_users": len(updated_users),
+                            "total_users": len(users),
+                            "updated_users": list(updated_users),
+                            "suggestion_refreshes": suggestion_refreshes,
+                            "errors": list(errors),
+                        },
+                    )
                     history = await self.media_server.get_playback_history(
                         user["Id"],
                         self.settings.profile_history_limit,
@@ -654,22 +723,107 @@ class VanguarrService:
                     self.profile_store.write_payload(current_username, profile_payload)
                     updated_users.append(current_username)
                     suggestion_targets.append(user)
+                    completed_steps += 1
+                    self._update_task(
+                        task.id,
+                        status="running",
+                        summary=f"Updated profile manifest for {current_username}.",
+                        progress_current=completed_steps,
+                        progress_total=total_steps,
+                        current_label=current_username,
+                        detail_payload={
+                            "target_username": target_username,
+                            "processed_users": len(updated_users),
+                            "total_users": len(users),
+                            "updated_users": list(updated_users),
+                            "suggestion_refreshes": suggestion_refreshes,
+                            "errors": list(errors),
+                        },
+                    )
                     logger.info("Profile Architect updated profile for user=%s", current_username)
                 except Exception as exc:
                     errors.append(f"{current_username}: {exc}")
                     logger.exception("Profile Architect failed for user=%s", current_username)
+                    if not self.settings.suggestions_enabled:
+                        completed_steps += 1
+                        self._update_task(
+                            task.id,
+                            status="running",
+                            summary=f"Profile Architect hit an error for {current_username}.",
+                            progress_current=completed_steps,
+                            progress_total=total_steps,
+                            current_label=current_username,
+                            detail_payload={
+                                "target_username": target_username,
+                                "processed_users": len(updated_users),
+                                "total_users": len(users),
+                                "updated_users": list(updated_users),
+                                "suggestion_refreshes": suggestion_refreshes,
+                                "errors": list(errors),
+                            },
+                        )
 
             if self.settings.suggestions_enabled:
                 for user in suggestion_targets:
                     current_username = str(user.get("Name") or "unknown")
                     try:
+                        self._update_task(
+                            task.id,
+                            status="running",
+                            summary=f"Refreshing suggestions for {current_username}.",
+                            progress_current=completed_steps,
+                            progress_total=total_steps,
+                            current_label=current_username,
+                            detail_payload={
+                                "target_username": target_username,
+                                "processed_users": len(updated_users),
+                                "total_users": len(users),
+                                "updated_users": list(updated_users),
+                                "suggestion_refreshes": suggestion_refreshes,
+                                "errors": list(errors),
+                            },
+                        )
                         await self._refresh_user_suggestions(user)
                         suggestion_refreshes += 1
+                        completed_steps += 1
+                        self._update_task(
+                            task.id,
+                            status="running",
+                            summary=f"Refreshed suggestions for {current_username}.",
+                            progress_current=completed_steps,
+                            progress_total=total_steps,
+                            current_label=current_username,
+                            detail_payload={
+                                "target_username": target_username,
+                                "processed_users": len(updated_users),
+                                "total_users": len(users),
+                                "updated_users": list(updated_users),
+                                "suggestion_refreshes": suggestion_refreshes,
+                                "errors": list(errors),
+                            },
+                        )
                     except Exception as exc:
                         errors.append(f"{current_username} suggestions: {exc}")
                         logger.exception(
                             "Profile Architect follow-up suggestion refresh failed for user=%s",
                             current_username,
+                        )
+                        completed_steps += 1
+                        self._update_task(
+                            task.id,
+                            status="running",
+                            summary=f"Suggestion refresh hit an error for {current_username}.",
+                            progress_current=completed_steps,
+                            progress_total=total_steps,
+                            current_label=current_username,
+                            detail_payload={
+                                "target_username": target_username,
+                                "processed_users": len(updated_users),
+                                "total_users": len(users),
+                                "updated_users": list(updated_users),
+                                "suggestion_refreshes": suggestion_refreshes,
+                                "errors": list(errors),
+                            },
                         )
 
             if not users:
@@ -692,8 +846,23 @@ class VanguarrService:
             summary = f"Profile Architect failed: {exc}"
             errors.append(str(exc))
 
-        with self.session_scope() as session:
-            self._finish_task(session, task.id, status=status, summary=summary)
+        self._update_task(
+            task.id,
+            status=status,
+            summary=summary,
+            progress_current=total_steps if total_steps > 0 else completed_steps,
+            progress_total=total_steps,
+            current_label=target_username or ("Complete" if status == "success" else "Finished"),
+            detail_payload={
+                "target_username": target_username,
+                "processed_users": len(updated_users),
+                "total_users": len(users) if 'users' in locals() else 0,
+                "updated_users": list(updated_users),
+                "suggestion_refreshes": suggestion_refreshes,
+                "errors": list(errors),
+            },
+            finished=True,
+        )
 
         logger.info("Profile Architect finished status=%s summary=%s", status, summary)
 
@@ -711,6 +880,7 @@ class VanguarrService:
         with self.session_scope() as session:
             task = self._start_task(session, "decision_engine")
 
+        target_username = str(username or "").strip()
         scored = 0
         shortlisted = 0
         evaluated = 0
@@ -718,15 +888,61 @@ class VanguarrService:
         skipped = 0
         errors: list[str] = []
         exclusions = self._parse_global_exclusions()
+        total_steps = 0
+        completed_steps = 0
 
         try:
             users = await self.media_server.list_users()
             if username:
                 users = [user for user in users if user.get("Name") == username]
 
+            total_steps = max(1, len(users) * 3)
+            self._update_task(
+                task.id,
+                status="running",
+                summary=(
+                    f"Preparing Decision Engine for {target_username}."
+                    if target_username
+                    else f"Preparing Decision Engine for {len(users)} user(s)."
+                ),
+                progress_current=0,
+                progress_total=total_steps,
+                current_label=target_username or "Preparing decisions",
+                detail_payload={
+                    "target_username": target_username,
+                    "processed_users": 0,
+                    "total_users": len(users),
+                    "scored": 0,
+                    "shortlisted": 0,
+                    "evaluated": 0,
+                    "requested": 0,
+                    "skipped": 0,
+                    "errors": [],
+                },
+            )
+
             for user in users:
                 current_username = user.get("Name", "unknown")
                 try:
+                    self._update_task(
+                        task.id,
+                        status="running",
+                        summary=f"Loading history and profile context for {current_username}.",
+                        progress_current=completed_steps,
+                        progress_total=total_steps,
+                        current_label=current_username,
+                        detail_payload={
+                            "target_username": target_username,
+                            "processed_users": max(0, completed_steps // 3),
+                            "total_users": len(users),
+                            "scored": scored,
+                            "shortlisted": shortlisted,
+                            "evaluated": evaluated,
+                            "requested": requested,
+                            "skipped": skipped,
+                            "errors": list(errors),
+                        },
+                    )
                     history = await self.media_server.get_playback_history(
                         user["Id"],
                         self.settings.profile_history_limit,
@@ -762,6 +978,26 @@ class VanguarrService:
                         profile_payload.get("history_count") or 0
                     ) > 0:
                         self.profile_store.write_payload(current_username, profile_payload)
+                    completed_steps += 1
+                    self._update_task(
+                        task.id,
+                        status="running",
+                        summary=f"Discovering and ranking candidates for {current_username}.",
+                        progress_current=completed_steps,
+                        progress_total=total_steps,
+                        current_label=current_username,
+                        detail_payload={
+                            "target_username": target_username,
+                            "processed_users": max(0, completed_steps // 3),
+                            "total_users": len(users),
+                            "scored": scored,
+                            "shortlisted": shortlisted,
+                            "evaluated": evaluated,
+                            "requested": requested,
+                            "skipped": skipped,
+                            "errors": list(errors),
+                        },
+                    )
 
                     viewing_history = self._build_viewing_history_context(
                         history,
@@ -821,7 +1057,32 @@ class VanguarrService:
                         limit=self.settings.decision_shortlist_limit,
                     )
                     shortlisted += len(candidates)
+                    completed_steps += 1
+                    candidate_steps = max(1, len(candidates))
+                    task_total_for_user = completed_steps + candidate_steps + max(0, (len(users) - 1) * 3)
+                    total_steps = max(total_steps, task_total_for_user)
+                    self._update_task(
+                        task.id,
+                        status="running",
+                        summary=f"Evaluating {len(candidates)} shortlisted candidate(s) for {current_username}.",
+                        progress_current=completed_steps,
+                        progress_total=total_steps,
+                        current_label=current_username,
+                        detail_payload={
+                            "target_username": target_username,
+                            "processed_users": max(0, completed_steps // 3),
+                            "total_users": len(users),
+                            "scored": scored,
+                            "shortlisted": shortlisted,
+                            "evaluated": evaluated,
+                            "requested": requested,
+                            "skipped": skipped,
+                            "errors": list(errors),
+                        },
+                    )
 
+                    user_candidate_total = len(candidates)
+                    user_candidate_index = 0
                     for candidate in candidates:
                         try:
                             deterministic_score = float(
@@ -956,6 +1217,30 @@ class VanguarrService:
                                 )
 
                             evaluated += 1
+                            user_candidate_index += 1
+                            completed_steps = min(total_steps, completed_steps + 1)
+                            self._update_task(
+                                task.id,
+                                status="running",
+                                summary=(
+                                    f"Processed {user_candidate_index}/{user_candidate_total} candidate(s) "
+                                    f"for {current_username}."
+                                ),
+                                progress_current=completed_steps,
+                                progress_total=total_steps,
+                                current_label=current_username,
+                                detail_payload={
+                                    "target_username": target_username,
+                                    "processed_users": max(0, completed_steps // 3),
+                                    "total_users": len(users),
+                                    "scored": scored,
+                                    "shortlisted": shortlisted,
+                                    "evaluated": evaluated,
+                                    "requested": requested,
+                                    "skipped": skipped,
+                                    "errors": list(errors),
+                                },
+                            )
                         except Exception as exc:
                             errors.append(f"{current_username}::{candidate.get('title', 'unknown')}: {exc}")
                             logger.exception(
@@ -963,6 +1248,7 @@ class VanguarrService:
                                 current_username,
                                 candidate.get("title", "unknown"),
                             )
+                    completed_steps = max(completed_steps, total_steps - max(0, (len(users) - (users.index(user) + 1)) * 3))
                 except Exception as exc:
                     errors.append(f"{current_username}: {exc}")
                     logger.exception("Decision Engine failed while preparing user=%s", current_username)
@@ -987,8 +1273,26 @@ class VanguarrService:
             summary = f"Decision Engine failed: {exc}"
             errors.append(str(exc))
 
-        with self.session_scope() as session:
-            self._finish_task(session, task.id, status=status, summary=summary)
+        self._update_task(
+            task.id,
+            status=status,
+            summary=summary,
+            progress_current=total_steps if total_steps > 0 else completed_steps,
+            progress_total=total_steps,
+            current_label=target_username or ("Complete" if status == "success" else "Finished"),
+            detail_payload={
+                "target_username": target_username,
+                "processed_users": len(users) if 'users' in locals() else 0,
+                "total_users": len(users) if 'users' in locals() else 0,
+                "scored": scored,
+                "shortlisted": shortlisted,
+                "evaluated": evaluated,
+                "requested": requested,
+                "skipped": skipped,
+                "errors": list(errors),
+            },
+            finished=True,
+        )
 
         logger.info("Decision Engine finished status=%s summary=%s", status, summary)
 
@@ -1009,10 +1313,13 @@ class VanguarrService:
         with self.session_scope() as session:
             task = self._start_task(session, "suggested_for_you")
 
+        target_username = str(username or "").strip()
         refreshed_users: list[str] = []
         stored = 0
         scored = 0
         errors: list[str] = []
+        total_steps = 0
+        completed_steps = 0
 
         try:
             if not self.settings.suggestions_enabled:
@@ -1023,16 +1330,98 @@ class VanguarrService:
                 if username:
                     users = [user for user in users if user.get("Name") == username]
 
-                for user in users:
+                phase_steps_per_user = 5
+                total_steps = len(users) * phase_steps_per_user
+                self._update_task(
+                    task.id,
+                    status="running",
+                    summary=(
+                        f"Preparing Suggested For You refresh for {target_username}."
+                        if target_username
+                        else f"Preparing Suggested For You refresh for {len(users)} user(s)."
+                    ),
+                    progress_current=0,
+                    progress_total=total_steps,
+                    current_label=target_username or "Preparing suggestions",
+                    detail_payload={
+                        "target_username": target_username,
+                        "processed_users": 0,
+                        "total_users": len(users),
+                        "stored": 0,
+                        "scored": 0,
+                        "errors": [],
+                    },
+                )
+
+                for user_index, user in enumerate(users):
                     current_username = str(user.get("Name") or "unknown")
                     try:
-                        result = await self._refresh_user_suggestions(user)
+                        base_offset = user_index * phase_steps_per_user
+
+                        def emit_suggestion_progress(label: str, step: int, detail: dict[str, Any] | None = None) -> None:
+                            nonlocal completed_steps
+                            completed_steps = base_offset + max(0, min(phase_steps_per_user, int(step)))
+                            self._update_task(
+                                task.id,
+                                status="running",
+                                summary=label,
+                                progress_current=completed_steps,
+                                progress_total=total_steps,
+                                current_label=current_username,
+                                detail_payload={
+                                    "target_username": target_username,
+                                    "processed_users": len(refreshed_users),
+                                    "total_users": len(users),
+                                    "stored": stored,
+                                    "scored": scored,
+                                    "errors": list(errors),
+                                    "phase": (detail or {}).get("phase", ""),
+                                },
+                            )
+
+                        result = await self._refresh_user_suggestions(user, progress_callback=emit_suggestion_progress)
                         refreshed_users.append(current_username)
                         stored += int(result.get("stored") or 0)
                         scored += int(result.get("scored") or 0)
+                        completed_steps = base_offset + phase_steps_per_user
+                        self._update_task(
+                            task.id,
+                            status="running",
+                            summary=f"Stored suggestion snapshot for {current_username}.",
+                            progress_current=completed_steps,
+                            progress_total=total_steps,
+                            current_label=current_username,
+                            detail_payload={
+                                "target_username": target_username,
+                                "processed_users": len(refreshed_users),
+                                "total_users": len(users),
+                                "stored": stored,
+                                "scored": scored,
+                                "errors": list(errors),
+                                "phase": "complete",
+                            },
+                        )
                     except Exception as exc:
                         errors.append(f"{current_username}: {exc}")
                         logger.exception("Suggested For You refresh failed for user=%s", current_username)
+                        completed_steps = base_offset + phase_steps_per_user
+                        self._update_task(
+                            task.id,
+                            status="running",
+                            summary=f"Suggested For You hit an error for {current_username}.",
+                            progress_current=completed_steps,
+                            progress_total=total_steps,
+                            current_label=current_username,
+                            detail_payload={
+                                "target_username": target_username,
+                                "processed_users": len(refreshed_users),
+                                "total_users": len(users),
+                                "stored": stored,
+                                "scored": scored,
+                                "errors": list(errors),
+                                "phase": "error",
+                            },
+                        )
 
                 if not users:
                     status = "error"
@@ -1054,8 +1443,24 @@ class VanguarrService:
             summary = f"Suggested For You refresh failed: {exc}"
             errors.append(str(exc))
 
-        with self.session_scope() as session:
-            self._finish_task(session, task.id, status=status, summary=summary)
+        self._update_task(
+            task.id,
+            status=status,
+            summary=summary,
+            progress_current=total_steps if total_steps > 0 else completed_steps,
+            progress_total=total_steps,
+            current_label=target_username or ("Complete" if status == "success" else "Finished"),
+            detail_payload={
+                "target_username": target_username,
+                "processed_users": len(refreshed_users),
+                "total_users": len(users) if 'users' in locals() else 0,
+                "stored": stored,
+                "scored": scored,
+                "errors": list(errors),
+                "phase": "complete" if status == "success" else status,
+            },
+            finished=True,
+        )
 
         logger.info("Suggested For You refresh finished status=%s summary=%s", status, summary)
 
@@ -1474,12 +1879,22 @@ class VanguarrService:
             return client
         raise RuntimeError("Suggested For You requires a Jellyfin media server client.")
 
-    async def _refresh_user_suggestions(self, user: dict[str, Any]) -> dict[str, Any]:
+    async def _refresh_user_suggestions(
+        self,
+        user: dict[str, Any],
+        progress_callback: Callable[[str, int, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         current_username = str(user.get("Name") or "unknown")
         jellyfin_user_id = normalize_jellyfin_user_id(str(user.get("Id") or ""))
         if not jellyfin_user_id:
             raise ValueError("Jellyfin user id is required for suggestion refresh.")
 
+        def emit_progress(label: str, step: int, phase: str) -> None:
+            if progress_callback is None:
+                return
+            progress_callback(label, step, {"phase": phase})
+
+        emit_progress(f"Loading playback history for {current_username}.", 0, "history")
         history = await self.media_server.get_playback_history(
             jellyfin_user_id,
             self.settings.profile_history_limit,
@@ -1513,6 +1928,7 @@ class VanguarrService:
         ) > 0:
             self.profile_store.write_payload(current_username, profile_payload)
 
+        emit_progress(f"Loading indexed library candidates for {current_username}.", 1, "library")
         viewing_history = self._build_viewing_history_context(
             history,
             recommendation_seeds=recommendation_seeds,
@@ -1527,6 +1943,7 @@ class VanguarrService:
             recent_cooldown_days=self.settings.suggestion_recent_cooldown_days,
             repeat_watch_cutoff=self.settings.suggestion_repeat_watch_cutoff,
         )
+        emit_progress(f"Ranking suggestion candidates for {current_username}.", 2, "ranking")
         filtered_candidates = [
             candidate
             for candidate in available_candidates
@@ -1543,6 +1960,7 @@ class VanguarrService:
             viewing_history=viewing_history,
             cached_llm_votes=existing_ai_cache,
         )
+        emit_progress(f"Applying AI shortlist for {current_username}.", 3, "ai")
         display_candidates = self._filter_suggestion_candidates_for_display(
             ai_candidates,
             threshold=self.settings.suggestion_ai_threshold,
@@ -1552,6 +1970,7 @@ class VanguarrService:
             limit=max(1, int(self.settings.suggestions_limit)),
         )
 
+        emit_progress(f"Writing stored suggestion snapshot for {current_username}.", 4, "storage")
         with self.session_scope() as session:
             for existing in session.scalars(
                 select(SuggestedMedia).where(SuggestedMedia.jellyfin_user_id == jellyfin_user_id)
@@ -1609,6 +2028,7 @@ class VanguarrService:
                     )
                 )
 
+        emit_progress(f"Completed suggestion refresh for {current_username}.", 5, "complete")
         return {
             "username": current_username,
             "stored": len(selected_candidates),
@@ -1816,7 +2236,25 @@ class VanguarrService:
             session.add(task)
 
     @staticmethod
-    def _serialize_task_run(task: TaskRun | None) -> dict[str, Any]:
+    def _task_detail_payload(task: TaskRun | None) -> dict[str, Any]:
+        if task is None:
+            return {}
+
+        try:
+            parsed = json.loads(task.detail_json or "{}")
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            return {}
+        return {}
+
+    @classmethod
+    def _task_target_username(cls, task: TaskRun | None) -> str:
+        detail = cls._task_detail_payload(task)
+        return str(detail.get("target_username") or "").strip()
+
+    @classmethod
+    def _serialize_task_run(cls, task: TaskRun | None) -> dict[str, Any]:
         if task is None:
             return {
                 "id": None,
@@ -1830,15 +2268,10 @@ class VanguarrService:
                 "percent": 0.0,
                 "current_label": "",
                 "detail": {},
+                "target_username": "",
             }
 
-        detail: dict[str, Any] = {}
-        try:
-            parsed = json.loads(task.detail_json or "{}")
-            if isinstance(parsed, dict):
-                detail = parsed
-        except json.JSONDecodeError:
-            detail = {}
+        detail = cls._task_detail_payload(task)
 
         progress_current = int(task.progress_current or 0)
         progress_total = int(task.progress_total or 0)
@@ -1858,6 +2291,7 @@ class VanguarrService:
             "percent": percent,
             "current_label": str(task.current_label or ""),
             "detail": detail,
+            "target_username": str(detail.get("target_username") or ""),
         }
 
     def _already_requested(self, session: Session, username: str, candidate: dict[str, Any]) -> bool:

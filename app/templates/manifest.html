@@ -19,6 +19,125 @@
     </div>
   </section>
 
+  <section class="surface rounded-[1.45rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p class="panel-kicker">Profile Actions</p>
+          <h2 class="mt-2 panel-title">{{ selected_user or "Load a profile to run actions" }}</h2>
+          <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+            Run the profile-specific engines from here and watch their progress live without leaving the page.
+          </p>
+        </div>
+        <div class="max-w-md rounded-2xl border border-[rgba(160,182,207,0.1)] bg-white/5 px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
+          Profile Architect rebuilds the manifest, Decision Engine scouts requests, and Suggested For You refreshes the Jellyfin-facing snapshot for this profile only.
+        </div>
+      </div>
+    </div>
+    <div class="space-y-4 px-5 py-5">
+      <div class="hidden rounded-2xl border px-4 py-3 text-sm" data-profile-action-status></div>
+      {% if selected_user %}
+      <div class="grid gap-4 xl:grid-cols-3">
+        {% set profile_architect_task = profile_task_snapshots.get("profile_architect", {}) %}
+        {% set decision_engine_task = profile_task_snapshots.get("decision_engine", {}) %}
+        {% set suggested_for_you_task = profile_task_snapshots.get("suggested_for_you", {}) %}
+
+        <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4" data-profile-task-card data-engine="profile_architect">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="panel-kicker">Profile Architect</p>
+              <h3 class="mt-2 text-lg font-semibold">Rebuild this profile</h3>
+            </div>
+            <span class="status-pill {{ 'status-warn' if profile_architect_task.get('status') == 'running' else 'status-good' if profile_architect_task.get('status') == 'success' else 'status-bad' if profile_architect_task.get('status') == 'error' else 'status-neutral' }}" data-task-badge> {{ profile_architect_task.get("status", "idle") }} </span>
+          </div>
+          <p class="mt-3 min-h-[3rem] text-sm leading-6 text-[var(--text-soft)]" data-task-summary>{{ profile_architect_task.get("summary", "No runs yet.") }}</p>
+          <p class="mt-2 mono text-xs text-[var(--text-dim)]" data-task-current-label>{{ profile_architect_task.get("current_label", "Ready") }}</p>
+          <div class="mt-4">
+            <div class="flex items-center justify-between gap-4 text-sm">
+              <span class="text-[var(--text-soft)]" data-task-progress-copy>
+                {% if profile_architect_task.get("progress_total", 0) > 0 %}
+                {{ profile_architect_task.get("progress_current", 0) }} / {{ profile_architect_task.get("progress_total", 0) }} steps
+                {% else %}
+                Waiting to start
+                {% endif %}
+              </span>
+              <span class="mono text-[var(--text-dim)]" data-task-percent>{{ "%.1f"|format(profile_architect_task.get("percent", 0.0)) }}%</span>
+            </div>
+            <div class="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+              <div class="h-full rounded-full bg-[var(--accent)] transition-all duration-300" style="width: {{ profile_architect_task.get('percent', 0.0) }}%;" data-task-bar></div>
+            </div>
+          </div>
+          <button class="button button-primary mt-5 w-full" type="button" data-profile-action-button data-action="profile-architect">
+            Run Profile Architect
+          </button>
+        </article>
+
+        <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4" data-profile-task-card data-engine="decision_engine">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="panel-kicker">Decision Engine</p>
+              <h3 class="mt-2 text-lg font-semibold">Scout request candidates</h3>
+            </div>
+            <span class="status-pill {{ 'status-warn' if decision_engine_task.get('status') == 'running' else 'status-good' if decision_engine_task.get('status') == 'success' else 'status-bad' if decision_engine_task.get('status') == 'error' else 'status-neutral' }}" data-task-badge>{{ decision_engine_task.get("status", "idle") }}</span>
+          </div>
+          <p class="mt-3 min-h-[3rem] text-sm leading-6 text-[var(--text-soft)]" data-task-summary>{{ decision_engine_task.get("summary", "No runs yet.") }}</p>
+          <p class="mt-2 mono text-xs text-[var(--text-dim)]" data-task-current-label>{{ decision_engine_task.get("current_label", "Ready") }}</p>
+          <div class="mt-4">
+            <div class="flex items-center justify-between gap-4 text-sm">
+              <span class="text-[var(--text-soft)]" data-task-progress-copy>
+                {% if decision_engine_task.get("progress_total", 0) > 0 %}
+                {{ decision_engine_task.get("progress_current", 0) }} / {{ decision_engine_task.get("progress_total", 0) }} steps
+                {% else %}
+                Waiting to start
+                {% endif %}
+              </span>
+              <span class="mono text-[var(--text-dim)]" data-task-percent>{{ "%.1f"|format(decision_engine_task.get("percent", 0.0)) }}%</span>
+            </div>
+            <div class="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+              <div class="h-full rounded-full bg-[var(--amber)] transition-all duration-300" style="width: {{ decision_engine_task.get('percent', 0.0) }}%;" data-task-bar></div>
+            </div>
+          </div>
+          <button class="button button-primary mt-5 w-full" type="button" data-profile-action-button data-action="decision-engine">
+            Run Decision Engine
+          </button>
+        </article>
+
+        <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4" data-profile-task-card data-engine="suggested_for_you">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="panel-kicker">Suggested For You</p>
+              <h3 class="mt-2 text-lg font-semibold">Refresh suggestions</h3>
+            </div>
+            <span class="status-pill {{ 'status-warn' if suggested_for_you_task.get('status') == 'running' else 'status-good' if suggested_for_you_task.get('status') == 'success' else 'status-bad' if suggested_for_you_task.get('status') == 'error' else 'status-neutral' }}" data-task-badge>{{ suggested_for_you_task.get("status", "idle") }}</span>
+          </div>
+          <p class="mt-3 min-h-[3rem] text-sm leading-6 text-[var(--text-soft)]" data-task-summary>{{ suggested_for_you_task.get("summary", "No runs yet.") }}</p>
+          <p class="mt-2 mono text-xs text-[var(--text-dim)]" data-task-current-label>{{ suggested_for_you_task.get("current_label", "Ready") }}</p>
+          <div class="mt-4">
+            <div class="flex items-center justify-between gap-4 text-sm">
+              <span class="text-[var(--text-soft)]" data-task-progress-copy>
+                {% if suggested_for_you_task.get("progress_total", 0) > 0 %}
+                {{ suggested_for_you_task.get("progress_current", 0) }} / {{ suggested_for_you_task.get("progress_total", 0) }} steps
+                {% else %}
+                Waiting to start
+                {% endif %}
+              </span>
+              <span class="mono text-[var(--text-dim)]" data-task-percent>{{ "%.1f"|format(suggested_for_you_task.get("percent", 0.0)) }}%</span>
+            </div>
+            <div class="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+              <div class="h-full rounded-full bg-[var(--green)] transition-all duration-300" style="width: {{ suggested_for_you_task.get('percent', 0.0) }}%;" data-task-bar></div>
+            </div>
+          </div>
+          <button class="button button-primary mt-5 w-full" type="button" data-profile-action-button data-action="suggested-for-you">
+            Refresh Suggestions
+          </button>
+        </article>
+      </div>
+      {% else %}
+      <div class="empty-state">Load a profile first to run Profile Architect, Decision Engine, or Suggested For You for that specific user.</div>
+      {% endif %}
+    </div>
+  </section>
+
   <div class="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
     <aside class="space-y-5">
       <section class="surface rounded-[1.45rem] overflow-hidden">
@@ -118,20 +237,10 @@
 
           <section class="rounded-[1.35rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)]">
             <div class="border-b border-white/5 px-5 py-4">
-              <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <p class="panel-kicker">Suggested For You Preview</p>
-                  <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
-                    Preview the current stored suggestion snapshot for {{ selected_user or "the selected user" }} before it reaches Jellyfin.
-                  </p>
-                </div>
-                <form method="post" action="/manifest/actions/suggested-for-you">
-                  <input type="hidden" name="username" value="{{ selected_user }}" />
-                  <button class="button button-ghost w-full lg:w-auto" type="submit" {% if not selected_user %}disabled{% endif %}>
-                    Refresh Suggestions For This User
-                  </button>
-                </form>
-              </div>
+              <p class="panel-kicker">Suggested For You Preview</p>
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+                Preview the current stored suggestion snapshot for {{ selected_user or "the selected user" }} before it reaches Jellyfin.
+              </p>
             </div>
             <div class="space-y-3 px-5 py-5">
               {% if suggestions_preview %}
@@ -177,4 +286,201 @@
     </section>
   </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const selectedProfileUsername = {{ selected_user|tojson }};
+  const profileActionStatus = document.querySelector("[data-profile-action-status]");
+  const profileTaskCards = Array.from(document.querySelectorAll("[data-profile-task-card]"));
+  const profileActionButtons = Array.from(document.querySelectorAll("[data-profile-action-button]"));
+  let profileTaskPollTimer = null;
+
+  const engineActionMap = {
+    profile_architect: "profile-architect",
+    decision_engine: "decision-engine",
+    suggested_for_you: "suggested-for-you",
+  };
+
+  function setProfileActionStatus(tone, message) {
+    if (!profileActionStatus) return;
+    const tones = {
+      info: "border-[rgba(160,182,207,0.12)] bg-[rgba(255,255,255,0.03)] text-[var(--text-soft)]",
+      loading: "border-[rgba(246,189,103,0.18)] bg-[rgba(246,189,103,0.08)] text-[var(--amber)]",
+      success: "border-[rgba(90,217,158,0.18)] bg-[rgba(90,217,158,0.08)] text-[var(--green)]",
+      error: "border-[rgba(255,127,127,0.18)] bg-[rgba(255,127,127,0.08)] text-[var(--red)]",
+    };
+
+    profileActionStatus.hidden = false;
+    profileActionStatus.className = `rounded-2xl border px-4 py-3 text-sm ${tones[tone] || tones.info}`;
+    profileActionStatus.textContent = message;
+  }
+
+  function taskBadgeTone(status) {
+    const normalized = String(status || "idle").toLowerCase();
+    if (normalized === "success") return "status-good";
+    if (normalized === "running" || normalized === "partial") return "status-warn";
+    if (normalized === "error") return "status-bad";
+    return "status-neutral";
+  }
+
+  function renderProfileTaskCard(card, task, activeTask, isRunningElsewhere) {
+    const badge = card.querySelector("[data-task-badge]");
+    const summary = card.querySelector("[data-task-summary]");
+    const currentLabel = card.querySelector("[data-task-current-label]");
+    const progressCopy = card.querySelector("[data-task-progress-copy]");
+    const percent = card.querySelector("[data-task-percent]");
+    const bar = card.querySelector("[data-task-bar]");
+    const button = card.querySelector("[data-profile-action-button]");
+    const engine = card.dataset.engine;
+
+    let displayTask = task || {};
+    let effectiveStatus = String(displayTask.status || "idle").toLowerCase();
+    let effectiveSummary = displayTask.summary || "No runs yet.";
+    let effectiveLabel = displayTask.current_label || "Ready";
+    let effectivePercent = Number(displayTask.percent || 0);
+    let effectiveCurrent = Number(displayTask.progress_current || 0);
+    let effectiveTotal = Number(displayTask.progress_total || 0);
+
+    if (effectiveStatus === "idle" && isRunningElsewhere && activeTask && String(activeTask.status || "").toLowerCase() === "running") {
+      effectiveStatus = "busy";
+      effectiveSummary = activeTask.target_username
+        ? `Currently running for ${activeTask.target_username}.`
+        : (activeTask.summary || "This engine is currently running elsewhere.");
+      effectiveLabel = activeTask.current_label || "Running elsewhere";
+      effectivePercent = Number(activeTask.percent || 0);
+      effectiveCurrent = Number(activeTask.progress_current || 0);
+      effectiveTotal = Number(activeTask.progress_total || 0);
+    }
+
+    if (badge) {
+      badge.className = `status-pill ${taskBadgeTone(effectiveStatus)}`;
+      badge.textContent = effectiveStatus;
+    }
+    if (summary) summary.textContent = effectiveSummary;
+    if (currentLabel) currentLabel.textContent = effectiveLabel;
+
+    if (progressCopy) {
+      progressCopy.textContent = effectiveTotal > 0
+        ? `${effectiveCurrent} / ${effectiveTotal} steps`
+        : effectiveStatus === "running" || effectiveStatus === "busy"
+          ? "Working..."
+          : "Waiting to start";
+    }
+    if (percent) percent.textContent = `${effectivePercent.toFixed(1)}%`;
+    if (bar) {
+      const width = effectivePercent > 0 ? effectivePercent : (effectiveStatus === "running" || effectiveStatus === "busy" ? 18 : 0);
+      bar.style.width = `${width}%`;
+      bar.classList.toggle("animate-pulse", effectiveStatus === "running" || effectiveStatus === "busy");
+    }
+    if (button) {
+      button.disabled = !selectedProfileUsername || effectiveStatus === "running" || isRunningElsewhere;
+    }
+  }
+
+  function syncProfileTaskButtons(globalRunning) {
+    for (const button of profileActionButtons) {
+      const action = button.dataset.action;
+      const engine = Object.keys(engineActionMap).find((key) => engineActionMap[key] === action);
+      if (!engine) continue;
+      if (!selectedProfileUsername) {
+        button.disabled = true;
+        continue;
+      }
+      const isRunning = Boolean(globalRunning && globalRunning[engine]);
+      button.disabled = isRunning;
+    }
+  }
+
+  function renderProfileTaskStatus(payload) {
+    const tasks = payload?.tasks || {};
+    const activeTasks = payload?.active_tasks || {};
+    const globalRunning = payload?.global_running || {};
+    let shouldPoll = false;
+
+    for (const card of profileTaskCards) {
+      const engine = card.dataset.engine;
+      const task = tasks[engine] || {};
+      const activeTask = activeTasks[engine] || {};
+      const runningElsewhere = Boolean(globalRunning[engine]) && String(task.status || "idle").toLowerCase() !== "running";
+      renderProfileTaskCard(card, task, activeTask, runningElsewhere);
+      if (String(task.status || "").toLowerCase() === "running" || Boolean(globalRunning[engine])) {
+        shouldPoll = true;
+      }
+    }
+
+    syncProfileTaskButtons(globalRunning);
+
+    if (shouldPoll && !profileTaskPollTimer) {
+      profileTaskPollTimer = window.setInterval(refreshProfileTaskStatus, 2000);
+    } else if (!shouldPoll && profileTaskPollTimer) {
+      window.clearInterval(profileTaskPollTimer);
+      profileTaskPollTimer = null;
+    }
+  }
+
+  async function refreshProfileTaskStatus() {
+    if (!selectedProfileUsername) return;
+
+    try {
+      const response = await fetch(`/api/manifest/task-status?username=${encodeURIComponent(selectedProfileUsername)}`, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.detail || "Could not load profile task status.");
+      }
+      renderProfileTaskStatus(result);
+    } catch (error) {
+      if (profileTaskPollTimer) {
+        window.clearInterval(profileTaskPollTimer);
+        profileTaskPollTimer = null;
+      }
+      setProfileActionStatus("error", error.message || "Could not load profile task status.");
+    }
+  }
+
+  async function runProfileAction(action) {
+    if (!selectedProfileUsername) return;
+
+    const button = document.querySelector(`[data-profile-action-button][data-action="${action}"]`);
+    if (button) button.disabled = true;
+    setProfileActionStatus("loading", `Starting ${action.replace(/-/g, " ")} for ${selectedProfileUsername}...`);
+
+    try {
+      const formData = new FormData();
+      formData.set("username", selectedProfileUsername);
+      const response = await fetch(`/api/manifest/actions/${action}`, {
+        method: "POST",
+        body: formData,
+        headers: { "Accept": "application/json" },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.detail || "Could not start the action.");
+      }
+
+      setProfileActionStatus(result.started === false ? "info" : "success", result.detail || "Action queued.");
+      await refreshProfileTaskStatus();
+      if (!profileTaskPollTimer) {
+        profileTaskPollTimer = window.setInterval(refreshProfileTaskStatus, 2000);
+      }
+    } catch (error) {
+      setProfileActionStatus("error", error.message || "Could not start the action.");
+    } finally {
+      if (button && !profileTaskPollTimer) {
+        button.disabled = false;
+      }
+    }
+  }
+
+  for (const button of profileActionButtons) {
+    button.addEventListener("click", () => runProfileAction(button.dataset.action));
+  }
+
+  if (selectedProfileUsername) {
+    refreshProfileTaskStatus();
+  }
+</script>
 {% endblock %}

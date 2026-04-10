@@ -277,8 +277,10 @@ def test_manifest_page_shows_profiles_under_settings_group() -> None:
     assert 'data-settings-open="true"' in response.text
     assert 'href="/manifest"' in response.text
     assert "settings-subnav-link-active" in response.text
+    assert "Profile Actions" in response.text
     assert "Suggested For You Preview" in response.text
-    assert "/manifest/actions/suggested-for-you" in response.text
+    assert "/api/manifest/task-status" in response.text
+    assert "Load a profile first to run Profile Architect" in response.text
 
 
 def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch) -> None:
@@ -286,6 +288,15 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
         monkeypatch.setattr(client.app.state.vanguarr, "list_profiles", lambda: ["alice"])
         monkeypatch.setattr(client.app.state.vanguarr, "read_profile", lambda username: '{"username": "alice"}')
         monkeypatch.setattr(client.app.state.vanguarr, "read_profile_summary", lambda username: "profile summary")
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_profile_task_snapshots",
+            lambda username: {
+                "profile_architect": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
+                "decision_engine": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
+                "suggested_for_you": {"status": "success", "summary": "Stored snapshot.", "progress_total": 5, "progress_current": 5, "percent": 100.0, "current_label": "alice"},
+            },
+        )
         monkeypatch.setattr(
             client.app.state.vanguarr,
             "get_suggestions",
@@ -309,6 +320,9 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
     assert "Showing 1 of" in response.text
     assert "Arrival" in response.text
     assert "Matches sci-fi preference and avoids top-repeat comfort titles." in response.text
+    assert "Run Profile Architect" in response.text
+    assert "Run Decision Engine" in response.text
+    assert "Refresh Suggestions" in response.text
 
 
 def test_manifest_suggested_for_you_action_redirects_back_to_manifest(monkeypatch) -> None:
@@ -330,6 +344,93 @@ def test_manifest_suggested_for_you_action_redirects_back_to_manifest(monkeypatc
     assert response.status_code == 303
     assert response.headers["location"] == "/manifest?username=alice&toast=Suggested+For+You+started+in+the+background+for+alice."
     assert launches == ["alice"]
+
+
+def test_manifest_task_status_endpoint_returns_profile_snapshots(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_profile_task_snapshots",
+            lambda username: {
+                "profile_architect": {"status": "running", "target_username": username, "summary": "Rebuilding profile."},
+                "decision_engine": {"status": "idle", "target_username": username, "summary": "No runs yet."},
+                "suggested_for_you": {"status": "success", "target_username": username, "summary": "Stored snapshot."},
+            },
+        )
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_task_snapshot",
+            lambda engine_name: {"engine": engine_name, "status": "running" if engine_name == "profile_architect" else "idle"},
+        )
+        monkeypatch.setattr(
+            client.app.state.background_runner,
+            "is_running",
+            lambda engine_name: engine_name == "profile_architect",
+        )
+
+        response = client.get("/api/manifest/task-status?username=alice")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "username": "alice",
+        "tasks": {
+            "profile_architect": {"status": "running", "target_username": "alice", "summary": "Rebuilding profile."},
+            "decision_engine": {"status": "idle", "target_username": "alice", "summary": "No runs yet."},
+            "suggested_for_you": {"status": "success", "target_username": "alice", "summary": "Stored snapshot."},
+        },
+        "active_tasks": {
+            "profile_architect": {"engine": "profile_architect", "status": "running"},
+            "decision_engine": {"engine": "decision_engine", "status": "idle"},
+            "suggested_for_you": {"engine": "suggested_for_you", "status": "idle"},
+        },
+        "global_running": {
+            "profile_architect": True,
+            "decision_engine": False,
+            "suggested_for_you": False,
+        },
+    }
+
+
+def test_manifest_profile_architect_api_starts_background_run(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.background_runner,
+            "launch_profile_architect",
+            lambda username: (True, f"Profile Architect started in the background for {username}."),
+        )
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_task_snapshot_for_target",
+            lambda engine_name, username: {"engine": engine_name, "target_username": username, "status": "running"},
+        )
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_task_snapshot",
+            lambda engine_name: {"engine": engine_name, "status": "running"},
+        )
+
+        response = client.post("/api/manifest/actions/profile-architect", data={"username": "alice"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "started": True,
+        "detail": "Profile Architect started in the background for alice.",
+        "task": {"engine": "profile_architect", "target_username": "alice", "status": "running"},
+        "active_task": {"engine": "profile_architect", "status": "running"},
+    }
+
+
+def test_manifest_decision_engine_api_requires_selected_profile() -> None:
+    with TestClient(app) as client:
+        response = client.post("/api/manifest/actions/decision-engine", data={"username": ""})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "ok": False,
+        "detail": "Select a profile before running Decision Engine.",
+    }
 
 
 def test_profile_architect_action_redirects_immediately_with_background_toast(monkeypatch) -> None:
