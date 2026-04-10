@@ -115,6 +115,7 @@ class LibraryMedia(Base):
     tmdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     tvdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    content_fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
 

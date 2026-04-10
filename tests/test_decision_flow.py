@@ -1,5 +1,6 @@
 from datetime import datetime
 from types import SimpleNamespace
+import asyncio
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -863,3 +864,226 @@ def test_get_log_feed_supports_filter_sort_and_paging(tmp_path) -> None:
     assert paged["page"] == 2
     assert paged["total_pages"] == 2
     assert len(paged["rows"]) == 1
+
+
+def test_library_sync_payload_includes_content_fingerprint() -> None:
+    payload = VanguarrService._library_item_to_sync_payload(
+        {
+            "Id": "item-1",
+            "Name": "Arrival",
+            "SortName": "Arrival",
+            "Type": "Movie",
+            "Overview": "First contact drama.",
+            "Genres": ["Sci-Fi", "Drama"],
+            "CommunityRating": 8.1,
+            "ProviderIds": {"Tmdb": "329865"},
+            "PremiereDate": "2016-11-11T00:00:00.0000000Z",
+            "ProductionYear": 2016,
+        }
+    )
+
+    assert payload is not None
+    assert payload["content_fingerprint"]
+
+
+def test_library_sync_skips_suggestion_refresh_when_library_is_unchanged(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    class FakeMediaServer:
+        async def list_users(self):
+            return [{"Id": "66456a3a-4cd3-46e3-83ce-254e99d4b09a", "Name": "admin"}]
+
+    class FakeJellyfinClient:
+        async def get_library_folders(self):
+            return []
+
+        async def get_library_items(self, parent_id=None):
+            return [
+                {
+                    "Id": "item-1",
+                    "Name": "Arrival",
+                    "SortName": "Arrival",
+                    "Type": "Movie",
+                    "Overview": "First contact drama.",
+                    "Genres": ["Sci-Fi", "Drama"],
+                    "CommunityRating": 8.1,
+                    "ProviderIds": {"Tmdb": "329865"},
+                    "PremiereDate": "2016-11-11T00:00:00.0000000Z",
+                    "ProductionYear": 2016,
+                }
+            ]
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(enabled=False),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    payload = VanguarrService._library_item_to_sync_payload(
+        {
+            "Id": "item-1",
+            "Name": "Arrival",
+            "SortName": "Arrival",
+            "Type": "Movie",
+            "Overview": "First contact drama.",
+            "Genres": ["Sci-Fi", "Drama"],
+            "CommunityRating": 8.1,
+            "ProviderIds": {"Tmdb": "329865"},
+            "PremiereDate": "2016-11-11T00:00:00.0000000Z",
+            "ProductionYear": 2016,
+        }
+    )
+    assert payload is not None
+
+    with session_factory() as session:
+        session.add(
+            LibraryMedia(
+                source_provider="jellyfin",
+                media_server_id="item-1",
+                media_type="movie",
+                title="Arrival",
+                sort_title="Arrival",
+                overview="First contact drama.",
+                production_year=2016,
+                release_date="2016-11-11T00:00:00.0000000Z",
+                community_rating=8.1,
+                genres_json='["Sci-Fi","Drama"]',
+                state="available",
+                tmdb_id=329865,
+                imdb_id=None,
+                content_fingerprint=payload["content_fingerprint"],
+                payload_json=payload["payload_json"],
+            )
+        )
+        session.commit()
+
+    fake_client = FakeJellyfinClient()
+    service._jellyfin_client = lambda: fake_client  # type: ignore[method-assign]
+
+    calls = {"count": 0}
+
+    async def fake_refresh(_user):
+        calls["count"] += 1
+        return {"stored": 0, "scored": 0, "ai_scored": 0, "ai_reused": 0}
+
+    service._refresh_user_suggestions = fake_refresh  # type: ignore[method-assign]
+
+    result = asyncio.run(service.run_library_sync())
+
+    assert result["status"] == "success"
+    assert result["material_changes"] == 0
+    assert result["suggestion_refresh_state"] == "skipped"
+    assert calls["count"] == 0
+
+
+def test_suggestion_ai_cache_reuses_existing_llm_vote(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    class FailingLLM:
+        async def generate_json(self, **kwargs):
+            raise AssertionError("LLM should not be called when cache matches.")
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+        suggestion_ai_threshold=0.5,
+        suggestion_ai_candidate_limit=10,
+        decision_ai_weight_percent=25,
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(enabled=False),
+        llm=FailingLLM(),
+        session_factory=session_factory,
+    )
+
+    candidate = {
+        "media_type": "movie",
+        "media_id": 329865,
+        "title": "Arrival",
+        "overview": "First contact drama.",
+        "genres": ["Sci-Fi", "Drama"],
+        "rating": 8.1,
+        "release_date": "2016-11-11",
+        "sources": ["library:indexed"],
+        "source_lanes": ["available_library"],
+        "media_info": {"status": "available"},
+        "external_ids": {"tmdb": "329865"},
+        "tmdb_details": {"keywords": ["first contact"], "featured_people": ["Amy Adams"]},
+        "recommendation_features": {
+            "deterministic_score": 0.82,
+            "analysis_summary": "Strong sci-fi match.",
+            "score_breakdown": {},
+            "lane_tags": ["available_library"],
+        },
+    }
+    profile_payload = {
+        "summary_block": "[VANGUARR_PROFILE_SUMMARY_V1]\nUser: admin",
+        "primary_genres": ["Sci-Fi"],
+        "secondary_genres": ["Drama"],
+        "recent_genres": ["Sci-Fi"],
+        "adjacent_genres": [],
+        "adjacent_themes": [],
+        "repeat_titles": [],
+        "recent_momentum": [],
+        "format_preference": {"preferred": "movie"},
+        "release_year_preference": {"bias": "balanced"},
+    }
+    viewing_history = {
+        "recent_plays": [],
+        "top_titles": [],
+        "recent_momentum": [],
+        "repeat_titles": [],
+        "primary_genres": ["Sci-Fi"],
+        "top_keywords": [],
+        "favorite_people": [],
+        "preferred_brands": [],
+        "favorite_collections": [],
+    }
+    ranked_candidate = VanguarrService._rank_candidate_pool([candidate], profile_summary=profile_payload)[0]
+    cache_key = VanguarrService._build_suggestion_ai_cache_key(
+        ranked_candidate,
+        profile_payload=profile_payload,
+        viewing_history=viewing_history,
+    )
+
+    scored, ai_scored, ai_reused = asyncio.run(
+        service._score_suggestion_candidates_with_ai(
+            [candidate],
+            username="admin",
+            profile_payload=profile_payload,
+            viewing_history=viewing_history,
+            cached_llm_votes={
+                cache_key: {
+                    "llm_vote": "RECOMMEND",
+                    "llm_confidence": 0.74,
+                    "llm_reasoning": "Still a strong adjacent match.",
+                }
+            },
+        )
+    )
+
+    features = scored[0]["recommendation_features"]
+
+    assert ai_scored == 0
+    assert ai_reused == 1
+    assert features["llm_vote"] == "RECOMMEND"
+    assert features["llm_reasoning"] == "Still a strong adjacent match."
+    assert features["hybrid_score"] > features["deterministic_score"]

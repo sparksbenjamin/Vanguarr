@@ -1051,8 +1051,10 @@ class VanguarrService:
         indexed = 0
         added = 0
         updated = 0
+        unchanged = 0
         removed = 0
         skipped = 0
+        material_changes = 0
         refreshed_users: list[str] = []
         errors: list[str] = []
         sync_libraries: list[dict[str, Any]] = []
@@ -1060,6 +1062,7 @@ class VanguarrService:
             "state": "pending",
             "completed_users": 0,
             "total_users": 0,
+            "reason": "",
         }
 
         try:
@@ -1194,6 +1197,7 @@ class VanguarrService:
                 for payload in normalized_payloads:
                     media_server_id = str(payload["media_server_id"])
                     row = existing_rows.get(media_server_id)
+                    changed = False
                     if row is None:
                         row = LibraryMedia(
                             source_provider="jellyfin",
@@ -1201,23 +1205,33 @@ class VanguarrService:
                         )
                         session.add(row)
                         added += 1
+                        material_changes += 1
+                        changed = True
                     else:
-                        updated += 1
+                        current_fingerprint = str(row.content_fingerprint or "")
+                        if current_fingerprint != str(payload["content_fingerprint"]) or row.state != "available":
+                            updated += 1
+                            material_changes += 1
+                            changed = True
+                        else:
+                            unchanged += 1
 
-                    row.media_type = str(payload["media_type"])
-                    row.title = str(payload["title"])
-                    row.sort_title = str(payload["sort_title"])
-                    row.overview = str(payload["overview"])
-                    row.production_year = payload["production_year"]
-                    row.release_date = payload["release_date"]
-                    row.community_rating = payload["community_rating"]
-                    row.genres_json = json.dumps(payload["genres"], ensure_ascii=True)
+                    if changed:
+                        row.media_type = str(payload["media_type"])
+                        row.title = str(payload["title"])
+                        row.sort_title = str(payload["sort_title"])
+                        row.overview = str(payload["overview"])
+                        row.production_year = payload["production_year"]
+                        row.release_date = payload["release_date"]
+                        row.community_rating = payload["community_rating"]
+                        row.genres_json = json.dumps(payload["genres"], ensure_ascii=True)
+                        row.tmdb_id = payload["tmdb_id"]
+                        row.tvdb_id = payload["tvdb_id"]
+                        row.imdb_id = payload["imdb_id"]
+                        row.content_fingerprint = str(payload["content_fingerprint"])
+                        row.payload_json = str(payload["payload_json"])
                     row.state = "available"
-                    row.tmdb_id = payload["tmdb_id"]
-                    row.tvdb_id = payload["tvdb_id"]
-                    row.imdb_id = payload["imdb_id"]
                     row.last_seen_at = now
-                    row.payload_json = str(payload["payload_json"])
                     indexed += 1
 
                 if allow_removals:
@@ -1226,71 +1240,84 @@ class VanguarrService:
                             continue
                         row.state = "removed"
                         removed += 1
+                        material_changes += 1
 
             if self.settings.suggestions_enabled:
-                users = await self.media_server.list_users()
-                suggestion_refresh["state"] = "running"
-                suggestion_refresh["total_users"] = len(users)
-                processed_users = 0
-                self._update_task(
-                    task.id,
-                    status="running",
-                    summary="Refreshing per-user suggestion snapshots.",
-                    progress_current=len(sync_libraries),
-                    progress_total=total_progress_steps,
-                    current_label="Refreshing suggestions",
-                    detail_payload={
-                        "phase": "refreshing_suggestions",
-                        "libraries": sync_libraries,
-                        "suggestion_refresh": suggestion_refresh,
-                    },
-                )
-                for user in users:
-                    current_username = str(user.get("Name") or "unknown")
-                    try:
-                        await self._refresh_user_suggestions(user)
-                        refreshed_users.append(current_username)
-                    except Exception as exc:
-                        errors.append(f"{current_username}: {exc}")
-                        logger.exception(
-                            "Library Sync suggestion refresh failed for user=%s",
-                            current_username,
-                        )
-                    finally:
-                        processed_users += 1
-                        suggestion_refresh["completed_users"] = processed_users
-                        self._update_task(
-                            task.id,
-                            status="running",
-                            summary=(
-                                f"Refreshing suggestions for {processed_users}/"
-                                f"{suggestion_refresh['total_users']} users."
-                            ),
-                            progress_current=len(sync_libraries),
-                            progress_total=total_progress_steps,
-                            current_label="Refreshing suggestions",
-                            detail_payload={
-                                "phase": "refreshing_suggestions",
-                                "libraries": sync_libraries,
-                                "suggestion_refresh": suggestion_refresh,
-                            },
-                        )
-                suggestion_refresh["state"] = "success" if len(refreshed_users) == len(users) else "partial"
+                if material_changes > 0:
+                    users = await self.media_server.list_users()
+                    suggestion_refresh["state"] = "running"
+                    suggestion_refresh["total_users"] = len(users)
+                    processed_users = 0
+                    self._update_task(
+                        task.id,
+                        status="running",
+                        summary="Refreshing per-user suggestion snapshots.",
+                        progress_current=len(sync_libraries),
+                        progress_total=total_progress_steps,
+                        current_label="Refreshing suggestions",
+                        detail_payload={
+                            "phase": "refreshing_suggestions",
+                            "libraries": sync_libraries,
+                            "suggestion_refresh": suggestion_refresh,
+                        },
+                    )
+                    for user in users:
+                        current_username = str(user.get("Name") or "unknown")
+                        try:
+                            await self._refresh_user_suggestions(user)
+                            refreshed_users.append(current_username)
+                        except Exception as exc:
+                            errors.append(f"{current_username}: {exc}")
+                            logger.exception(
+                                "Library Sync suggestion refresh failed for user=%s",
+                                current_username,
+                            )
+                        finally:
+                            processed_users += 1
+                            suggestion_refresh["completed_users"] = processed_users
+                            self._update_task(
+                                task.id,
+                                status="running",
+                                summary=(
+                                    f"Refreshing suggestions for {processed_users}/"
+                                    f"{suggestion_refresh['total_users']} users."
+                                ),
+                                progress_current=len(sync_libraries),
+                                progress_total=total_progress_steps,
+                                current_label="Refreshing suggestions",
+                                detail_payload={
+                                    "phase": "refreshing_suggestions",
+                                    "libraries": sync_libraries,
+                                    "suggestion_refresh": suggestion_refresh,
+                                },
+                            )
+                    suggestion_refresh["state"] = "success" if len(refreshed_users) == len(users) else "partial"
+                else:
+                    suggestion_refresh["state"] = "skipped"
+                    suggestion_refresh["reason"] = "library_unchanged"
+                    logger.info("Library Sync skipped suggestion refresh because no material library changes were detected.")
             else:
                 suggestion_refresh["state"] = "disabled"
 
+            suggestion_clause = (
+                f"refreshed {len(refreshed_users)} suggestion snapshot(s)"
+                if suggestion_refresh["state"] not in {"skipped", "disabled"}
+                else "skipped suggestion refresh because the indexed library did not materially change"
+                if suggestion_refresh["state"] == "skipped"
+                else "suggestion refresh disabled"
+            )
             if errors:
                 status = "partial"
                 summary = (
                     f"Indexed {indexed} Jellyfin item(s), added {added}, updated {updated}, "
-                    f"removed {removed}, skipped {skipped}, refreshed {len(refreshed_users)} suggestion snapshot(s), "
+                    f"unchanged {unchanged}, removed {removed}, skipped {skipped}, {suggestion_clause}, "
                     f"errors {len(errors)}."
                 )
             else:
                 status = "success"
                 summary = (
                     f"Indexed {indexed} Jellyfin item(s), added {added}, updated {updated}, "
-                    f"removed {removed}, skipped {skipped}, refreshed {len(refreshed_users)} suggestion snapshot(s)."
+                    f"unchanged {unchanged}, removed {removed}, skipped {skipped}, {suggestion_clause}."
                 )
         except Exception as exc:
             status = "error"
@@ -1321,9 +1348,12 @@ class VanguarrService:
             "indexed": indexed,
             "added": added,
             "updated": updated,
+            "unchanged": unchanged,
             "removed": removed,
             "skipped": skipped,
+            "material_changes": material_changes,
             "refreshed_users": refreshed_users,
+            "suggestion_refresh_state": suggestion_refresh["state"],
             "errors": errors,
         }
 
@@ -1462,6 +1492,7 @@ class VanguarrService:
             recommendation_seeds=recommendation_seeds,
             profile_summary=profile_payload,
         )
+        existing_ai_cache = self._load_existing_suggestion_ai_cache(jellyfin_user_id)
         available_candidates = await self._build_available_library_candidates(jellyfin_user_id)
         in_progress_items = await self._load_in_progress_items(jellyfin_user_id)
         exclusion_context = self._build_suggestion_exclusion_context(
@@ -1479,11 +1510,12 @@ class VanguarrService:
             filtered_candidates,
             profile_summary=profile_payload,
         )
-        ai_candidates = await self._score_suggestion_candidates_with_ai(
+        ai_candidates, ai_scored, ai_reused = await self._score_suggestion_candidates_with_ai(
             ranked_candidates,
             username=current_username,
             profile_payload=profile_payload,
             viewing_history=viewing_history,
+            cached_llm_votes=existing_ai_cache,
         )
         selected_candidates = self._diversify_candidates(
             self._sort_suggestion_candidates(ai_candidates),
@@ -1551,12 +1583,8 @@ class VanguarrService:
             "username": current_username,
             "stored": len(selected_candidates),
             "scored": len(filtered_candidates),
-            "ai_scored": sum(
-                1
-                for candidate in ai_candidates
-                if str(candidate.get("recommendation_features", {}).get("llm_vote") or "UNAVAILABLE")
-                != "UNAVAILABLE"
-            ),
+            "ai_scored": ai_scored,
+            "ai_reused": ai_reused,
         }
 
     async def _build_available_library_candidates(self, jellyfin_user_id: str) -> list[dict[str, Any]]:
@@ -1609,10 +1637,11 @@ class VanguarrService:
         username: str,
         profile_payload: dict[str, Any],
         viewing_history: dict[str, Any],
-    ) -> list[dict[str, Any]]:
+        cached_llm_votes: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[list[dict[str, Any]], int, int]:
         annotated = [dict(candidate) for candidate in candidates]
         if not annotated:
-            return annotated
+            return annotated, 0, 0
 
         shortlist = self._select_suggestion_ai_candidates(
             annotated,
@@ -1622,7 +1651,7 @@ class VanguarrService:
         if not shortlist:
             for candidate in annotated:
                 self._finalize_suggestion_candidate(candidate)
-            return annotated
+            return annotated, 0, 0
 
         shortlist = await self._enrich_candidate_pool_with_tmdb(
             shortlist,
@@ -1631,36 +1660,53 @@ class VanguarrService:
         shortlist = self._rank_candidate_pool(shortlist, profile_summary=profile_payload)
 
         scored_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+        cached_votes = cached_llm_votes or {}
+        ai_scored = 0
+        ai_reused = 0
         for candidate in shortlist:
             features = candidate.setdefault("recommendation_features", {})
             deterministic_score = float(features.get("deterministic_score") or 0.0)
+            cache_key = self._build_suggestion_ai_cache_key(
+                candidate,
+                profile_payload=profile_payload,
+                viewing_history=viewing_history,
+            )
+            features["suggestion_ai_cache_key"] = cache_key
             llm_vote = "UNAVAILABLE"
             llm_confidence: float | None = None
             llm_reasoning = ""
+            cached_vote = cached_votes.get(cache_key)
 
-            try:
-                llm_payload = await self.llm.generate_json(
-                    messages=build_suggestion_messages(
-                        username=username,
-                        profile_payload=profile_payload,
-                        viewing_history=viewing_history,
-                        candidate=candidate,
-                    ),
-                    temperature=0,
-                    purpose="decision",
-                )
-                llm_vote = str(llm_payload.get("decision", "PASS")).upper()
-                if llm_vote not in {"RECOMMEND", "PASS"}:
-                    llm_vote = "PASS"
-                llm_confidence = self._coerce_float(llm_payload.get("confidence"))
-                llm_reasoning = str(llm_payload.get("reasoning", "No reasoning provided.")).strip()
-            except Exception as exc:
-                logger.warning(
-                    "Suggested For You LLM fallback triggered user=%s title=%s reason=%s",
-                    username,
-                    candidate.get("title", "unknown"),
-                    exc,
-                )
+            if cached_vote is not None:
+                llm_vote = str(cached_vote.get("llm_vote") or "UNAVAILABLE")
+                llm_confidence = self._coerce_optional_float(cached_vote.get("llm_confidence"))
+                llm_reasoning = str(cached_vote.get("llm_reasoning") or "").strip()
+                ai_reused += 1
+            else:
+                try:
+                    llm_payload = await self.llm.generate_json(
+                        messages=build_suggestion_messages(
+                            username=username,
+                            profile_payload=profile_payload,
+                            viewing_history=viewing_history,
+                            candidate=candidate,
+                        ),
+                        temperature=0,
+                        purpose="decision",
+                    )
+                    llm_vote = str(llm_payload.get("decision", "PASS")).upper()
+                    if llm_vote not in {"RECOMMEND", "PASS"}:
+                        llm_vote = "PASS"
+                    llm_confidence = self._coerce_float(llm_payload.get("confidence"))
+                    llm_reasoning = str(llm_payload.get("reasoning", "No reasoning provided.")).strip()
+                    ai_scored += 1
+                except Exception as exc:
+                    logger.warning(
+                        "Suggested For You LLM fallback triggered user=%s title=%s reason=%s",
+                        username,
+                        candidate.get("title", "unknown"),
+                        exc,
+                    )
 
             hybrid_score = self._blend_suggestion_confidences(
                 deterministic_score=deterministic_score,
@@ -1680,7 +1726,7 @@ class VanguarrService:
             merged_candidate = scored_by_key.get(self._candidate_key(candidate), candidate)
             self._finalize_suggestion_candidate(merged_candidate)
             merged.append(merged_candidate)
-        return merged
+        return merged, ai_scored, ai_reused
 
     def _start_task(self, session: Session, engine_name: str) -> TaskRun:
         task = TaskRun(
@@ -2458,6 +2504,93 @@ class VanguarrService:
         if features.get("llm_reasoning") is None:
             features["llm_reasoning"] = ""
         return candidate
+
+    def _load_existing_suggestion_ai_cache(self, jellyfin_user_id: str) -> dict[str, dict[str, Any]]:
+        with self.session_scope() as session:
+            existing_rows = list(
+                session.scalars(
+                    select(SuggestedMedia).where(SuggestedMedia.jellyfin_user_id == jellyfin_user_id)
+                )
+            )
+
+        cache: dict[str, dict[str, Any]] = {}
+        for row in existing_rows:
+            try:
+                payload = json.loads(row.payload_json or "{}")
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            features = payload.get("recommendation_features", {}) if isinstance(payload.get("recommendation_features"), dict) else {}
+            cache_key = str(features.get("suggestion_ai_cache_key") or "").strip()
+            if not cache_key:
+                continue
+            cache[cache_key] = {
+                "llm_vote": str(features.get("llm_vote") or "UNAVAILABLE"),
+                "llm_confidence": features.get("llm_confidence"),
+                "llm_reasoning": str(features.get("llm_reasoning") or "").strip(),
+            }
+        return cache
+
+    @classmethod
+    def _build_suggestion_ai_cache_key(
+        cls,
+        candidate: dict[str, Any],
+        *,
+        profile_payload: dict[str, Any],
+        viewing_history: dict[str, Any],
+    ) -> str:
+        features = candidate.get("recommendation_features", {}) if isinstance(candidate.get("recommendation_features"), dict) else {}
+        fingerprint_payload = {
+            "prompt_version": "suggestion-ai-v1",
+            "profile": {
+                "summary_block": str(profile_payload.get("summary_block") or "").strip(),
+                "primary_genres": profile_payload.get("primary_genres", []),
+                "secondary_genres": profile_payload.get("secondary_genres", []),
+                "recent_genres": profile_payload.get("recent_genres", []),
+                "adjacent_genres": profile_payload.get("adjacent_genres", []),
+                "adjacent_themes": profile_payload.get("adjacent_themes", []),
+                "repeat_titles": profile_payload.get("repeat_titles", []),
+                "recent_momentum": profile_payload.get("recent_momentum", []),
+                "format_preference": profile_payload.get("format_preference", {}),
+                "release_year_preference": profile_payload.get("release_year_preference", {}),
+            },
+            "viewing_history": {
+                "recent_plays": viewing_history.get("recent_plays", []),
+                "top_titles": viewing_history.get("top_titles", []),
+                "recent_momentum": viewing_history.get("recent_momentum", []),
+                "repeat_titles": viewing_history.get("repeat_titles", []),
+                "primary_genres": viewing_history.get("primary_genres", []),
+                "top_keywords": viewing_history.get("top_keywords", []),
+                "favorite_people": viewing_history.get("favorite_people", []),
+                "preferred_brands": viewing_history.get("preferred_brands", []),
+                "favorite_collections": viewing_history.get("favorite_collections", []),
+            },
+            "candidate": {
+                "media_type": candidate.get("media_type"),
+                "media_id": candidate.get("media_id"),
+                "title": candidate.get("title"),
+                "overview": candidate.get("overview"),
+                "genres": candidate.get("genres", []),
+                "rating": candidate.get("rating"),
+                "release_date": candidate.get("release_date"),
+                "sources": candidate.get("sources", []),
+                "media_info": candidate.get("media_info", {}),
+                "external_ids": candidate.get("external_ids", {}),
+                "tmdb_details": candidate.get("tmdb_details", {}),
+                "recommendation_features": {
+                    "analysis_summary": features.get("analysis_summary"),
+                    "deterministic_score": float(features.get("deterministic_score") or 0.0),
+                    "score_breakdown": features.get("score_breakdown", {}),
+                    "lane_tags": features.get("lane_tags", []),
+                    "matched_keywords": features.get("matched_keywords", []),
+                    "matched_people": features.get("matched_people", []),
+                    "matched_brands": features.get("matched_brands", []),
+                    "collection_match": features.get("collection_match"),
+                },
+            },
+        }
+        return cls._stable_json_fingerprint(fingerprint_payload)
 
     def _decision_prefilter_threshold(self) -> float:
         return max(0.28, min(0.42, self.settings.request_threshold * 0.55))
@@ -3811,6 +3944,15 @@ class VanguarrService:
             return 0.0
 
     @staticmethod
+    def _coerce_optional_float(value: Any) -> float | None:
+        if value in ("", None):
+            return None
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _coerce_int(value: Any) -> int | None:
         if value in ("", None):
             return None
@@ -3864,7 +4006,7 @@ class VanguarrService:
             return None
 
         external_ids = candidate.get("external_ids", {}) if isinstance(candidate.get("external_ids"), dict) else {}
-        return {
+        payload = {
             "media_server_id": media_server_id,
             "media_type": str(candidate.get("media_type") or "unknown"),
             "title": str(candidate.get("title") or "Unknown"),
@@ -3879,6 +4021,25 @@ class VanguarrService:
             "imdb_id": str(external_ids.get("imdb") or "").strip() or None,
             "payload_json": json.dumps(item, ensure_ascii=True),
         }
+        payload["content_fingerprint"] = cls._build_library_content_fingerprint(payload)
+        return payload
+
+    @classmethod
+    def _build_library_content_fingerprint(cls, payload: dict[str, Any]) -> str:
+        fingerprint_payload = {
+            "media_type": str(payload.get("media_type") or "unknown"),
+            "title": str(payload.get("title") or ""),
+            "sort_title": str(payload.get("sort_title") or ""),
+            "overview": str(payload.get("overview") or ""),
+            "production_year": payload.get("production_year"),
+            "release_date": payload.get("release_date"),
+            "community_rating": payload.get("community_rating"),
+            "genres": cls._normalize_genres(payload.get("genres", []), limit=12),
+            "tmdb_id": payload.get("tmdb_id"),
+            "tvdb_id": payload.get("tvdb_id"),
+            "imdb_id": payload.get("imdb_id"),
+        }
+        return cls._stable_json_fingerprint(fingerprint_payload)
 
     @staticmethod
     def _normalize_library_folder(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -4141,6 +4302,11 @@ class VanguarrService:
         if imdb_id:
             external_ids["imdb"] = imdb_id
         return external_ids
+
+    @staticmethod
+    def _stable_json_fingerprint(payload: Any) -> str:
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _stable_candidate_media_id(

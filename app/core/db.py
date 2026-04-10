@@ -54,6 +54,11 @@ def _migrate_runtime_schema() -> None:
         if "detail_json" not in task_columns:
             statements.append("ALTER TABLE task_runs ADD COLUMN detail_json TEXT NOT NULL DEFAULT '{}'")
 
+    if "library_media" in table_names:
+        library_columns = {column["name"] for column in inspector.get_columns("library_media")}
+        if "content_fingerprint" not in library_columns:
+            statements.append("ALTER TABLE library_media ADD COLUMN content_fingerprint VARCHAR(64) NOT NULL DEFAULT ''")
+
     if not statements:
         return
 
