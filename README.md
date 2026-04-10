@@ -72,12 +72,15 @@ With Vanguarr in place, your stack can feel a lot less like "manually hunting fo
 
 ## 🍿 Jellyfin Plugin
 
-### 🧩 Integrated Jellyfin Experience
-Vanguarr isn't just a background service. It includes a companion plugin that injects a **"Suggested for You"** row directly into your Jellyfin Home Screen.
-* **No Symlinks:** Uses the Jellyfin API to display items dynamically.
-* **User-Specific:** Every family member sees their own AI-curated suggestions.
-* **Seamless:** Click a poster to view details or start playback.
+### Built To Feel Native
+Vanguarr is not just a background service. It also ships with a companion Jellyfin plugin that adds personalized `Suggested Movies` and `Suggested Shows` views directly inside Jellyfin.
 
+* **No Symlinks:** No duplicate libraries or filesystem hacks.
+* **User-Specific:** Every family member gets their own curated suggestions.
+* **Native Playback:** Suggestions resolve back to real Jellyfin items, so browsing and playback stay seamless.
+* **Operator-Friendly:** Vanguarr keeps the scoring brain, while Jellyfin stays the playback surface.
+
+👉 [View Plugin Overview](jellyfin-plugin/README.md)  
 👉 [View Plugin Setup Guide](docs/jellyfin-plugin.md)
 
 ## 📚 Documentation
@@ -85,6 +88,7 @@ Vanguarr isn't just a background service. It includes a companion plugin that in
 Use the front page for the pitch. Use the docs below for the technical detail.
 
 * [Jellyfin Plugin Setup](docs/jellyfin-plugin.md)
+* [Jellyfin Plugin Overview](jellyfin-plugin/README.md)
 * [Configuration Reference](docs/configuration.md)
 * [How Vanguarr Works](docs/how-it-works.md)
 

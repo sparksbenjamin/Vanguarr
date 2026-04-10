@@ -175,6 +175,7 @@ If the views exist but suggestions look wrong:
 
 ## Related Docs
 
+* [Plugin Overview](../jellyfin-plugin/README.md)
 * [Main README](../README.md)
 * [Configuration Reference](configuration.md)
 * [How Vanguarr Works](how-it-works.md)
