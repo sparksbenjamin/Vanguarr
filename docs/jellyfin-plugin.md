@@ -2,93 +2,124 @@
 
 The Jellyfin plugin name is `Vanguarr`.
 
-It does one job: it asks Vanguarr for the current user's ranked suggestions, resolves those suggestions to real Jellyfin library items, and exposes them as two native Jellyfin views: one for movies and one for shows. It does not create extra Jellyfin libraries, symlink trees, or duplicate metadata entries.
+This is the piece that brings Vanguarr into the Jellyfin experience.
 
-Important limitation: stock Jellyfin does not provide a native plugin hook for inventing a brand-new personalized home row in the default client. The clean native surface is a pair of user-specific browseable views that open and play through Jellyfin normally.
+Instead of making you manage duplicate libraries, symlink trees, or weird per-user folders, the plugin exposes two native Jellyfin views:
 
-## What You Need
+* `Suggested Movies`
+* `Suggested Shows`
 
-- Jellyfin `10.11.x`
-- A reachable Vanguarr instance
-- Jellyfin users already present in Vanguarr's source media server
-- A `Suggestions API Key` configured in Vanguarr
-- A `Seer Webhook Token` configured in Vanguarr if you want optional availability-driven nudges
+Those views are personalized per signed-in Jellyfin user, but they resolve to real library items. That means the experience still feels like Jellyfin, not a bolt-on sidecar UI.
 
-## Add The Vanguarr Plugin Repo To Jellyfin
+## What You Get
 
-If your saved `JELLYFIN_API_KEY` in Vanguarr has elevated admin access, you can start this from `Vanguarr -> Settings -> Integrations -> Install Jellyfin Vanguarr Plugin`. That action adds the repository to Jellyfin and requests installation of the plugin from that repository.
+Once the plugin is installed and Vanguarr is configured:
 
-If you prefer to do it directly in Jellyfin, use the manual steps below.
+* Jellyfin users see native recommendation views inside Jellyfin
+* Suggested items open into normal Jellyfin detail pages
+* Playback stays fully native
+* Vanguarr keeps scoring in the background while Jellyfin stays the playback source of truth
+
+## Fast Path
+
+If you want the shortest route from "nothing installed" to "I can browse suggestions in Jellyfin," do this:
+
+1. Get Vanguarr running and reachable from Jellyfin.
+2. Configure a `Suggestions API Key` in Vanguarr.
+3. From `Vanguarr -> Settings -> Integrations`, use `Install Jellyfin Vanguarr Plugin` if your stored Jellyfin API key has admin access.
+4. Restart Jellyfin.
+5. Open `Dashboard -> Plugins -> My Plugins -> Vanguarr`.
+6. Set the Vanguarr base URL and the same `Suggestions API Key`.
+7. In Vanguarr, run `Library Sync Now`.
+8. Run `Profile Architect` once if you want an immediate profile refresh.
+
+After that, look for `Suggested Movies` and `Suggested Shows` in Jellyfin.
+
+## Manual Install
+
+If you prefer to add the plugin repo directly in Jellyfin:
 
 1. Open the Jellyfin admin dashboard.
-2. Go to `Plugins` -> `Catalog` -> `Settings`.
+2. Go to `Plugins -> Catalog -> Settings`.
 3. Add this repository URL:
 
 ```text
 https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/manifest.json
 ```
 
-4. Save the catalog settings.
+4. Save.
 5. Refresh the plugin catalog.
 6. Search for `Vanguarr`.
-7. Install the `Vanguarr` plugin.
-8. Restart Jellyfin after the install finishes.
+7. Install the plugin.
+8. Restart Jellyfin.
 
-The repository URL above assumes these files are pushed to GitHub. If you are testing from a local checkout first, host [`jellyfin-plugin/manifest.json`](../jellyfin-plugin/manifest.json) and [`jellyfin-plugin/dist/vanguarr-1.2.5.0.zip`](../jellyfin-plugin/dist/vanguarr-1.2.5.0.zip) somewhere Jellyfin can reach over HTTP, or update the URLs to match your own Git hosting.
-
-If you want to inspect or sideload the package manually, the plugin zip is published in the repo at:
-
-```text
-https://raw.githubusercontent.com/sparksbenjamin/Vanguarr/main/jellyfin-plugin/dist/vanguarr-1.2.5.0.zip
-```
-
-## Configure Vanguarr
-
-In the Vanguarr web UI, open `/settings` and set these runtime values:
-
-- `Suggestions API Key`: bearer token used by the Jellyfin plugin
-- `Seer Webhook Token`: bearer token expected from Seerr or Jellyseerr
-- `Suggested For You Enabled`: turn on per-user suggestion snapshots
-- `Suggested For You Limit`: number of titles stored per user
-- `Library Sync Enabled`: turns on the indexed Jellyfin catalog refresh job
-- `Library Sync Cron`: controls how often Vanguarr rebuilds the indexed Jellyfin catalog
-
-You can also seed the same values through environment variables:
-
-- `SUGGESTIONS_API_KEY`
-- `SEER_WEBHOOK_TOKEN`
-- `SUGGESTIONS_ENABLED`
-- `SUGGESTIONS_LIMIT`
-- `LIBRARY_SYNC_ENABLED`
-- `LIBRARY_SYNC_CRON`
-
-## Configure The Jellyfin Plugin
+## Configure The Plugin
 
 After Jellyfin restarts:
 
-1. Open `Dashboard` -> `Plugins` -> `My Plugins` -> `Vanguarr`.
+1. Open `Dashboard -> Plugins -> My Plugins -> Vanguarr`.
 2. Set `Vanguarr Base URL`.
-3. Set `Suggestions API Key` to the same token you stored in Vanguarr.
+3. Set `Suggestions API Key`.
 4. Choose a `Refresh Interval`.
 5. Choose a `Suggestion Limit`.
-6. Keep the suggested view names as `Suggested Movies` and `Suggested Shows`, or rename them if you want different Jellyfin labels.
-7. Save the plugin settings.
+6. Leave the default view names as `Suggested Movies` and `Suggested Shows`, or rename them if you want.
+7. Save.
 
-The plugin registers two native Jellyfin views, and each one is personalized for the currently signed-in Jellyfin user. The configuration page is shared because the plugin settings are server-wide.
+What those settings do:
 
-That means:
+* `Vanguarr Base URL` tells Jellyfin where to fetch suggestions
+* `Suggestions API Key` authorizes the plugin against Vanguarr
+* `Refresh Interval` controls how long Jellyfin caches resolved suggestions
+* `Suggestion Limit` caps how many items Jellyfin resolves per user
 
-- `Suggested Movies` shows ranked movie suggestions for the active Jellyfin user
-- `Suggested Shows` shows ranked series suggestions for the active Jellyfin user
-- the items are real Jellyfin library items, so details pages and playback stay native
-- if you rename either view in plugin settings, restart Jellyfin once so the new names are registered cleanly
+## First Run
 
-## Configure The Seerr Webhook
+The plugin needs Vanguarr to have actual indexed library data and user profiles to work with.
 
-In Seerr, Jellyseerr, or another Seer-compatible request service:
+In Vanguarr:
 
-1. Add a `Webhook` notification agent.
-2. Set the target URL to your Vanguarr server:
+1. Open `Settings -> Scheduling`.
+2. Run `Library Sync Now`.
+3. From the dashboard, run `Profile Architect`.
+4. If you want to inspect what Vanguarr is about to send, use the profile preview on the Profiles page.
+
+Then go back to Jellyfin and open the suggested views.
+
+## What The Plugin Does Not Do
+
+The plugin is meant to feel native, but there are still a few boundaries worth knowing:
+
+* It does not create duplicate libraries.
+* It does not build symlink trees.
+* It does not replace Jellyfin's playback pipeline.
+* It does not invent a custom Netflix-style homepage row in stock Jellyfin.
+
+What it does do is give you two native Jellyfin views that behave like focused recommendation shelves backed by real Jellyfin items.
+
+<details>
+<summary><strong>Need the Vanguarr-side settings list?</strong></summary>
+
+Set these in Vanguarr if you are using the plugin:
+
+* `SUGGESTIONS_API_KEY`
+* `SUGGESTIONS_ENABLED`
+* `SUGGESTIONS_LIMIT`
+* `LIBRARY_SYNC_ENABLED`
+* `LIBRARY_SYNC_CRON`
+
+Optional but useful:
+
+* `SEER_WEBHOOK_TOKEN`
+
+</details>
+
+<details>
+<summary><strong>Using Seerr, Jellyseerr, or Overseerr webhooks too?</strong></summary>
+
+You can optionally add a Seer-compatible webhook to Vanguarr:
+
+1. Create a webhook notification agent in Seerr, Jellyseerr, or Overseerr.
+2. Point it to:
 
 ```text
 http://your-vanguarr-host:8000/api/webhooks/seer
@@ -100,30 +131,50 @@ http://your-vanguarr-host:8000/api/webhooks/seer
 Authorization: Bearer YOUR_SEER_WEBHOOK_TOKEN
 ```
 
-4. Enable the availability-focused webhook events you care about, especially the events that fire when requested media becomes available.
+Those webhooks act as nudges for refresh behavior, but Jellyfin's indexed library remains the source of truth for what is actually available to suggest.
 
-When Seerr sends an availability event, Vanguarr stores the delivery and can nudge suggestion refreshes, but the primary source of truth for what can actually be suggested is the indexed Jellyfin library.
+</details>
 
-## First Run
+<details>
+<summary><strong>Need the local package or rebuild path?</strong></summary>
 
-1. In Vanguarr, open `Settings` -> `Scheduling` and run `Library Sync Now` once.
-2. Run `Profile Architect` once from the Vanguarr dashboard if you want to force a fresh profile build immediately.
-3. Open Jellyfin and confirm the per-user `Suggested Movies` and `Suggested Shows` views appear under Jellyfin's library/media surfaces for that user.
+If you are testing from a local checkout, Jellyfin can also read a hosted copy of:
 
-After that:
+* [`jellyfin-plugin/manifest.json`](../jellyfin-plugin/manifest.json)
+* [`jellyfin-plugin/dist/vanguarr-1.2.5.0.zip`](../jellyfin-plugin/dist/vanguarr-1.2.5.0.zip)
 
-- Vanguarr refreshes the indexed Jellyfin catalog on the configured `Library Sync Cron`.
-- Vanguarr rebuilds suggestion snapshots after each successful library sync and after profile refreshes.
-- Seerr availability webhooks are optional and act as nudges instead of the primary library source.
-- Jellyfin refreshes the resolved suggestion cache on the configured refresh interval.
-- If you want a full rebuild outside the schedule, run `Library Sync Now` or `Suggested For You` manually.
-
-## Packaging Notes
-
-The plugin source lives in [`jellyfin-plugin/Vanguarr`](../jellyfin-plugin/Vanguarr), and the repository manifest Jellyfin reads lives at [`jellyfin-plugin/manifest.json`](../jellyfin-plugin/manifest.json).
-
-To rebuild the packaged zip locally, run:
+To rebuild the plugin zip locally:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\jellyfin-plugin\package.ps1
 ```
+
+</details>
+
+<details>
+<summary><strong>Troubleshooting</strong></summary>
+
+If the suggested views show up but look empty:
+
+* Run `Library Sync Now` in Vanguarr
+* Run `Profile Architect`
+* Hard refresh Jellyfin with `Ctrl+F5`
+* Sign out and back in if the web UI is caching the old tiles
+
+If the plugin does not install from Vanguarr:
+
+* make sure the stored `JELLYFIN_API_KEY` belongs to a Jellyfin admin user
+* confirm Jellyfin can reach the plugin manifest URL
+
+If the views exist but suggestions look wrong:
+
+* use the Vanguarr profile preview to confirm what Vanguarr thinks that user should see
+* rerun `Library Sync Now` so the indexed Jellyfin catalog catches up with adds/removals
+
+</details>
+
+## Related Docs
+
+* [Main README](../README.md)
+* [Configuration Reference](configuration.md)
+* [How Vanguarr Works](how-it-works.md)
