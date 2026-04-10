@@ -113,7 +113,7 @@ class JellyfinClient(BaseAPIClient):
                 "sortOrder": "Descending",
                 "fields": (
                     "Overview,Genres,CommunityRating,ProviderIds,ProductionYear,"
-                    "PremiereDate,Taglines,UserData"
+                    "PremiereDate,SeriesName,SeriesId,Taglines,UserData"
                 ),
             },
         )

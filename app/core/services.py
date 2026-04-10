@@ -742,6 +742,9 @@ class VanguarrService:
                         profile_summary=history_summary,
                         limit=self.settings.recommendation_seed_limit,
                     )
+                    recommendation_seeds = self._resolve_tv_seed_media_ids_from_library_index(
+                        recommendation_seeds
+                    )
                     history_summary = await self._enrich_profile_summary_with_tmdb(
                         history_summary,
                         recommendation_seeds=recommendation_seeds,
@@ -2123,6 +2126,76 @@ class VanguarrService:
         )
         return pool[:limit]
 
+    def _resolve_tv_seed_media_ids_from_library_index(
+        self,
+        seeds: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        tv_seeds = [seed for seed in seeds if str(seed.get("media_type") or "") == "tv"]
+        if not tv_seeds:
+            return [dict(seed) for seed in seeds]
+
+        title_keys = {
+            self._normalize_seed_lookup_title(str(seed.get("title") or ""))
+            for seed in tv_seeds
+            if str(seed.get("title") or "").strip()
+        }
+        if not title_keys:
+            return [dict(seed) for seed in seeds]
+
+        with self.session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(LibraryMedia).where(
+                        LibraryMedia.media_type == "tv",
+                        LibraryMedia.state == "available",
+                        LibraryMedia.tmdb_id.is_not(None),
+                    )
+                )
+            )
+
+        resolved_by_title: dict[str, LibraryMedia] = {}
+        ambiguous_titles: set[str] = set()
+
+        for row in rows:
+            lookup_values = {
+                self._normalize_seed_lookup_title(str(row.title or "")),
+                self._normalize_seed_lookup_title(str(row.sort_title or "")),
+            }
+            for lookup_value in lookup_values:
+                if not lookup_value or lookup_value not in title_keys:
+                    continue
+                if lookup_value in ambiguous_titles:
+                    continue
+                existing = resolved_by_title.get(lookup_value)
+                if existing is None:
+                    resolved_by_title[lookup_value] = row
+                    continue
+                if existing.id != row.id:
+                    ambiguous_titles.add(lookup_value)
+                    resolved_by_title.pop(lookup_value, None)
+
+        resolved: list[dict[str, Any]] = []
+        for seed in seeds:
+            enriched = dict(seed)
+            if str(enriched.get("media_type") or "") != "tv":
+                resolved.append(enriched)
+                continue
+
+            lookup_key = self._normalize_seed_lookup_title(str(enriched.get("title") or ""))
+            row = resolved_by_title.get(lookup_key)
+            if row is not None and row.tmdb_id is not None:
+                enriched["media_id"] = int(row.tmdb_id)
+                external_ids = dict(enriched.get("external_ids") or {})
+                external_ids["tmdb"] = str(row.tmdb_id)
+                if row.tvdb_id is not None:
+                    external_ids.setdefault("tvdb", str(row.tvdb_id))
+                if row.imdb_id:
+                    external_ids.setdefault("imdb", str(row.imdb_id))
+                enriched["external_ids"] = external_ids
+            resolved.append(enriched)
+
+        return resolved
+
     @classmethod
     def _build_seed_lanes(
         cls,
@@ -2147,6 +2220,10 @@ class VanguarrService:
             lanes.append("genre_anchor_seed")
 
         return lanes
+
+    @staticmethod
+    def _normalize_seed_lookup_title(value: str) -> str:
+        return str(value or "").strip().lower()
 
     @classmethod
     def _build_viewing_history_context(

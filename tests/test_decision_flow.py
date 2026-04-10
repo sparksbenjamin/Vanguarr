@@ -902,6 +902,65 @@ def test_library_sync_payload_includes_content_fingerprint() -> None:
     assert payload["content_fingerprint"]
 
 
+def test_resolve_tv_seed_media_ids_uses_library_index_series_tmdb(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        session.add(
+            LibraryMedia(
+                source_provider="jellyfin",
+                media_server_id="series-1",
+                media_type="tv",
+                title="Show Alpha",
+                sort_title="Show Alpha",
+                overview="Series overview.",
+                production_year=2024,
+                release_date="2024-01-01",
+                community_rating=8.5,
+                genres_json='["Sci-Fi","Drama"]',
+                state="available",
+                tmdb_id=101,
+                tvdb_id=555,
+                imdb_id="ttshowalpha",
+                payload_json="{}",
+            )
+        )
+        session.commit()
+
+    resolved = service._resolve_tv_seed_media_ids_from_library_index(
+        [
+            {
+                "media_type": "tv",
+                "media_id": 1_932_395,
+                "title": "Show Alpha",
+                "play_count": 2,
+                "seed_lanes": ["top_seed"],
+            }
+        ]
+    )
+
+    assert resolved[0]["media_id"] == 101
+    assert resolved[0]["external_ids"]["tmdb"] == "101"
+    assert resolved[0]["external_ids"]["tvdb"] == "555"
+
+
 def test_library_sync_skips_suggestion_refresh_when_library_is_unchanged(tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
