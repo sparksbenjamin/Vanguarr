@@ -89,6 +89,7 @@ Use the front page for the pitch. Use the docs below for the technical detail.
 
 * [Jellyfin Plugin Setup](docs/jellyfin-plugin.md)
 * [Jellyfin Plugin Overview](jellyfin-plugin/README.md)
+* [Release Notes](CHANGELOG.md)
 * [Configuration Reference](docs/configuration.md)
 * [How Vanguarr Works](docs/how-it-works.md)
 
