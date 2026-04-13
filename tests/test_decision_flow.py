@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 from types import SimpleNamespace
 import asyncio
 
@@ -49,6 +50,48 @@ def test_select_recommendation_seeds_prefers_top_watched_titles() -> None:
     assert [seed["media_id"] for seed in seeds] == [101, 202]
     assert seeds[0]["play_count"] == 2
     assert seeds[0]["genres"] == ["Sci-Fi", "Thriller"]
+
+
+def test_task_snapshot_for_target_matches_global_run_that_processed_user() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings()
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=TestingSessionLocal,
+    )
+
+    with TestingSessionLocal() as session:
+        session.add(
+            TaskRun(
+                engine="profile_architect",
+                status="success",
+                summary="Updated 2 profile(s).",
+                current_label="Complete",
+                detail_json=json.dumps(
+                    {
+                        "target_username": "",
+                        "processed_usernames": ["alice", "bob"],
+                        "updated_users": ["alice", "bob"],
+                        "errors": [],
+                    },
+                    ensure_ascii=True,
+                ),
+            )
+        )
+        session.commit()
+
+    snapshot = service.get_task_snapshot_for_target("profile_architect", "alice")
+
+    assert snapshot["status"] == "success"
+    assert snapshot["summary"] == "Updated 2 profile(s)."
+    assert snapshot["detail"]["processed_usernames"] == ["alice", "bob"]
 
 
 def test_decision_prompt_includes_viewing_history_block() -> None:

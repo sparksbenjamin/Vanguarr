@@ -547,7 +547,7 @@ class VanguarrService:
             )
 
         for task in tasks:
-            if self._task_target_username(task).casefold() == target_username:
+            if self._task_matches_username(task, target_username):
                 return self._serialize_task_run(task)
         return self._serialize_task_run(None)
 
@@ -639,6 +639,7 @@ class VanguarrService:
 
         target_username = str(username or "").strip()
         updated_users: list[str] = []
+        processed_usernames: list[str] = []
         suggestion_refreshes = 0
         suggestion_targets: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -666,6 +667,7 @@ class VanguarrService:
                     "target_username": target_username,
                     "processed_users": 0,
                     "total_users": len(users),
+                    "processed_usernames": [],
                     "updated_users": [],
                     "suggestion_refreshes": 0,
                     "errors": [],
@@ -674,6 +676,8 @@ class VanguarrService:
 
             for user in users:
                 current_username = user.get("Name", "unknown")
+                if current_username not in processed_usernames:
+                    processed_usernames.append(current_username)
                 try:
                     self._update_task(
                         task.id,
@@ -686,6 +690,7 @@ class VanguarrService:
                             "target_username": target_username,
                             "processed_users": len(updated_users),
                             "total_users": len(users),
+                            "processed_usernames": list(processed_usernames),
                             "updated_users": list(updated_users),
                             "suggestion_refreshes": suggestion_refreshes,
                             "errors": list(errors),
@@ -735,6 +740,7 @@ class VanguarrService:
                             "target_username": target_username,
                             "processed_users": len(updated_users),
                             "total_users": len(users),
+                            "processed_usernames": list(processed_usernames),
                             "updated_users": list(updated_users),
                             "suggestion_refreshes": suggestion_refreshes,
                             "errors": list(errors),
@@ -757,6 +763,7 @@ class VanguarrService:
                                 "target_username": target_username,
                                 "processed_users": len(updated_users),
                                 "total_users": len(users),
+                                "processed_usernames": list(processed_usernames),
                                 "updated_users": list(updated_users),
                                 "suggestion_refreshes": suggestion_refreshes,
                                 "errors": list(errors),
@@ -778,6 +785,7 @@ class VanguarrService:
                                 "target_username": target_username,
                                 "processed_users": len(updated_users),
                                 "total_users": len(users),
+                                "processed_usernames": list(processed_usernames),
                                 "updated_users": list(updated_users),
                                 "suggestion_refreshes": suggestion_refreshes,
                                 "errors": list(errors),
@@ -797,6 +805,7 @@ class VanguarrService:
                                 "target_username": target_username,
                                 "processed_users": len(updated_users),
                                 "total_users": len(users),
+                                "processed_usernames": list(processed_usernames),
                                 "updated_users": list(updated_users),
                                 "suggestion_refreshes": suggestion_refreshes,
                                 "errors": list(errors),
@@ -820,6 +829,7 @@ class VanguarrService:
                                 "target_username": target_username,
                                 "processed_users": len(updated_users),
                                 "total_users": len(users),
+                                "processed_usernames": list(processed_usernames),
                                 "updated_users": list(updated_users),
                                 "suggestion_refreshes": suggestion_refreshes,
                                 "errors": list(errors),
@@ -857,6 +867,7 @@ class VanguarrService:
                 "target_username": target_username,
                 "processed_users": len(updated_users),
                 "total_users": len(users) if 'users' in locals() else 0,
+                "processed_usernames": list(processed_usernames),
                 "updated_users": list(updated_users),
                 "suggestion_refreshes": suggestion_refreshes,
                 "errors": list(errors),
@@ -886,6 +897,7 @@ class VanguarrService:
         evaluated = 0
         requested = 0
         skipped = 0
+        processed_usernames: list[str] = []
         errors: list[str] = []
         exclusions = self._parse_global_exclusions()
         total_steps = 0
@@ -912,6 +924,7 @@ class VanguarrService:
                     "target_username": target_username,
                     "processed_users": 0,
                     "total_users": len(users),
+                    "processed_usernames": [],
                     "scored": 0,
                     "shortlisted": 0,
                     "evaluated": 0,
@@ -923,6 +936,8 @@ class VanguarrService:
 
             for user in users:
                 current_username = user.get("Name", "unknown")
+                if current_username not in processed_usernames:
+                    processed_usernames.append(current_username)
                 try:
                     self._update_task(
                         task.id,
@@ -935,6 +950,7 @@ class VanguarrService:
                             "target_username": target_username,
                             "processed_users": max(0, completed_steps // 3),
                             "total_users": len(users),
+                            "processed_usernames": list(processed_usernames),
                             "scored": scored,
                             "shortlisted": shortlisted,
                             "evaluated": evaluated,
@@ -990,6 +1006,7 @@ class VanguarrService:
                             "target_username": target_username,
                             "processed_users": max(0, completed_steps // 3),
                             "total_users": len(users),
+                            "processed_usernames": list(processed_usernames),
                             "scored": scored,
                             "shortlisted": shortlisted,
                             "evaluated": evaluated,
@@ -1072,6 +1089,7 @@ class VanguarrService:
                             "target_username": target_username,
                             "processed_users": max(0, completed_steps // 3),
                             "total_users": len(users),
+                            "processed_usernames": list(processed_usernames),
                             "scored": scored,
                             "shortlisted": shortlisted,
                             "evaluated": evaluated,
@@ -1233,6 +1251,7 @@ class VanguarrService:
                                     "target_username": target_username,
                                     "processed_users": max(0, completed_steps // 3),
                                     "total_users": len(users),
+                                    "processed_usernames": list(processed_usernames),
                                     "scored": scored,
                                     "shortlisted": shortlisted,
                                     "evaluated": evaluated,
@@ -1284,6 +1303,7 @@ class VanguarrService:
                 "target_username": target_username,
                 "processed_users": len(users) if 'users' in locals() else 0,
                 "total_users": len(users) if 'users' in locals() else 0,
+                "processed_usernames": list(processed_usernames),
                 "scored": scored,
                 "shortlisted": shortlisted,
                 "evaluated": evaluated,
@@ -1315,6 +1335,7 @@ class VanguarrService:
 
         target_username = str(username or "").strip()
         refreshed_users: list[str] = []
+        processed_usernames: list[str] = []
         stored = 0
         scored = 0
         errors: list[str] = []
@@ -1347,6 +1368,7 @@ class VanguarrService:
                         "target_username": target_username,
                         "processed_users": 0,
                         "total_users": len(users),
+                        "processed_usernames": [],
                         "stored": 0,
                         "scored": 0,
                         "errors": [],
@@ -1355,6 +1377,8 @@ class VanguarrService:
 
                 for user_index, user in enumerate(users):
                     current_username = str(user.get("Name") or "unknown")
+                    if current_username not in processed_usernames:
+                        processed_usernames.append(current_username)
                     try:
                         base_offset = user_index * phase_steps_per_user
 
@@ -1372,6 +1396,7 @@ class VanguarrService:
                                     "target_username": target_username,
                                     "processed_users": len(refreshed_users),
                                     "total_users": len(users),
+                                    "processed_usernames": list(processed_usernames),
                                     "stored": stored,
                                     "scored": scored,
                                     "errors": list(errors),
@@ -1395,6 +1420,7 @@ class VanguarrService:
                                 "target_username": target_username,
                                 "processed_users": len(refreshed_users),
                                 "total_users": len(users),
+                                "processed_usernames": list(processed_usernames),
                                 "stored": stored,
                                 "scored": scored,
                                 "errors": list(errors),
@@ -1416,6 +1442,7 @@ class VanguarrService:
                                 "target_username": target_username,
                                 "processed_users": len(refreshed_users),
                                 "total_users": len(users),
+                                "processed_usernames": list(processed_usernames),
                                 "stored": stored,
                                 "scored": scored,
                                 "errors": list(errors),
@@ -1454,6 +1481,8 @@ class VanguarrService:
                 "target_username": target_username,
                 "processed_users": len(refreshed_users),
                 "total_users": len(users) if 'users' in locals() else 0,
+                "processed_usernames": list(processed_usernames),
+                "refreshed_users": list(refreshed_users),
                 "stored": stored,
                 "scored": scored,
                 "errors": list(errors),
@@ -2252,6 +2281,26 @@ class VanguarrService:
     def _task_target_username(cls, task: TaskRun | None) -> str:
         detail = cls._task_detail_payload(task)
         return str(detail.get("target_username") or "").strip()
+
+    @classmethod
+    def _task_matches_username(cls, task: TaskRun | None, username: str) -> bool:
+        normalized_username = str(username or "").strip().casefold()
+        if not normalized_username or task is None:
+            return False
+
+        detail = cls._task_detail_payload(task)
+        direct_target = str(detail.get("target_username") or "").strip().casefold()
+        if direct_target == normalized_username:
+            return True
+
+        for key in ("processed_usernames", "updated_users", "refreshed_users"):
+            values = detail.get(key)
+            if not isinstance(values, list):
+                continue
+            if any(str(value or "").strip().casefold() == normalized_username for value in values):
+                return True
+
+        return False
 
     @classmethod
     def _serialize_task_run(cls, task: TaskRun | None) -> dict[str, Any]:

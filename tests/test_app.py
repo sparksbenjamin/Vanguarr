@@ -22,6 +22,8 @@ def test_dashboard_renders() -> None:
     assert response.status_code == 200
     assert "Vanguarr" in response.text
     assert "Suggested For You" in response.text
+    assert "v0.2.1" in response.text
+    assert "Version 0.2.1" in response.text
 
 
 def test_startup_recovers_interrupted_tasks(monkeypatch) -> None:
@@ -323,6 +325,7 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
     assert "Run Profile Architect" in response.text
     assert "Run Decision Engine" in response.text
     assert "Refresh Suggestions" in response.text
+    assert "Last run: Never" in response.text or "Last run:" in response.text
 
 
 def test_manifest_suggested_for_you_action_redirects_back_to_manifest(monkeypatch) -> None:

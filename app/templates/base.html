@@ -740,6 +740,7 @@
                   <div>
                     <p class="text-lg font-semibold tracking-tight">Vanguarr</p>
                     <p class="mono text-[11px] uppercase tracking-[0.26em] text-[var(--text-dim)]">Scout of the ARR Stack</p>
+                    <p class="mono mt-2 text-[11px] uppercase tracking-[0.2em] text-[var(--text-dim)]">Version {{ app_version }}</p>
                   </div>
                 </div>
                 <button type="button" class="mobile-nav-close lg:hidden" data-nav-close aria-label="Close navigation">
@@ -915,6 +916,10 @@
                   <span class="text-[var(--text-soft)]">Decision Store</span>
                   <span class="mono text-xs text-white">sqlite</span>
                 </div>
+                <div class="flex items-center justify-between gap-4">
+                  <span class="text-[var(--text-soft)]">App Version</span>
+                  <span class="mono text-xs text-white">{{ app_version }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -957,6 +962,7 @@
                 <span class="topbar-link-dot"></span>
                 Settings
               </a>
+              <span class="topbar-link mono">v{{ app_version }}</span>
             </div>
           </div>
         </header>

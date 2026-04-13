@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from app.api.base import ClientConfigError, ExternalServiceError
+from app import __version__ as APP_VERSION
 from app.api.jellyfin import (
     VANGUARR_JELLYFIN_PLUGIN_NAME,
     VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
@@ -40,6 +41,7 @@ from app.core.services import VanguarrService, normalize_jellyfin_user_id
 
 bootstrap_settings = get_settings()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
+templates.env.globals["app_version"] = APP_VERSION
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,6 +2,14 @@
 
 All notable changes to Vanguarr are tracked here.
 
+## [0.2.1] - 2026-04-13
+
+### Highlights
+
+* Fixed profile task status matching so scheduler-driven `all users` runs now show up on the relevant profile pages instead of looking like they never ran.
+* Added explicit per-profile last-run timestamps on the manifest action cards for Profile Architect, Decision Engine, and Suggested For You.
+* Added the local app version to the UI so operators can see exactly which Vanguarr build is running without making any outbound version checks.
+
 ## [0.2.0] - 2026-04-10
 
 ### Highlights
