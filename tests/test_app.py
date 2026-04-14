@@ -55,18 +55,23 @@ def test_settings_page_renders() -> None:
     assert 'href="/manifest"' in response.text
 
 
-def test_tuning_settings_page_shows_ai_weight_slider() -> None:
+def test_tuning_settings_page_shows_history_and_weight_controls() -> None:
     with TestClient(app) as client:
         response = client.get("/settings/tuning")
 
     assert response.status_code == 200
     assert "AI Decision Weight" in response.text
     assert "Use Full Playback History" in response.text
+    assert "Recent Momentum Weight" in response.text
     assert "Genre Candidate Limit" in response.text
     assert "Suggestion AI Threshold" in response.text
     assert "Suggestion Recent Cooldown Days" in response.text
     assert 'type="range"' in response.text
-    assert "% AI /" in response.text
+    assert "% AI" in response.text
+    assert "% code" in response.text
+    assert "% recent boost" in response.text
+    assert "More long-term" in response.text
+    assert "More recent" in response.text
 
 
 def test_integrations_settings_page_shows_jellyfin_plugin_install_action() -> None:

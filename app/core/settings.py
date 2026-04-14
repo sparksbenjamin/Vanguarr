@@ -30,6 +30,11 @@ class SettingFieldDefinition:
     min_value: str = ""
     max_value: str = ""
     step: str = "any"
+    range_left_label: str = ""
+    range_right_label: str = ""
+    range_value_suffix: str = ""
+    range_complement_suffix: str = ""
+    range_show_complement: bool = False
 
 
 class LLMProviderSettings(BaseModel):
@@ -107,6 +112,7 @@ class Settings(BaseSettings):
     health_cache_seconds: int = 30
     profile_history_limit: int = 40
     profile_use_full_history: bool = False
+    profile_recent_signal_weight_percent: int = 75
     profile_architect_max_output_tokens: int = 384
     profile_architect_top_titles_limit: int = 8
     profile_architect_recent_momentum_limit: int = 5
@@ -185,6 +191,16 @@ class Settings(BaseSettings):
         numeric = int(value)
         if not 0 <= numeric <= 100:
             raise ValueError("AI decision weight must be between 0 and 100.")
+        return numeric
+
+    @field_validator("profile_recent_signal_weight_percent", mode="before")
+    @classmethod
+    def validate_profile_recent_signal_weight_percent(cls, value: object) -> object:
+        if value in ("", None):
+            return 75
+        numeric = int(value)
+        if not 0 <= numeric <= 200:
+            raise ValueError("Recent momentum weight must be between 0 and 200.")
         return numeric
 
     @field_validator("suggestion_ai_threshold", mode="before")
@@ -609,13 +625,11 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         min_value="0",
         max_value="100",
         step="5",
-    ),
-    SettingFieldDefinition(
-        key="profile_history_limit",
-        label="Profile History Limit",
-        group="Tuning",
-        description="How many playback events are used per user when full-history mode is off.",
-        input_type="number",
+        range_left_label="More code",
+        range_right_label="More AI",
+        range_value_suffix="% AI",
+        range_complement_suffix="% code",
+        range_show_complement=True,
     ),
     SettingFieldDefinition(
         key="profile_use_full_history",
@@ -626,6 +640,29 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
             "decision runs, and Suggested For You refreshes."
         ),
         input_type="checkbox",
+    ),
+    SettingFieldDefinition(
+        key="profile_history_limit",
+        label="Profile History Limit",
+        group="Tuning",
+        description="How many playback events are used per user when full-history mode is off.",
+        input_type="number",
+    ),
+    SettingFieldDefinition(
+        key="profile_recent_signal_weight_percent",
+        label="Recent Momentum Weight",
+        group="Tuning",
+        description=(
+            "How strongly recent views boost profile genre ranking relative to long-term history. "
+            "100% means recent genres count equally with durable genre signals."
+        ),
+        input_type="range",
+        min_value="0",
+        max_value="200",
+        step="5",
+        range_left_label="More long-term",
+        range_right_label="More recent",
+        range_value_suffix="% recent boost",
     ),
     SettingFieldDefinition(
         key="profile_architect_max_output_tokens",

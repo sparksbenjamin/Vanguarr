@@ -31,7 +31,7 @@
       <div class="grid gap-4 px-5 py-5 md:grid-cols-2">
         {% for field in settings_page.fields %}
         {% set value = settings|attr(field.key) %}
-        <div class="{{ 'md:col-span-2' if field.input_type in ('textarea', 'range') else '' }}">
+        <div class="{{ 'md:col-span-2' if field.input_type in ('textarea', 'range', 'checkbox') else '' }}">
           <div class="h-full rounded-[1.25rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-4">
             {% if field.input_type != 'range' %}
             <div class="mb-3 flex items-start justify-between gap-4">
@@ -42,7 +42,10 @@
             {% if field.input_type == 'checkbox' %}
             <label class="flex items-start gap-3 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4 text-sm text-[var(--text-soft)]">
               <input id="{{ field.key }}" name="{{ field.key }}" type="checkbox" value="true" class="mt-1 h-4 w-4 rounded border-white/20 bg-transparent text-[var(--accent)]" {% if value %}checked{% endif %} />
-              <span>{{ field.description }}</span>
+              <span>
+                <span class="block font-medium text-white">{{ field.label }}</span>
+                <span class="mt-1 block">{{ field.description }}</span>
+              </span>
             </label>
             {% elif field.input_type == 'select' %}
             <select id="{{ field.key }}" name="{{ field.key }}" class="field-input text-sm">
@@ -63,12 +66,15 @@
                   <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">{{ field.description }}</p>
                 </div>
                 <p class="mono text-xs text-[var(--text-soft)]">
-                  <span data-range-value-for="{{ field.key }}">{{ current_value }}</span>% AI /
-                  <span data-range-complement-for="{{ field.key }}">{{ 100 - (current_value|int) }}</span>% code
+                  <span data-range-value-for="{{ field.key }}">{{ current_value }}</span>{{ field.range_value_suffix }}
+                  {% if field.range_show_complement %}
+                  /
+                  <span data-range-complement-for="{{ field.key }}">{{ 100 - (current_value|int) }}</span>{{ field.range_complement_suffix }}
+                  {% endif %}
                 </p>
               </div>
               <div class="mt-4 flex items-center gap-3 text-xs text-[var(--text-dim)]">
-                <span>More code</span>
+                <span>{{ field.range_left_label or "Low" }}</span>
                 <input
                   id="{{ field.key }}"
                   name="{{ field.key }}"
@@ -79,8 +85,9 @@
                   step="{{ field.step }}"
                   class="h-2 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-[var(--accent)]"
                   data-range-input
+                  data-range-show-complement="{{ 'true' if field.range_show_complement else 'false' }}"
                 />
-                <span>More AI</span>
+                <span>{{ field.range_right_label or "High" }}</span>
               </div>
             </div>
             {% else %}

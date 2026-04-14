@@ -32,6 +32,7 @@ def test_profile_architect_grouping_defaults() -> None:
     settings = Settings()
 
     assert settings.profile_use_full_history is False
+    assert settings.profile_recent_signal_weight_percent == 75
     assert settings.profile_architect_top_titles_limit == 8
     assert settings.profile_architect_recent_momentum_limit == 5
 
@@ -167,6 +168,12 @@ def test_decision_ai_weight_percent_must_stay_within_range() -> None:
     settings = Settings(decision_ai_weight_percent="75")
 
     assert settings.decision_ai_weight_percent == 75
+
+
+def test_profile_recent_signal_weight_percent_must_stay_within_range() -> None:
+    settings = Settings(profile_recent_signal_weight_percent="125")
+
+    assert settings.profile_recent_signal_weight_percent == 125
 
 
 def test_suggestion_ai_threshold_must_stay_within_range() -> None:

@@ -2457,6 +2457,7 @@ class VanguarrService:
         top_limit: int = 8,
         recent_limit: int = 5,
         recent_window: int = 12,
+        recent_weight_percent: int = 75,
     ) -> dict[str, Any]:
         grouped: dict[tuple[str, str], dict[str, Any]] = {}
         media_type_counts: Counter[str] = Counter()
@@ -2565,7 +2566,11 @@ class VanguarrService:
         normalized_top_titles = [cls._clean_profile_entry(item) for item in top_titles[:top_limit]]
         normalized_recent_momentum = [cls._clean_profile_entry(item) for item in recent_momentum[:recent_limit]]
         repeat_titles = [cls._clean_profile_entry(item) for item in top_titles if int(item.get("play_count") or 0) > 1][:5]
-        ranked_genres = cls._rank_genres(genre_counts, recent_genre_counts)
+        ranked_genres = cls._rank_genres(
+            genre_counts,
+            recent_genre_counts,
+            recent_weight_percent=recent_weight_percent,
+        )
         primary_genres = [genre for genre, _score in ranked_genres[:4]]
         secondary_genres = [genre for genre, _score in ranked_genres[4:8]]
         recent_genres = [genre for genre, _count in recent_genre_counts.most_common(4)]
@@ -2599,6 +2604,7 @@ class VanguarrService:
             "release_year_preference": cls._build_release_year_preference(release_years),
             "average_top_rating": cls._average_rating(normalized_top_titles),
             "genre_focus_share": round(focus_share, 3),
+            "recent_signal_weight_percent": max(0, int(recent_weight_percent)),
             "discovery_lanes": cls._build_discovery_lanes(
                 primary_genres=primary_genres,
                 secondary_genres=secondary_genres,
@@ -4267,6 +4273,7 @@ class VanguarrService:
             history,
             top_limit=self.settings.profile_architect_top_titles_limit,
             recent_limit=self.settings.profile_architect_recent_momentum_limit,
+            recent_weight_percent=self.settings.profile_recent_signal_weight_percent,
         )
         history_summary = self._apply_existing_profile_guidance(history_summary, stored_payload)
         recommendation_seeds = self._build_recommendation_seed_pool(
@@ -4324,6 +4331,7 @@ class VanguarrService:
                 history,
                 top_limit=self.settings.profile_architect_top_titles_limit,
                 recent_limit=self.settings.profile_architect_recent_momentum_limit,
+                recent_weight_percent=self.settings.profile_recent_signal_weight_percent,
             )
             recommendation_seeds = self._build_recommendation_seed_pool(
                 history,
@@ -4647,10 +4655,13 @@ class VanguarrService:
     def _rank_genres(
         genre_counts: Counter[str],
         recent_genre_counts: Counter[str],
+        *,
+        recent_weight_percent: int = 75,
     ) -> list[tuple[str, float]]:
+        recent_weight = max(0.0, float(recent_weight_percent) / 100.0)
         ranked: list[tuple[str, float, int]] = []
         for genre in set(genre_counts) | set(recent_genre_counts):
-            score = float(genre_counts.get(genre, 0)) + (float(recent_genre_counts.get(genre, 0)) * 0.75)
+            score = float(genre_counts.get(genre, 0)) + (float(recent_genre_counts.get(genre, 0)) * recent_weight)
             ranked.append((genre, score, int(genre_counts.get(genre, 0))))
 
         ranked.sort(key=lambda item: (-item[1], -item[2], item[0].lower()))

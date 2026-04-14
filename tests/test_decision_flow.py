@@ -372,6 +372,51 @@ def test_profile_history_context_caps_repeat_episode_weighting() -> None:
     assert "Animation" not in summary["primary_genres"][:2]
 
 
+def test_profile_history_context_can_raise_recent_momentum_weight() -> None:
+    history = [
+        {
+            "Name": "Space Case",
+            "Type": "Movie",
+            "Genres": ["Sci-Fi"],
+            "CommunityRating": 8.4,
+            "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+        },
+        {
+            "Name": "Courtroom One",
+            "Type": "Movie",
+            "Genres": ["Drama"],
+            "CommunityRating": 7.9,
+            "UserData": {"LastPlayedDate": "2026-04-07T10:00:00Z"},
+        },
+        {
+            "Name": "Courtroom Two",
+            "Type": "Movie",
+            "Genres": ["Drama"],
+            "CommunityRating": 7.8,
+            "UserData": {"LastPlayedDate": "2026-04-06T10:00:00Z"},
+        },
+    ]
+
+    low_recent = VanguarrService._build_profile_history_context(
+        history,
+        top_limit=5,
+        recent_limit=3,
+        recent_window=1,
+        recent_weight_percent=0,
+    )
+    high_recent = VanguarrService._build_profile_history_context(
+        history,
+        top_limit=5,
+        recent_limit=3,
+        recent_window=1,
+        recent_weight_percent=200,
+    )
+
+    assert low_recent["primary_genres"][0] == "Drama"
+    assert high_recent["primary_genres"][0] == "Sci-Fi"
+    assert high_recent["recent_signal_weight_percent"] == 200
+
+
 def test_recover_interrupted_tasks_marks_running_rows(tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
@@ -1866,7 +1911,7 @@ def test_run_profile_architect_writes_operation_log(tmp_path) -> None:
     async def fake_refresh(_user: dict, progress_callback=None) -> dict:
         return {"stored": 0, "scored": 0, "ai_scored": 0, "ai_reused": 0}
 
-    service._build_profile_history_context = lambda history, top_limit, recent_limit: {  # type: ignore[method-assign]
+    service._build_profile_history_context = lambda history, top_limit, recent_limit, recent_weight_percent=75: {  # type: ignore[method-assign]
         "history_count": 0,
         "top_titles": [],
         "recent_momentum": [],
