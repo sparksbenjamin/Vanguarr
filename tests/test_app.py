@@ -22,8 +22,8 @@ def test_dashboard_renders() -> None:
     assert response.status_code == 200
     assert "Vanguarr" in response.text
     assert "Suggested For You" in response.text
-    assert "v0.2.1" in response.text
-    assert "Version 0.2.1" in response.text
+    assert "v0.2.2" in response.text
+    assert "Version 0.2.2" in response.text
 
 
 def test_startup_recovers_interrupted_tasks(monkeypatch) -> None:

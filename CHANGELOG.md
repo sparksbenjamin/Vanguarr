@@ -2,6 +2,14 @@
 
 All notable changes to Vanguarr are tracked here.
 
+## [0.2.2] - 2026-04-14
+
+### Highlights
+
+* Reworked profile building into a layered pipeline that starts with personal playback history, then adds Seer recommendation-neighborhood hints, local similar-user lift, TMDb metadata enrichment, and finally LLM synthesis for tightly-bounded adjacent lanes.
+* Changed profile weighting to rely on grouped titles with bounded repeat influence so one long binge is less likely to distort the durable taste model.
+* Carried the richer profile signals through discovery seeds, candidate scoring, and profile summaries so request decisions and manifests reflect the same evidence stack.
+
 ## [0.2.1] - 2026-04-13
 
 ### Highlights

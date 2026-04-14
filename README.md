@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](docs/configuration.md)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
-Current release: `0.2.1`
+Current release: `0.2.2`
 
 **Stop scrolling. Start watching.** Vanguarr is a self-hosted media-server recommendation engine that acts as the brain between your watch history and your request stack. It learns what your household actually likes, maps that behavior into durable taste manifests, and scouts for high-confidence media through **Jellyseerr**, **Overseerr**, and other Seer-compatible services.
 
