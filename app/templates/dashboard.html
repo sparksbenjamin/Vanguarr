@@ -18,6 +18,7 @@
         </div>
 
         <div class="flex flex-wrap gap-2">
+          <span class="signal-chip">Version {{ app_version }}</span>
           <span class="signal-chip">Health polling every {{ settings.health_cache_seconds }}s</span>
           <span class="signal-chip">Threshold {{ "%.2f"|format(settings.request_threshold) }}</span>
           <span class="signal-chip">LLM {{ llm_provider }}</span>

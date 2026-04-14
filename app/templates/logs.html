@@ -19,9 +19,9 @@
     <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
       <div class="max-w-3xl">
         <p class="panel-kicker">War Room</p>
-        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Live decision feed</h1>
+        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.2rem]">Live operations feed</h1>
         <p class="mt-3 text-sm leading-6 text-[var(--text-soft)] sm:text-[0.96rem]">
-          Watch requests and suggestions land in one stream, sort by the signal you care about, and page through the history without turning the War Room into an endless wall of logs.
+          Watch requests, suggestions, profile rebuilds, and library sync activity land in one stream, then page and sort through what Vanguarr did and why it did it.
         </p>
       </div>
       <form class="grid w-full gap-3 sm:grid-cols-[minmax(0,1fr)_auto] xl:max-w-2xl" method="get" action="/logs">
@@ -131,7 +131,7 @@
             <tr>
               <td class="mono text-xs text-[var(--text-soft)]">{{ log.created_at_display }}</td>
               <td>
-                <span class="status-pill {{ 'status-good' if log.engine == 'suggested_for_you' else 'status-neutral' }}">{{ log.engine_label }}</span>
+                <span class="status-pill {{ 'status-good' if log.engine == 'suggested_for_you' else 'status-warn' if log.engine in ['profile_architect', 'library_sync'] else 'status-neutral' }}">{{ log.engine_label }}</span>
               </td>
               <td class="text-sm">{{ log.username }}</td>
               <td>
@@ -258,7 +258,10 @@
   }
 
   function pillClassForEngine(engine) {
-    return String(engine || "") === "suggested_for_you" ? "status-good" : "status-neutral";
+    const normalized = String(engine || "");
+    if (normalized === "suggested_for_you") return "status-good";
+    if (normalized === "profile_architect" || normalized === "library_sync") return "status-warn";
+    return "status-neutral";
   }
 
   function buildTableRows(rows) {

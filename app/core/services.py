@@ -394,7 +394,7 @@ class VanguarrService:
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "created_at_display": cls._format_log_timestamp(row.created_at),
             "engine": row.engine,
-            "engine_label": "Suggestion" if row.engine == "suggested_for_you" else "Request",
+            "engine_label": cls._engine_label(row.engine),
             "username": row.username,
             "media_type": row.media_type,
             "media_id": row.media_id,
@@ -408,6 +408,17 @@ class VanguarrService:
             "reasoning": row.reasoning,
             "error": row.error,
         }
+
+    @staticmethod
+    def _engine_label(engine: str) -> str:
+        labels = {
+            "profile_architect": "Profile Architect",
+            "decision_engine": "Decision Engine",
+            "suggested_for_you": "Suggested For You",
+            "library_sync": "Library Sync",
+        }
+        normalized = str(engine or "").strip()
+        return labels.get(normalized, normalized.replace("_", " ").title() or "System")
 
     def recover_interrupted_tasks(self) -> int:
         with self.session_scope() as session:
@@ -728,6 +739,23 @@ class VanguarrService:
                     self.profile_store.write_payload(current_username, profile_payload)
                     updated_users.append(current_username)
                     suggestion_targets.append(user)
+                    self._record_operation_log(
+                        engine="profile_architect",
+                        username=current_username,
+                        media_type="profile",
+                        media_title=f"Profile manifest rebuilt for {current_username}",
+                        source="playback-history",
+                        decision="REBUILD",
+                        reasoning=(
+                            "Profile Architect rebuilt this manifest from the latest playback history "
+                            "and profile enrichment inputs."
+                        ),
+                        detail_payload={
+                            "task_type": "profile_rebuild",
+                            "target_username": current_username,
+                            "run_scope": target_username or "all-users",
+                        },
+                    )
                     completed_steps += 1
                     self._update_task(
                         task.id,
@@ -1799,6 +1827,28 @@ class VanguarrService:
             finished=True,
         )
 
+        self._record_operation_log(
+            engine="library_sync",
+            username="system",
+            media_type="library",
+            media_title="Jellyfin library sync",
+            source="jellyfin",
+            decision="SYNC",
+            reasoning=summary,
+            error="; ".join(errors) if errors else None,
+            detail_payload={
+                "task_type": "library_sync",
+                "indexed": indexed,
+                "added": added,
+                "updated": updated,
+                "unchanged": unchanged,
+                "removed": removed,
+                "skipped": skipped,
+                "refreshed_users": list(refreshed_users),
+                "suggestion_refresh_state": suggestion_refresh["state"],
+            },
+        )
+
         logger.info("Library Sync finished status=%s summary=%s", status, summary)
 
         return {
@@ -2292,6 +2342,8 @@ class VanguarrService:
         direct_target = str(detail.get("target_username") or "").strip().casefold()
         if direct_target == normalized_username:
             return True
+        if not direct_target and int(detail.get("processed_users") or 0) > 0:
+            return True
 
         for key in ("processed_usernames", "updated_users", "refreshed_users"):
             values = detail.get(key)
@@ -2301,6 +2353,39 @@ class VanguarrService:
                 return True
 
         return False
+
+    def _record_operation_log(
+        self,
+        *,
+        engine: str,
+        username: str,
+        media_type: str,
+        media_title: str,
+        source: str,
+        decision: str,
+        reasoning: str,
+        error: str | None = None,
+        detail_payload: dict[str, Any] | None = None,
+    ) -> None:
+        with self.session_scope() as session:
+            session.add(
+                DecisionLog(
+                    engine=engine,
+                    username=username,
+                    media_type=media_type,
+                    media_id=0,
+                    media_title=media_title,
+                    source=source,
+                    decision=decision,
+                    confidence=1.0 if error is None else 0.0,
+                    threshold=0.0,
+                    requested=False,
+                    request_id=None,
+                    reasoning=reasoning,
+                    payload_json=json.dumps(detail_payload or {}, ensure_ascii=True),
+                    error=error,
+                )
+            )
 
     @classmethod
     def _serialize_task_run(cls, task: TaskRun | None) -> dict[str, Any]:

@@ -97,7 +97,7 @@ def test_logs_page_shows_filters_and_live_feed_controls() -> None:
         response = client.get("/logs")
 
     assert response.status_code == 200
-    assert "Live decision feed" in response.text
+    assert "Live operations feed" in response.text
     assert "Suggestions" in response.text
     assert "/api/logs" in response.text
     assert "Previous" in response.text

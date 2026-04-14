@@ -94,6 +94,47 @@ def test_task_snapshot_for_target_matches_global_run_that_processed_user() -> No
     assert snapshot["detail"]["processed_usernames"] == ["alice", "bob"]
 
 
+def test_task_snapshot_for_target_matches_global_run_without_explicit_user_list() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings()
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=TestingSessionLocal,
+    )
+
+    with TestingSessionLocal() as session:
+        session.add(
+            TaskRun(
+                engine="profile_architect",
+                status="success",
+                summary="Updated 3 profile(s).",
+                current_label="Complete",
+                detail_json=json.dumps(
+                    {
+                        "target_username": "",
+                        "processed_users": 3,
+                        "updated_users": [],
+                        "errors": [],
+                    },
+                    ensure_ascii=True,
+                ),
+            )
+        )
+        session.commit()
+
+    snapshot = service.get_task_snapshot_for_target("profile_architect", "charlie")
+
+    assert snapshot["status"] == "success"
+    assert snapshot["summary"] == "Updated 3 profile(s)."
+
+
 def test_decision_prompt_includes_viewing_history_block() -> None:
     messages = build_decision_messages(
         username="alice",
@@ -917,7 +958,7 @@ def test_get_log_feed_supports_filter_sort_and_paging(tmp_path) -> None:
     assert feed["view_counts"]["requests"] == 2
     assert feed["view_counts"]["suggestions"] == 1
     assert feed["rows"][0]["media_title"] == "Severance"
-    assert feed["rows"][0]["engine_label"] == "Suggestion"
+    assert feed["rows"][0]["engine_label"] == "Suggested For You"
 
     paged = service.get_log_feed(view="all", sort_by="created_at", sort_direction="desc", page=2, limit=2)
 
@@ -1100,10 +1141,16 @@ def test_library_sync_skips_suggestion_refresh_when_library_is_unchanged(tmp_pat
 
     result = asyncio.run(service.run_library_sync())
 
+    with session_factory() as session:
+        sync_logs = list(session.scalars(select(DecisionLog).where(DecisionLog.engine == "library_sync")))
+
     assert result["status"] == "success"
     assert result["material_changes"] == 0
     assert result["suggestion_refresh_state"] == "skipped"
     assert calls["count"] == 0
+    assert len(sync_logs) == 1
+    assert sync_logs[0].username == "system"
+    assert sync_logs[0].decision == "SYNC"
 
 
 def test_suggestion_ai_cache_reuses_existing_llm_vote(tmp_path) -> None:
@@ -1312,3 +1359,67 @@ def test_run_decision_engine_does_not_mark_noop_tv_request_as_requested(tmp_path
     assert logs[0].requested is False
     assert logs[0].request_id is None
     assert "Request outcome: No seasons available to request" in logs[0].reasoning
+
+
+def test_run_profile_architect_writes_operation_log(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    class FakeMediaServer:
+        async def list_users(self) -> list[dict]:
+            return [{"Id": "user-1", "Name": "alice"}]
+
+        async def get_playback_history(self, user_id: str, limit: int) -> list[dict]:
+            return []
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    async def passthrough_profile_summary(summary: dict, *, recommendation_seeds: list[dict]) -> dict:
+        return summary
+
+    async def fake_enrichment(username: str, compact_history: dict) -> dict:
+        return {"adjacent_genres": [], "adjacent_themes": []}
+
+    async def fake_refresh(_user: dict) -> dict:
+        return {"stored": 0, "scored": 0, "ai_scored": 0, "ai_reused": 0}
+
+    service._build_profile_history_context = lambda history, top_limit, recent_limit: {  # type: ignore[method-assign]
+        "history_count": 0,
+        "top_titles": [],
+        "recent_momentum": [],
+    }
+    service._build_recommendation_seed_pool = lambda history, profile_summary, limit: []  # type: ignore[method-assign]
+    service._enrich_profile_summary_with_tmdb = passthrough_profile_summary  # type: ignore[method-assign]
+    service._suggest_profile_enrichment = fake_enrichment  # type: ignore[method-assign]
+    service._build_profile_payload = lambda current_username, compact_history, enrichment, existing_payload: {  # type: ignore[method-assign]
+        "username": current_username,
+        "profile_state": "ready",
+        "history_count": 0,
+        "summary_block": "summary",
+    }
+    service._refresh_user_suggestions = fake_refresh  # type: ignore[method-assign]
+
+    result = asyncio.run(service.run_profile_architect("alice"))
+
+    with session_factory() as session:
+        logs = list(session.scalars(select(DecisionLog).where(DecisionLog.engine == "profile_architect")))
+
+    assert result["status"] == "success"
+    assert len(logs) == 1
+    assert logs[0].username == "alice"
+    assert logs[0].decision == "REBUILD"
+    assert "rebuilt this manifest" in logs[0].reasoning
