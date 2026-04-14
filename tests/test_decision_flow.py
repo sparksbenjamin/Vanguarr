@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 from types import SimpleNamespace
 import asyncio
+from typing import Any
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -1406,7 +1407,7 @@ def test_run_profile_architect_resolves_tv_seeds_before_tmdb_enrichment(tmp_path
     ) -> dict:
         return {"adjacent_genres": ["Mystery"], "adjacent_themes": ["found family"]}
 
-    async def fake_refresh(_user: dict) -> dict:
+    async def fake_refresh(_user: dict, progress_callback=None) -> dict:
         return {"stored": 0, "scored": 0, "ai_scored": 0, "ai_reused": 0}
 
     service._enrich_profile_summary_with_tmdb = fake_tmdb_enrichment  # type: ignore[method-assign]
@@ -1416,6 +1417,97 @@ def test_run_profile_architect_resolves_tv_seeds_before_tmdb_enrichment(tmp_path
     result = asyncio.run(service.run_profile_architect("alice"))
 
     assert result["status"] == "success"
+
+
+def test_run_profile_architect_progress_matches_layered_rebuild_flow(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    class FakeMediaServer:
+        async def list_users(self) -> list[dict]:
+            return [{"Id": "user-1", "Name": "alice"}]
+
+        async def get_playback_history(self, user_id: str, limit: int) -> list[dict]:
+            return []
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+        suggestions_enabled=True,
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    task_updates: list[dict] = []
+    original_update_task = service._update_task
+
+    def capture_update(*args, **kwargs):
+        task_updates.append(dict(kwargs))
+        return original_update_task(*args, **kwargs)
+
+    async def fake_compose(
+        username: str,
+        history: list[dict],
+        *,
+        existing_payload: dict | None = None,
+        peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
+        include_llm_enrichment: bool = True,
+        progress_callback=None,
+    ):
+        assert username == "alice"
+        if progress_callback is not None:
+            progress_callback("Building core playback profile for alice.", 1, "profile_history")
+            progress_callback("Mapping Seer neighborhoods for alice.", 2, "seer_enrichment")
+            progress_callback("Blending local similar-user lift for alice.", 3, "similar_user_enrichment")
+            progress_callback("Enriching TMDb metadata for alice.", 4, "tmdb_enrichment")
+            progress_callback("Finalizing profile manifest for alice.", 5, "profile_finalize")
+        return (
+            {
+                "username": "alice",
+                "profile_state": "ready",
+                "history_count": 1,
+                "summary_block": "summary",
+            },
+            [],
+        )
+
+    async def fake_refresh(user: dict, progress_callback=None) -> dict:
+        assert user["Name"] == "alice"
+        if progress_callback is not None:
+            progress_callback("Loading playback history for alice.", 0, {"phase": "history"})
+            progress_callback("Loading indexed library candidates for alice.", 1, {"phase": "library"})
+            progress_callback("Ranking suggestion candidates for alice.", 2, {"phase": "ranking"})
+            progress_callback("Applying AI shortlist for alice.", 3, {"phase": "ai"})
+            progress_callback("Writing stored suggestion snapshot for alice.", 4, {"phase": "storage"})
+        return {"stored": 0, "scored": 0, "ai_scored": 0, "ai_reused": 0}
+
+    service._update_task = capture_update  # type: ignore[method-assign]
+    service._compose_profile_payload = fake_compose  # type: ignore[method-assign]
+    service._refresh_user_suggestions = fake_refresh  # type: ignore[method-assign]
+
+    result = asyncio.run(service.run_profile_architect("alice"))
+
+    assert result["status"] == "success"
+    assert task_updates
+    assert task_updates[0]["progress_total"] == 11
+    assert any(update.get("summary") == "Building core playback profile for alice." for update in task_updates)
+    assert any(update.get("summary") == "Mapping Seer neighborhoods for alice." for update in task_updates)
+    assert any(update.get("summary") == "Blending local similar-user lift for alice." for update in task_updates)
+    assert any(update.get("summary") == "Enriching TMDb metadata for alice." for update in task_updates)
+    assert any(update.get("summary") == "Finalizing profile manifest for alice." for update in task_updates)
+    assert any(update.get("summary") == "Loading indexed library candidates for alice." for update in task_updates)
+    assert any(update.get("summary") == "Applying AI shortlist for alice." for update in task_updates)
+    assert task_updates[-1]["progress_total"] == 11
+    assert task_updates[-1]["progress_current"] == 11
 
 
 def test_library_sync_skips_suggestion_refresh_when_library_is_unchanged(tmp_path) -> None:
@@ -1505,7 +1597,7 @@ def test_library_sync_skips_suggestion_refresh_when_library_is_unchanged(tmp_pat
 
     calls = {"count": 0}
 
-    async def fake_refresh(_user):
+    async def fake_refresh(_user, progress_callback=None):
         calls["count"] += 1
         return {"stored": 0, "scored": 0, "ai_scored": 0, "ai_reused": 0}
 
@@ -1771,7 +1863,7 @@ def test_run_profile_architect_writes_operation_log(tmp_path) -> None:
     ) -> dict:
         return {"adjacent_genres": [], "adjacent_themes": []}
 
-    async def fake_refresh(_user: dict) -> dict:
+    async def fake_refresh(_user: dict, progress_callback=None) -> dict:
         return {"stored": 0, "scored": 0, "ai_scored": 0, "ai_reused": 0}
 
     service._build_profile_history_context = lambda history, top_limit, recent_limit: {  # type: ignore[method-assign]

@@ -665,6 +665,10 @@ class VanguarrService:
         suggestion_targets: list[dict[str, Any]] = []
         errors: list[str] = []
         rebuilt_payloads: dict[str, dict[str, Any]] = {}
+        user_step_bases: dict[str, int] = {}
+        profile_steps_per_user = 6
+        suggestion_steps_per_user = 5 if self.settings.suggestions_enabled else 0
+        steps_per_user = profile_steps_per_user + suggestion_steps_per_user
         total_steps = 0
         completed_steps = 0
 
@@ -673,7 +677,41 @@ class VanguarrService:
             if username:
                 users = [user for user in users if user.get("Name") == username]
 
-            total_steps = len(users) * (2 if self.settings.suggestions_enabled else 1)
+            total_steps = len(users) * steps_per_user
+
+            def build_detail_payload(**extra: Any) -> dict[str, Any]:
+                payload = {
+                    "target_username": target_username,
+                    "processed_users": len(updated_users),
+                    "total_users": len(users),
+                    "processed_usernames": list(processed_usernames),
+                    "updated_users": list(updated_users),
+                    "suggestion_refreshes": suggestion_refreshes,
+                    "profile_steps_per_user": profile_steps_per_user,
+                    "suggestion_steps_per_user": suggestion_steps_per_user,
+                    "errors": list(errors),
+                }
+                payload.update(extra)
+                return payload
+
+            def emit_task_progress(
+                summary_text: str,
+                *,
+                progress_value: int,
+                current_label: str,
+                phase: str,
+                detail: dict[str, Any] | None = None,
+            ) -> None:
+                self._update_task(
+                    task.id,
+                    status="running",
+                    summary=summary_text,
+                    progress_current=max(0, min(total_steps, progress_value)),
+                    progress_total=total_steps,
+                    current_label=current_label,
+                    detail_payload=build_detail_payload(phase=phase, **(detail or {})),
+                )
+
             self._update_task(
                 task.id,
                 status="running",
@@ -685,49 +723,45 @@ class VanguarrService:
                 progress_current=0,
                 progress_total=total_steps,
                 current_label=target_username or "Preparing profiles",
-                detail_payload={
-                    "target_username": target_username,
-                    "processed_users": 0,
-                    "total_users": len(users),
-                    "processed_usernames": [],
-                    "updated_users": [],
-                    "suggestion_refreshes": 0,
-                    "errors": [],
-                },
+                detail_payload=build_detail_payload(
+                    processed_users=0,
+                    processed_usernames=[],
+                    updated_users=[],
+                    suggestion_refreshes=0,
+                    phase="prepare",
+                ),
             )
 
-            for user in users:
+            for user_index, user in enumerate(users):
                 current_username = user.get("Name", "unknown")
                 if current_username not in processed_usernames:
                     processed_usernames.append(current_username)
+                user_base_step = user_index * steps_per_user
+                user_step_bases[current_username] = user_base_step
                 try:
-                    self._update_task(
-                        task.id,
-                        status="running",
-                        summary=f"Building profile manifest for {current_username}.",
-                        progress_current=completed_steps,
-                        progress_total=total_steps,
+                    emit_task_progress(
+                        f"Loading playback history for {current_username}.",
+                        progress_value=user_base_step,
                         current_label=current_username,
-                        detail_payload={
-                            "target_username": target_username,
-                            "processed_users": len(updated_users),
-                            "total_users": len(users),
-                            "processed_usernames": list(processed_usernames),
-                            "updated_users": list(updated_users),
-                            "suggestion_refreshes": suggestion_refreshes,
-                            "errors": list(errors),
-                        },
+                        phase="history_load",
                     )
                     history = await self.media_server.get_playback_history(
                         user["Id"],
                         self.settings.profile_history_limit,
                     )
+                    completed_steps = user_base_step + 1
                     stored_payload = self.profile_store.read_payload(current_username)
                     profile_payload, _recommendation_seeds = await self._compose_profile_payload(
                         current_username,
                         existing_payload=stored_payload,
                         history=history,
                         peer_payload_overrides=rebuilt_payloads,
+                        progress_callback=lambda label, step, phase: emit_task_progress(
+                            label,
+                            progress_value=user_base_step + 1 + step,
+                            current_label=current_username,
+                            phase=phase,
+                        ),
                     )
                     self.profile_store.write_payload(current_username, profile_payload)
                     rebuilt_payloads[current_username] = profile_payload
@@ -751,88 +785,54 @@ class VanguarrService:
                             "run_scope": target_username or "all-users",
                         },
                     )
-                    completed_steps += 1
-                    self._update_task(
-                        task.id,
-                        status="running",
-                        summary=f"Updated profile manifest for {current_username}.",
-                        progress_current=completed_steps,
-                        progress_total=total_steps,
+                    completed_steps = user_base_step + profile_steps_per_user
+                    emit_task_progress(
+                        f"Updated profile manifest for {current_username}.",
+                        progress_value=completed_steps,
                         current_label=current_username,
-                        detail_payload={
-                            "target_username": target_username,
-                            "processed_users": len(updated_users),
-                            "total_users": len(users),
-                            "processed_usernames": list(processed_usernames),
-                            "updated_users": list(updated_users),
-                            "suggestion_refreshes": suggestion_refreshes,
-                            "errors": list(errors),
-                        },
+                        phase="profile_saved",
                     )
                     logger.info("Profile Architect updated profile for user=%s", current_username)
                 except Exception as exc:
                     errors.append(f"{current_username}: {exc}")
                     logger.exception("Profile Architect failed for user=%s", current_username)
-                    if not self.settings.suggestions_enabled:
-                        completed_steps += 1
-                        self._update_task(
-                            task.id,
-                            status="running",
-                            summary=f"Profile Architect hit an error for {current_username}.",
-                            progress_current=completed_steps,
-                            progress_total=total_steps,
-                            current_label=current_username,
-                            detail_payload={
-                                "target_username": target_username,
-                                "processed_users": len(updated_users),
-                                "total_users": len(users),
-                                "processed_usernames": list(processed_usernames),
-                                "updated_users": list(updated_users),
-                                "suggestion_refreshes": suggestion_refreshes,
-                                "errors": list(errors),
-                            },
-                        )
+                    completed_steps = max(completed_steps, user_base_step + steps_per_user)
+                    emit_task_progress(
+                        f"Profile Architect hit an error for {current_username}.",
+                        progress_value=completed_steps,
+                        current_label=current_username,
+                        phase="profile_error",
+                    )
 
             if self.settings.suggestions_enabled:
                 for user in suggestion_targets:
                     current_username = str(user.get("Name") or "unknown")
+                    user_base_step = user_step_bases.get(current_username, 0)
+                    suggestion_base_step = user_base_step + profile_steps_per_user
                     try:
-                        self._update_task(
-                            task.id,
-                            status="running",
-                            summary=f"Refreshing suggestions for {current_username}.",
-                            progress_current=completed_steps,
-                            progress_total=total_steps,
+                        emit_task_progress(
+                            f"Refreshing suggestions for {current_username}.",
+                            progress_value=suggestion_base_step,
                             current_label=current_username,
-                            detail_payload={
-                                "target_username": target_username,
-                                "processed_users": len(updated_users),
-                                "total_users": len(users),
-                                "processed_usernames": list(processed_usernames),
-                                "updated_users": list(updated_users),
-                                "suggestion_refreshes": suggestion_refreshes,
-                                "errors": list(errors),
-                            },
+                            phase="suggestion_refresh_prepare",
                         )
-                        await self._refresh_user_suggestions(user)
+                        await self._refresh_user_suggestions(
+                            user,
+                            progress_callback=lambda label, step, detail: emit_task_progress(
+                                label,
+                                progress_value=suggestion_base_step + step + 1,
+                                current_label=current_username,
+                                phase=str(detail.get("phase") or "suggestion_refresh"),
+                                detail={"suggestion_phase": detail.get("phase")},
+                            ),
+                        )
                         suggestion_refreshes += 1
-                        completed_steps += 1
-                        self._update_task(
-                            task.id,
-                            status="running",
-                            summary=f"Refreshed suggestions for {current_username}.",
-                            progress_current=completed_steps,
-                            progress_total=total_steps,
+                        completed_steps = max(completed_steps, suggestion_base_step + suggestion_steps_per_user)
+                        emit_task_progress(
+                            f"Refreshed suggestions for {current_username}.",
+                            progress_value=completed_steps,
                             current_label=current_username,
-                            detail_payload={
-                                "target_username": target_username,
-                                "processed_users": len(updated_users),
-                                "total_users": len(users),
-                                "processed_usernames": list(processed_usernames),
-                                "updated_users": list(updated_users),
-                                "suggestion_refreshes": suggestion_refreshes,
-                                "errors": list(errors),
-                            },
+                            phase="suggestion_refresh_complete",
                         )
                     except Exception as exc:
                         errors.append(f"{current_username} suggestions: {exc}")
@@ -840,23 +840,12 @@ class VanguarrService:
                             "Profile Architect follow-up suggestion refresh failed for user=%s",
                             current_username,
                         )
-                        completed_steps += 1
-                        self._update_task(
-                            task.id,
-                            status="running",
-                            summary=f"Suggestion refresh hit an error for {current_username}.",
-                            progress_current=completed_steps,
-                            progress_total=total_steps,
+                        completed_steps = max(completed_steps, suggestion_base_step + suggestion_steps_per_user)
+                        emit_task_progress(
+                            f"Suggestion refresh hit an error for {current_username}.",
+                            progress_value=completed_steps,
                             current_label=current_username,
-                            detail_payload={
-                                "target_username": target_username,
-                                "processed_users": len(updated_users),
-                                "total_users": len(users),
-                                "processed_usernames": list(processed_usernames),
-                                "updated_users": list(updated_users),
-                                "suggestion_refreshes": suggestion_refreshes,
-                                "errors": list(errors),
-                            },
+                            phase="suggestion_refresh_error",
                         )
 
             if not users:
@@ -886,15 +875,21 @@ class VanguarrService:
             progress_current=total_steps if total_steps > 0 else completed_steps,
             progress_total=total_steps,
             current_label=target_username or ("Complete" if status == "success" else "Finished"),
-            detail_payload={
-                "target_username": target_username,
-                "processed_users": len(updated_users),
-                "total_users": len(users) if 'users' in locals() else 0,
-                "processed_usernames": list(processed_usernames),
-                "updated_users": list(updated_users),
-                "suggestion_refreshes": suggestion_refreshes,
-                "errors": list(errors),
-            },
+            detail_payload=(
+                build_detail_payload()
+                if 'users' in locals()
+                else {
+                    "target_username": target_username,
+                    "processed_users": len(updated_users),
+                    "total_users": 0,
+                    "processed_usernames": list(processed_usernames),
+                    "updated_users": list(updated_users),
+                    "suggestion_refreshes": suggestion_refreshes,
+                    "profile_steps_per_user": profile_steps_per_user,
+                    "suggestion_steps_per_user": suggestion_steps_per_user,
+                    "errors": list(errors),
+                }
+            ),
             finished=True,
         )
         self._record_operation_log(
@@ -4255,8 +4250,14 @@ class VanguarrService:
         existing_payload: dict[str, Any] | None = None,
         peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
         include_llm_enrichment: bool = True,
+        progress_callback: Callable[[str, int, str], None] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        def emit_progress(summary_text: str, step: int, phase: str) -> None:
+            if progress_callback is not None:
+                progress_callback(summary_text, step, phase)
+
         stored_payload = existing_payload if isinstance(existing_payload, dict) else self.profile_store.read_payload(username)
+        emit_progress(f"Building core playback profile for {username}.", 1, "profile_history")
         history_summary = self._build_profile_history_context(
             history,
             top_limit=self.settings.profile_architect_top_titles_limit,
@@ -4269,19 +4270,23 @@ class VanguarrService:
             limit=self.settings.recommendation_seed_limit,
         )
         recommendation_seeds = self._resolve_tv_seed_media_ids_from_library_index(recommendation_seeds)
+        emit_progress(f"Mapping Seer neighborhoods for {username}.", 2, "seer_enrichment")
         history_summary = await self._enrich_profile_summary_with_seer(
             history_summary,
             recommendation_seeds=recommendation_seeds,
         )
+        emit_progress(f"Blending local similar-user lift for {username}.", 3, "similar_user_enrichment")
         history_summary = self._enrich_profile_summary_with_similar_users(
             username,
             history_summary,
             peer_payload_overrides=peer_payload_overrides,
         )
+        emit_progress(f"Enriching TMDb metadata for {username}.", 4, "tmdb_enrichment")
         history_summary = await self._enrich_profile_summary_with_tmdb(
             history_summary,
             recommendation_seeds=recommendation_seeds,
         )
+        emit_progress(f"Finalizing profile manifest for {username}.", 5, "profile_finalize")
         heuristic_enrichment = self._build_heuristic_profile_enrichment(history_summary)
         llm_enrichment = (
             await self._suggest_profile_enrichment(
