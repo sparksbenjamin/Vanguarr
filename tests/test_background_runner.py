@@ -9,8 +9,9 @@ class FakeService:
         self.decision_calls: list[str | None] = []
         self.library_calls = 0
         self.profile_release = asyncio.Event()
+        self.operation_events: list[dict[str, str]] = []
 
-    async def run_profile_architect(self, username: str | None) -> dict[str, str]:
+    async def run_profile_architect(self, username: str | None, *, trigger_source: str = "manual") -> dict[str, str]:
         self.profile_calls.append(username)
         await self.profile_release.wait()
         return {"summary": "Profile Architect finished."}
@@ -20,10 +21,13 @@ class FakeService:
         await asyncio.sleep(0)
         return {"summary": "Decision Engine finished."}
 
-    async def run_library_sync(self) -> dict[str, str]:
+    async def run_library_sync(self, *, trigger_source: str = "manual") -> dict[str, str]:
         self.library_calls += 1
         await asyncio.sleep(0)
         return {"summary": "Library Sync finished."}
+
+    def record_operation_event(self, **payload: str) -> None:
+        self.operation_events.append(payload)
 
 
 def test_background_runner_prevents_duplicate_profile_launches() -> None:
@@ -39,6 +43,8 @@ def test_background_runner_prevents_duplicate_profile_launches() -> None:
         assert duplicate_started is False
         assert duplicate_message == "Profile Architect is already running."
         assert runner.is_running("profile_architect") is True
+        assert service.operation_events[0]["decision"] == "QUEUE"
+        assert service.operation_events[1]["decision"] == "SKIP"
 
         await asyncio.sleep(0)
         assert service.profile_calls == ["admin"]
@@ -60,6 +66,7 @@ def test_background_runner_cleans_up_completed_decision_runs() -> None:
 
         assert started is True
         assert message == "Decision Engine started in the background for all users."
+        assert service.operation_events[0]["source"] == "manual"
 
         await asyncio.sleep(0)
         await asyncio.sleep(0)
@@ -99,6 +106,8 @@ def test_background_runner_async_wrappers_launch_jobs_on_event_loop() -> None:
         assert library_message == "Library Sync started in the background for the Jellyfin library."
         assert decision_started is True
         assert decision_message == "Decision Engine started in the background for all users."
+        assert service.operation_events[0]["source"] == "scheduler"
+        assert service.operation_events[1]["source"] == "scheduler"
 
         await asyncio.sleep(0)
         await asyncio.sleep(0)

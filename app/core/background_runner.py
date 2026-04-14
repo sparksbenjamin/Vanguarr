@@ -17,49 +17,68 @@ class BackgroundEngineRunner:
         self.service = service
         self._tasks: dict[str, asyncio.Task[Any]] = {}
 
-    def launch_profile_architect(self, username: str | None = None) -> tuple[bool, str]:
+    def launch_profile_architect(
+        self,
+        username: str | None = None,
+        *,
+        source: str = "manual",
+    ) -> tuple[bool, str]:
         return self._launch(
             engine_name="profile_architect",
             label="Profile Architect",
             target=username,
-            job_factory=lambda: self.service.run_profile_architect(username),
+            source=source,
+            job_factory=lambda: self.service.run_profile_architect(username, trigger_source=source),
         )
 
     async def launch_profile_architect_async(self, username: str | None = None) -> tuple[bool, str]:
-        return self.launch_profile_architect(username)
+        return self.launch_profile_architect(username, source="scheduler")
 
-    def launch_decision_engine(self, username: str | None = None) -> tuple[bool, str]:
+    def launch_decision_engine(
+        self,
+        username: str | None = None,
+        *,
+        source: str = "manual",
+    ) -> tuple[bool, str]:
         return self._launch(
             engine_name="decision_engine",
             label="Decision Engine",
             target=username,
+            source=source,
             job_factory=lambda: self.service.run_decision_engine(username),
         )
 
     async def launch_decision_engine_async(self, username: str | None = None) -> tuple[bool, str]:
-        return self.launch_decision_engine(username)
+        return self.launch_decision_engine(username, source="scheduler")
 
-    def launch_suggested_for_you(self, username: str | None = None) -> tuple[bool, str]:
+    def launch_suggested_for_you(
+        self,
+        username: str | None = None,
+        *,
+        source: str = "manual",
+    ) -> tuple[bool, str]:
         return self._launch(
             engine_name="suggested_for_you",
             label="Suggested For You",
             target=username,
+            source=source,
             job_factory=lambda: self.service.run_suggested_for_you(username),
         )
 
     async def launch_suggested_for_you_async(self, username: str | None = None) -> tuple[bool, str]:
-        return self.launch_suggested_for_you(username)
+        return self.launch_suggested_for_you(username, source="scheduler")
 
-    def launch_library_sync(self) -> tuple[bool, str]:
+    def launch_library_sync(self, *, source: str = "manual") -> tuple[bool, str]:
         return self._launch(
             engine_name="library_sync",
             label="Library Sync",
             target="the Jellyfin library",
-            job_factory=self.service.run_library_sync,
+            source=source,
+            job_factory=lambda: self.service.run_library_sync(trigger_source=source),
         )
 
     async def launch_library_sync_async(self) -> tuple[bool, str]:
-        return self.launch_library_sync()
+        return self.launch_library_sync(source="scheduler")
 
     def is_running(self, engine_name: str) -> bool:
         task = self._tasks.get(engine_name)
@@ -89,11 +108,26 @@ class BackgroundEngineRunner:
         engine_name: str,
         label: str,
         target: str | None,
+        source: str,
         job_factory: Callable[[], Awaitable[dict[str, Any]]],
     ) -> tuple[bool, str]:
         existing_task = self._tasks.get(engine_name)
         if existing_task is not None and not existing_task.done():
             logger.info("%s launch skipped because a run is already in progress.", label)
+            self.service.record_operation_event(
+                engine=engine_name,
+                username=str(target or "system"),
+                media_type="task",
+                media_title=f"{label} launch skipped",
+                source=source,
+                decision="SKIP",
+                reasoning=f"{label} did not start because another run is already in progress.",
+                detail_payload={
+                    "event": "launch_skipped",
+                    "trigger": source,
+                    "target": target or "all-users",
+                },
+            )
             return False, f"{label} is already running."
 
         task = asyncio.create_task(job_factory(), name=f"vanguarr:{engine_name}")
@@ -102,6 +136,20 @@ class BackgroundEngineRunner:
 
         target_label = target or "all users"
         logger.info("%s queued in the background for target=%s", label, target_label)
+        self.service.record_operation_event(
+            engine=engine_name,
+            username=str(target or "system"),
+            media_type="task",
+            media_title=f"{label} queued",
+            source=source,
+            decision="QUEUE",
+            reasoning=f"{label} was queued to run in the background for {target_label}.",
+            detail_payload={
+                "event": "launch_queued",
+                "trigger": source,
+                "target": target or "all-users",
+            },
+        )
         return True, f"{label} started in the background for {target_label}."
 
     def _handle_completion(self, engine_name: str, label: str, task: asyncio.Task[Any]) -> None:

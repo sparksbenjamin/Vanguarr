@@ -643,7 +643,12 @@ class VanguarrService:
             "profile_cards": self.get_profile_cards(limit=6),
         }
 
-    async def run_profile_architect(self, username: str | None = None) -> dict[str, Any]:
+    async def run_profile_architect(
+        self,
+        username: str | None = None,
+        *,
+        trigger_source: str = "manual",
+    ) -> dict[str, Any]:
         logger.info("Profile Architect started for target=%s", username or "all-users")
         with self.session_scope() as session:
             task = self._start_task(session, "profile_architect")
@@ -901,6 +906,29 @@ class VanguarrService:
                 "errors": list(errors),
             },
             finished=True,
+        )
+        self._record_operation_log(
+            engine="profile_architect",
+            username=target_username or "system",
+            media_type="profile",
+            media_title=(
+                f"Profile Architect run for {target_username}"
+                if target_username
+                else "Profile Architect run for all users"
+            ),
+            source=trigger_source,
+            decision="RUN",
+            reasoning=summary,
+            error="; ".join(errors) if errors else None,
+            detail_payload={
+                "task_type": "profile_architect_run",
+                "run_scope": target_username or "all-users",
+                "trigger": trigger_source,
+                "updated_users": list(updated_users),
+                "processed_usernames": list(processed_usernames),
+                "suggestion_refreshes": suggestion_refreshes,
+                "status": status,
+            },
         )
 
         logger.info("Profile Architect finished status=%s summary=%s", status, summary)
@@ -1531,7 +1559,7 @@ class VanguarrService:
             "errors": errors,
         }
 
-    async def run_library_sync(self) -> dict[str, Any]:
+    async def run_library_sync(self, *, trigger_source: str = "manual") -> dict[str, Any]:
         logger.info("Library Sync started.")
         with self.session_scope() as session:
             task = self._start_task(session, "library_sync")
@@ -1838,6 +1866,7 @@ class VanguarrService:
             error="; ".join(errors) if errors else None,
             detail_payload={
                 "task_type": "library_sync",
+                "trigger": trigger_source,
                 "indexed": indexed,
                 "added": added,
                 "updated": updated,
@@ -2386,6 +2415,31 @@ class VanguarrService:
                     error=error,
                 )
             )
+
+    def record_operation_event(
+        self,
+        *,
+        engine: str,
+        username: str,
+        media_type: str,
+        media_title: str,
+        source: str,
+        decision: str,
+        reasoning: str,
+        error: str | None = None,
+        detail_payload: dict[str, Any] | None = None,
+    ) -> None:
+        self._record_operation_log(
+            engine=engine,
+            username=username,
+            media_type=media_type,
+            media_title=media_title,
+            source=source,
+            decision=decision,
+            reasoning=reasoning,
+            error=error,
+            detail_payload=detail_payload,
+        )
 
     @classmethod
     def _serialize_task_run(cls, task: TaskRun | None) -> dict[str, Any]:
@@ -3002,6 +3056,19 @@ class VanguarrService:
             matched_recent=matched_recent,
             matched_discovery=matched_discovery,
             ranked_genres=profile_summary.get("ranked_genres", []),
+        )
+        score_breakdown["genre_guardrail"] = cls._score_genre_guardrail(
+            candidate_genres=candidate_genres,
+            matched_primary=matched_primary,
+            matched_secondary=matched_secondary,
+            matched_recent=matched_recent,
+            matched_discovery=matched_discovery,
+            primary_genres=primary_genres,
+            secondary_genres=secondary_genres,
+            recent_genres=recent_genres,
+            discovery_lanes=discovery_lanes,
+            ranked_genres=profile_summary.get("ranked_genres", []),
+            genre_focus_share=profile_summary.get("genre_focus_share"),
         )
         score_breakdown["format_fit"] = cls._score_format_fit(
             candidate_media_type=str(candidate.get("media_type") or ""),
@@ -4310,6 +4377,73 @@ class VanguarrService:
                 rank_bonus += min(0.04, weighted_score / 40.0)
         score += min(0.08, rank_bonus)
         return min(0.38, score)
+
+    @classmethod
+    def _score_genre_guardrail(
+        cls,
+        *,
+        candidate_genres: list[str],
+        matched_primary: list[str],
+        matched_secondary: list[str],
+        matched_recent: list[str],
+        matched_discovery: list[str],
+        primary_genres: list[str],
+        secondary_genres: list[str],
+        recent_genres: list[str],
+        discovery_lanes: list[str],
+        ranked_genres: list[dict[str, Any]],
+        genre_focus_share: Any,
+    ) -> float:
+        if not candidate_genres:
+            return 0.0
+
+        if matched_primary or matched_secondary or matched_recent or matched_discovery:
+            return 0.0
+
+        try:
+            focus_share = max(0.0, min(1.0, float(genre_focus_share or 0.0)))
+        except (TypeError, ValueError):
+            focus_share = 0.0
+
+        if focus_share < 0.35 and not primary_genres and not recent_genres:
+            return 0.0
+
+        candidate_set = {genre.lower() for genre in candidate_genres}
+        preference_genres = cls._merge_unique_strings(primary_genres, secondary_genres)
+        preference_genres = cls._merge_unique_strings(preference_genres, recent_genres)
+        preference_genres = cls._merge_unique_strings(preference_genres, discovery_lanes)
+        preference_set = {genre.lower() for genre in preference_genres}
+        ranked_lookup = {
+            str(item.get("genre") or "").strip().lower(): float(item.get("weighted_score") or 0.0)
+            for item in ranked_genres
+            if isinstance(item, dict) and str(item.get("genre") or "").strip()
+        }
+
+        if candidate_set & preference_set:
+            return 0.0
+
+        ranked_overlap = [genre for genre in candidate_set if genre in ranked_lookup]
+        if ranked_overlap:
+            strongest_overlap = max(ranked_lookup.get(genre, 0.0) for genre in ranked_overlap)
+            if strongest_overlap >= 1.5:
+                return 0.0
+
+        penalty = 0.0
+        if focus_share >= 0.7:
+            penalty -= 0.14
+        elif focus_share >= 0.55:
+            penalty -= 0.1
+        elif focus_share >= 0.45:
+            penalty -= 0.07
+        else:
+            penalty -= 0.04
+
+        if preference_set and len(candidate_set) >= 2:
+            penalty -= 0.02
+        if ranked_lookup and not ranked_overlap:
+            penalty -= 0.03
+
+        return max(-0.18, round(penalty, 3))
 
     @staticmethod
     def _score_format_fit(candidate_media_type: str, format_preference: dict[str, Any]) -> float:

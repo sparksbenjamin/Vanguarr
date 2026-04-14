@@ -537,6 +537,66 @@ def test_candidate_pool_ranking_favors_anchor_and_genre_overlap() -> None:
     assert ranked[0]["recommendation_features"]["collection_match"] == "Alpha Saga"
 
 
+def test_candidate_pool_penalizes_strong_off_profile_genre_mismatch() -> None:
+    profile_summary = {
+        "primary_genres": ["Drama", "Crime", "History"],
+        "secondary_genres": ["Thriller"],
+        "recent_genres": ["Drama", "Crime"],
+        "discovery_lanes": ["Mystery"],
+        "adjacent_genres": ["Biography"],
+        "genre_focus_share": 0.76,
+        "format_preference": {"preferred": "tv", "movie_plays": 1, "tv_plays": 8},
+        "release_year_preference": {"bias": "balanced", "average_year": 2020},
+        "ranked_genres": [
+            {"genre": "Drama", "raw_count": 8, "recent_count": 4, "weighted_score": 9.2},
+            {"genre": "Crime", "raw_count": 6, "recent_count": 3, "weighted_score": 7.6},
+            {"genre": "History", "raw_count": 3, "recent_count": 1, "weighted_score": 3.5},
+        ],
+        "explicit_feedback": {"liked_titles": [], "disliked_titles": [], "liked_genres": [], "disliked_genres": []},
+    }
+    candidates = [
+        {
+            "media_type": "tv",
+            "media_id": 501,
+            "title": "Courtroom Echoes",
+            "genres": ["Drama", "Crime"],
+            "rating": 8.1,
+            "vote_count": 600,
+            "popularity": 120,
+            "release_date": "2022-05-01",
+            "sources": ["similar:Prestige Drama"],
+            "source_lanes": ["top_seed"],
+            "tmdb_details": {"adult": False},
+            "media_info": {},
+        },
+        {
+            "media_type": "tv",
+            "media_id": 502,
+            "title": "Mecha Academy",
+            "genres": ["Animation", "Anime", "Action"],
+            "rating": 8.6,
+            "vote_count": 900,
+            "popularity": 200,
+            "release_date": "2023-01-10",
+            "sources": ["trending"],
+            "source_lanes": ["trending_lane"],
+            "tmdb_details": {"adult": False},
+            "media_info": {},
+        },
+    ]
+
+    ranked = VanguarrService._rank_candidate_pool(candidates, profile_summary=profile_summary)
+
+    assert ranked[0]["title"] == "Courtroom Echoes"
+    assert ranked[1]["title"] == "Mecha Academy"
+    assert ranked[1]["recommendation_features"]["score_breakdown"]["genre_guardrail"] < 0
+    assert ranked[0]["recommendation_features"]["score_breakdown"]["genre_guardrail"] == 0
+    assert (
+        ranked[1]["recommendation_features"]["deterministic_score"]
+        < ranked[0]["recommendation_features"]["deterministic_score"]
+    )
+
+
 def test_build_recommendation_seed_pool_blends_behavior_lanes() -> None:
     history = [
         {
@@ -1419,7 +1479,6 @@ def test_run_profile_architect_writes_operation_log(tmp_path) -> None:
         logs = list(session.scalars(select(DecisionLog).where(DecisionLog.engine == "profile_architect")))
 
     assert result["status"] == "success"
-    assert len(logs) == 1
-    assert logs[0].username == "alice"
-    assert logs[0].decision == "REBUILD"
-    assert "rebuilt this manifest" in logs[0].reasoning
+    assert len(logs) == 2
+    assert any(log.username == "alice" and log.decision == "REBUILD" for log in logs)
+    assert any(log.decision == "RUN" and log.source == "manual" and "Updated 1 profile(s)" in log.reasoning for log in logs)
