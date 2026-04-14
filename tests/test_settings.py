@@ -1,3 +1,4 @@
+from app.api.tmdb import TMDbClient
 from app.core.settings import LLMProviderSettings, Settings
 
 
@@ -80,6 +81,12 @@ def test_blank_tmdb_credentials_become_none() -> None:
 
     assert settings.tmdb_api_read_access_token is None
     assert settings.tmdb_api_key is None
+
+
+def test_tmdb_client_is_enabled_with_api_key() -> None:
+    settings = Settings(tmdb_api_key="test-key")
+
+    assert TMDbClient(settings).enabled is True
 
 
 def test_blank_suggestion_tokens_become_none() -> None:

@@ -147,6 +147,11 @@ class ProfileStore:
             "discovery_lanes": [],
             "adjacent_genres": [],
             "adjacent_themes": [],
+            "seer_adjacent_titles": [],
+            "seer_adjacent_genres": [],
+            "similar_users": [],
+            "similar_user_genres": [],
+            "similar_user_titles": [],
             "seed_lanes": [],
             "explicit_feedback": {
                 "liked_titles": [],
@@ -659,6 +664,7 @@ class VanguarrService:
         suggestion_refreshes = 0
         suggestion_targets: list[dict[str, Any]] = []
         errors: list[str] = []
+        rebuilt_payloads: dict[str, dict[str, Any]] = {}
         total_steps = 0
         completed_steps = 0
 
@@ -717,31 +723,14 @@ class VanguarrService:
                         self.settings.profile_history_limit,
                     )
                     stored_payload = self.profile_store.read_payload(current_username)
-                    compact_history = self._build_profile_history_context(
-                        history,
-                        top_limit=self.settings.profile_architect_top_titles_limit,
-                        recent_limit=self.settings.profile_architect_recent_momentum_limit,
-                    )
-                    recommendation_seeds = self._build_recommendation_seed_pool(
-                        history,
-                        profile_summary=compact_history,
-                        limit=self.settings.recommendation_seed_limit,
-                    )
-                    compact_history = await self._enrich_profile_summary_with_tmdb(
-                        compact_history,
-                        recommendation_seeds=recommendation_seeds,
-                    )
-                    enrichment = await self._suggest_profile_enrichment(
+                    profile_payload, _recommendation_seeds = await self._compose_profile_payload(
                         current_username,
-                        compact_history,
-                    )
-                    profile_payload = self._build_profile_payload(
-                        current_username,
-                        compact_history,
-                        enrichment=enrichment,
                         existing_payload=stored_payload,
+                        history=history,
+                        peer_payload_overrides=rebuilt_payloads,
                     )
                     self.profile_store.write_payload(current_username, profile_payload)
+                    rebuilt_payloads[current_username] = profile_payload
                     updated_users.append(current_username)
                     suggestion_targets.append(user)
                     self._record_operation_log(
@@ -753,7 +742,8 @@ class VanguarrService:
                         decision="REBUILD",
                         reasoning=(
                             "Profile Architect rebuilt this manifest from the latest playback history "
-                            "and profile enrichment inputs."
+                            "plus Seer neighborhoods, local similar-user lift, TMDb metadata, "
+                            "and LLM adjacent-lane synthesis."
                         ),
                         detail_payload={
                             "task_type": "profile_rebuild",
@@ -1019,36 +1009,13 @@ class VanguarrService:
                         user["Id"],
                         self.settings.profile_history_limit,
                     )
-                    history_summary = self._build_profile_history_context(
-                        history,
-                        top_limit=self.settings.profile_architect_top_titles_limit,
-                        recent_limit=self.settings.profile_architect_recent_momentum_limit,
-                    )
                     stored_profile = self.profile_store.read_payload(current_username)
-                    recommendation_seeds = self._build_recommendation_seed_pool(
-                        history,
-                        profile_summary=history_summary,
-                        limit=self.settings.recommendation_seed_limit,
-                    )
-                    recommendation_seeds = self._resolve_tv_seed_media_ids_from_library_index(
-                        recommendation_seeds
-                    )
-                    history_summary = await self._enrich_profile_summary_with_tmdb(
-                        history_summary,
-                        recommendation_seeds=recommendation_seeds,
-                    )
-                    profile_payload = self._build_profile_payload(
+                    profile_payload, recommendation_seeds, should_persist = await self._prepare_runtime_profile_payload(
                         current_username,
-                        history_summary,
-                        enrichment={
-                            "adjacent_genres": stored_profile.get("adjacent_genres", []),
-                            "adjacent_themes": stored_profile.get("adjacent_themes", []),
-                        },
+                        history,
                         existing_payload=stored_profile,
                     )
-                    if not ProfileStore.is_structured_payload(stored_profile) and int(
-                        profile_payload.get("history_count") or 0
-                    ) > 0:
+                    if should_persist:
                         self.profile_store.write_payload(current_username, profile_payload)
                     completed_steps += 1
                     self._update_task(
@@ -2008,32 +1975,12 @@ class VanguarrService:
             self.settings.profile_history_limit,
         )
         stored_profile = self.profile_store.read_payload(current_username)
-        history_summary = self._build_profile_history_context(
-            history,
-            top_limit=self.settings.profile_architect_top_titles_limit,
-            recent_limit=self.settings.profile_architect_recent_momentum_limit,
-        )
-        recommendation_seeds = self._build_recommendation_seed_pool(
-            history,
-            profile_summary=history_summary,
-            limit=self.settings.recommendation_seed_limit,
-        )
-        history_summary = await self._enrich_profile_summary_with_tmdb(
-            history_summary,
-            recommendation_seeds=recommendation_seeds,
-        )
-        profile_payload = self._build_profile_payload(
+        profile_payload, recommendation_seeds, should_persist = await self._prepare_runtime_profile_payload(
             current_username,
-            history_summary,
-            enrichment={
-                "adjacent_genres": stored_profile.get("adjacent_genres", []),
-                "adjacent_themes": stored_profile.get("adjacent_themes", []),
-            },
+            history,
             existing_payload=stored_profile,
         )
-        if not ProfileStore.is_structured_payload(stored_profile) and int(
-            profile_payload.get("history_count") or 0
-        ) > 0:
+        if should_persist:
             self.profile_store.write_payload(current_username, profile_payload)
 
         emit_progress(f"Loading indexed library candidates for {current_username}.", 1, "library")
@@ -2512,8 +2459,6 @@ class VanguarrService:
         recent_window: int = 12,
     ) -> dict[str, Any]:
         grouped: dict[tuple[str, str], dict[str, Any]] = {}
-        genre_counts: Counter[str] = Counter()
-        recent_genre_counts: Counter[str] = Counter()
         media_type_counts: Counter[str] = Counter()
         genre_pairs: Counter[tuple[str, str]] = Counter()
         release_years: list[int] = []
@@ -2534,6 +2479,7 @@ class VanguarrService:
                     "community_rating": item.get("CommunityRating"),
                     "last_played": None,
                     "_last_played_score": 0.0,
+                    "release_year": None,
                 },
             )
 
@@ -2549,20 +2495,9 @@ class VanguarrService:
                 grouped_entry["last_played"] = last_played
                 grouped_entry["_last_played_score"] = last_played_score
 
-            if media_type in {"movie", "tv"}:
-                media_type_counts[media_type] += 1
-
             release_year = cls._extract_history_release_year(item)
-            if release_year is not None:
-                release_years.append(release_year)
-
-            for genre in genres:
-                genre_counts[genre] += 1
-
-            for source_genre in genres:
-                for target_genre in genres:
-                    if source_genre != target_genre:
-                        genre_pairs[(source_genre, target_genre)] += 1
+            if release_year is not None and grouped_entry.get("release_year") is None:
+                grouped_entry["release_year"] = release_year
 
         for item in history[:recent_window]:
             media_type = cls._map_history_media_type(item.get("Type")) or "other"
@@ -2592,11 +2527,40 @@ class VanguarrService:
             if last_played_score >= recent_entry["_last_played_score"]:
                 recent_entry["last_played"] = last_played
                 recent_entry["_last_played_score"] = last_played_score
-            for genre in genres:
-                recent_genre_counts[genre] += 1
 
         top_titles = cls._sort_profile_entries(list(grouped.values()))
         recent_momentum = cls._sort_profile_entries(list(recent_grouped.values()))
+
+        genre_counts: Counter[str] = Counter()
+        genre_title_counts: Counter[str] = Counter()
+        recent_genre_counts: Counter[str] = Counter()
+        recent_genre_title_counts: Counter[str] = Counter()
+
+        for entry in grouped.values():
+            entry_genres = cls._normalize_genres(entry.get("genres", []), limit=6)
+            signal_weight = cls._profile_signal_weight(entry.get("play_count"))
+            media_type = str(entry.get("media_type") or "")
+            if media_type in {"movie", "tv"}:
+                media_type_counts[media_type] += 1
+
+            release_year = cls._coerce_int(entry.get("release_year"))
+            if release_year is not None:
+                release_years.append(release_year)
+
+            for genre in entry_genres:
+                genre_counts[genre] += signal_weight
+                genre_title_counts[genre] += 1
+
+            for source_genre in entry_genres:
+                for target_genre in entry_genres:
+                    if source_genre != target_genre:
+                        genre_pairs[(source_genre, target_genre)] += signal_weight
+
+        for entry in recent_grouped.values():
+            entry_genres = cls._normalize_genres(entry.get("genres", []), limit=5)
+            for genre in entry_genres:
+                recent_genre_counts[genre] += 1
+                recent_genre_title_counts[genre] += 1
 
         normalized_top_titles = [cls._clean_profile_entry(item) for item in top_titles[:top_limit]]
         normalized_recent_momentum = [cls._clean_profile_entry(item) for item in recent_momentum[:recent_limit]]
@@ -2608,17 +2572,17 @@ class VanguarrService:
         ranked_genre_details = [
             {
                 "genre": genre,
-                "raw_count": int(genre_counts.get(genre, 0)),
-                "recent_count": int(recent_genre_counts.get(genre, 0)),
+                "raw_count": int(genre_title_counts.get(genre, 0)),
+                "recent_count": int(recent_genre_title_counts.get(genre, 0)),
                 "weighted_score": round(score, 3),
             }
             for genre, score in ranked_genres[:8]
         ]
 
-        total_genre_events = sum(genre_counts.values())
+        total_genre_events = sum(float(count) for count in genre_counts.values())
         focus_share = 0.0
         if total_genre_events and primary_genres:
-            focus_share = sum(genre_counts[genre] for genre in primary_genres[:3]) / total_genre_events
+            focus_share = sum(float(genre_counts[genre]) for genre in primary_genres[:3]) / total_genre_events
 
         return {
             "history_count": len(history),
@@ -2908,6 +2872,11 @@ class VanguarrService:
             "discovery_lanes": summary.get("discovery_lanes", []),
             "adjacent_genres": summary.get("adjacent_genres", []),
             "adjacent_themes": summary.get("adjacent_themes", []),
+            "seer_adjacent_titles": summary.get("seer_adjacent_titles", [])[:4],
+            "seer_adjacent_genres": summary.get("seer_adjacent_genres", [])[:4],
+            "similar_users": summary.get("similar_users", [])[:3],
+            "similar_user_genres": summary.get("similar_user_genres", [])[:4],
+            "similar_user_titles": summary.get("similar_user_titles", [])[:4],
             "seed_lanes": summary.get("seed_lanes", []),
             "top_keywords": summary.get("top_keywords", [])[:8],
             "favorite_people": summary.get("favorite_people", [])[:6],
@@ -2924,6 +2893,8 @@ class VanguarrService:
         )
         recent_genres = cls._normalize_genres(profile_summary.get("recent_genres", []), limit=2)
         adjacent_genres = cls._normalize_genres(profile_summary.get("adjacent_genres", []), limit=2)
+        seer_adjacent_genres = cls._normalize_genres(profile_summary.get("seer_adjacent_genres", []), limit=2)
+        similar_user_genres = cls._normalize_genres(profile_summary.get("similar_user_genres", []), limit=2)
         preferred_media_type = str((profile_summary.get("format_preference") or {}).get("preferred") or "balanced")
         media_types = ["tv", "movie"] if preferred_media_type == "tv" else ["movie", "tv"]
         if preferred_media_type == "balanced":
@@ -2935,6 +2906,8 @@ class VanguarrService:
             (primary_genres, "primary_genre_seed"),
             (recent_genres, "recent_genre_seed"),
             (adjacent_genres, "adjacent_genre_seed"),
+            (seer_adjacent_genres, "seer_genre_seed"),
+            (similar_user_genres, "similar_user_genre_seed"),
         ):
             for genre in genres:
                 lowered = genre.lower()
@@ -3006,10 +2979,7 @@ class VanguarrService:
         primary_genres = cls._normalize_genres(profile_summary.get("primary_genres", []), limit=6)
         secondary_genres = cls._normalize_genres(profile_summary.get("secondary_genres", []), limit=6)
         recent_genres = cls._normalize_genres(profile_summary.get("recent_genres", []), limit=6)
-        discovery_lanes = cls._merge_unique_strings(
-            cls._normalize_genres(profile_summary.get("discovery_lanes", []), limit=6),
-            profile_summary.get("adjacent_genres", []),
-        )[:6]
+        discovery_lanes = cls._profile_extension_genres(profile_summary, limit=6)
         source_lanes = cls._normalize_string_list(candidate.get("source_lanes", []), limit=6)
         tmdb_details = candidate.get("tmdb_details", {}) if isinstance(candidate.get("tmdb_details"), dict) else {}
         candidate_keywords = cls._normalize_string_list(tmdb_details.get("keywords", []), limit=10)
@@ -3312,6 +3282,11 @@ class VanguarrService:
                 "recent_genres": profile_payload.get("recent_genres", []),
                 "adjacent_genres": profile_payload.get("adjacent_genres", []),
                 "adjacent_themes": profile_payload.get("adjacent_themes", []),
+                "seer_adjacent_titles": profile_payload.get("seer_adjacent_titles", []),
+                "seer_adjacent_genres": profile_payload.get("seer_adjacent_genres", []),
+                "similar_users": profile_payload.get("similar_users", []),
+                "similar_user_genres": profile_payload.get("similar_user_genres", []),
+                "similar_user_titles": profile_payload.get("similar_user_titles", []),
                 "repeat_titles": profile_payload.get("repeat_titles", []),
                 "recent_momentum": profile_payload.get("recent_momentum", []),
                 "format_preference": profile_payload.get("format_preference", {}),
@@ -3323,6 +3298,11 @@ class VanguarrService:
                 "recent_momentum": viewing_history.get("recent_momentum", []),
                 "repeat_titles": viewing_history.get("repeat_titles", []),
                 "primary_genres": viewing_history.get("primary_genres", []),
+                "seer_adjacent_titles": viewing_history.get("seer_adjacent_titles", []),
+                "seer_adjacent_genres": viewing_history.get("seer_adjacent_genres", []),
+                "similar_users": viewing_history.get("similar_users", []),
+                "similar_user_genres": viewing_history.get("similar_user_genres", []),
+                "similar_user_titles": viewing_history.get("similar_user_titles", []),
                 "top_keywords": viewing_history.get("top_keywords", []),
                 "favorite_people": viewing_history.get("favorite_people", []),
                 "preferred_brands": viewing_history.get("preferred_brands", []),
@@ -3471,15 +3451,25 @@ class VanguarrService:
         self,
         username: str,
         history_summary: dict[str, Any],
+        *,
+        existing_payload: dict[str, Any] | None = None,
     ) -> dict[str, list[str]]:
         if not self.settings.profile_llm_enrichment_enabled:
             return {}
         if int(history_summary.get("history_count") or 0) == 0:
             return {}
 
+        prompt_summary = dict(history_summary)
+        existing = existing_payload if isinstance(existing_payload, dict) else {}
+        prompt_summary["explicit_feedback"] = self._normalize_explicit_feedback(existing.get("explicit_feedback", {}))
+        prompt_summary["profile_exclusions"] = self._normalize_string_list(existing.get("profile_exclusions", []), limit=8)
+        prompt_summary["operator_notes"] = str(existing.get("operator_notes") or "").strip()
+        prompt_summary["adjacent_genres"] = self._normalize_string_list(existing.get("adjacent_genres", []), limit=4)
+        prompt_summary["adjacent_themes"] = self._normalize_string_list(existing.get("adjacent_themes", []), limit=3)
+
         try:
             payload = await self.llm.generate_json(
-                messages=build_profile_enrichment_messages(username, history_summary),
+                messages=build_profile_enrichment_messages(username, prompt_summary),
                 temperature=0.1,
                 purpose="profile_enrichment",
             )
@@ -3487,18 +3477,25 @@ class VanguarrService:
             logger.warning("Profile enrichment skipped for user=%s reason=%s", username, exc)
             return {}
 
-        primary_genres = {
-            genre.lower()
-            for genre in history_summary.get("primary_genres", [])
-            if isinstance(genre, str) and genre.strip()
-        }
+        blocked_genres = self._blocked_profile_genres(
+            prompt_summary,
+            extra_genres=prompt_summary.get("adjacent_genres", []),
+        )
         adjacent_genres: list[str] = []
         for raw in payload.get("adjacent_genres", []):
             value = str(raw).strip()
-            if value and value.lower() not in primary_genres:
+            if value and value.lower() not in blocked_genres:
                 adjacent_genres.append(value)
 
-        adjacent_themes = [str(raw).strip() for raw in payload.get("adjacent_themes", []) if str(raw).strip()]
+        existing_adjacent_themes = {
+            value.lower()
+            for value in self._normalize_string_list(prompt_summary.get("adjacent_themes", []), limit=3)
+        }
+        adjacent_themes = [
+            str(raw).strip()
+            for raw in payload.get("adjacent_themes", [])
+            if str(raw).strip() and str(raw).strip().lower() not in existing_adjacent_themes
+        ]
         return {
             "adjacent_genres": self._merge_unique_strings([], adjacent_genres)[:3],
             "adjacent_themes": self._merge_unique_strings([], adjacent_themes)[:2],
@@ -3659,14 +3656,23 @@ class VanguarrService:
         payload["favorite_people"] = cls._normalize_string_list(payload.get("favorite_people", []), limit=6)
         payload["preferred_brands"] = cls._normalize_string_list(payload.get("preferred_brands", []), limit=6)
         payload["favorite_collections"] = cls._normalize_string_list(payload.get("favorite_collections", []), limit=4)
-        payload["adjacent_genres"] = cls._merge_unique_strings(
-            cls._normalize_string_list(existing.get("adjacent_genres", []), limit=4),
-            (enrichment or {}).get("adjacent_genres", []),
-        )[:4]
-        payload["adjacent_themes"] = cls._merge_unique_strings(
-            cls._normalize_string_list(existing.get("adjacent_themes", []), limit=3),
-            (enrichment or {}).get("adjacent_themes", []),
-        )[:3]
+        payload["seer_adjacent_titles"] = cls._normalize_string_list(payload.get("seer_adjacent_titles", []), limit=4)
+        payload["seer_adjacent_genres"] = cls._normalize_string_list(payload.get("seer_adjacent_genres", []), limit=4)
+        payload["similar_users"] = cls._normalize_string_list(payload.get("similar_users", []), limit=3)
+        payload["similar_user_genres"] = cls._normalize_string_list(payload.get("similar_user_genres", []), limit=4)
+        payload["similar_user_titles"] = cls._normalize_string_list(payload.get("similar_user_titles", []), limit=4)
+        if enrichment is None or enrichment == {}:
+            payload["adjacent_genres"] = cls._normalize_string_list(existing.get("adjacent_genres", []), limit=4)
+            payload["adjacent_themes"] = cls._normalize_string_list(existing.get("adjacent_themes", []), limit=3)
+        else:
+            payload["adjacent_genres"] = cls._normalize_string_list(
+                (enrichment or {}).get("adjacent_genres", []),
+                limit=4,
+            )
+            payload["adjacent_themes"] = cls._normalize_string_list(
+                (enrichment or {}).get("adjacent_themes", []),
+                limit=3,
+            )
         payload["seed_lanes"] = cls._build_profile_seed_lanes(payload)
         payload["format_preference"] = cls._normalize_format_preference(payload.get("format_preference", {}))
         payload["release_year_preference"] = cls._normalize_release_year_preference(
@@ -3711,6 +3717,11 @@ class VanguarrService:
             normalized.get("favorite_collections", []),
             limit=4,
         )
+        normalized["seer_adjacent_titles"] = cls._normalize_string_list(normalized.get("seer_adjacent_titles", []), limit=4)
+        normalized["seer_adjacent_genres"] = cls._normalize_string_list(normalized.get("seer_adjacent_genres", []), limit=4)
+        normalized["similar_users"] = cls._normalize_string_list(normalized.get("similar_users", []), limit=3)
+        normalized["similar_user_genres"] = cls._normalize_string_list(normalized.get("similar_user_genres", []), limit=4)
+        normalized["similar_user_titles"] = cls._normalize_string_list(normalized.get("similar_user_titles", []), limit=4)
         normalized["adjacent_genres"] = cls._normalize_string_list(normalized.get("adjacent_genres", []), limit=4)
         normalized["adjacent_themes"] = cls._normalize_string_list(normalized.get("adjacent_themes", []), limit=3)
         normalized["seed_lanes"] = cls._normalize_string_list(normalized.get("seed_lanes", []), limit=8)
@@ -4029,6 +4040,9 @@ class VanguarrService:
         top_keywords = cls._normalize_string_list(history_summary.get("top_keywords", []), limit=4)
         favorite_people = cls._normalize_string_list(history_summary.get("favorite_people", []), limit=3)
         preferred_brands = cls._normalize_string_list(history_summary.get("preferred_brands", []), limit=3)
+        seer_adjacent_titles = cls._normalize_string_list(history_summary.get("seer_adjacent_titles", []), limit=3)
+        similar_users = cls._normalize_string_list(history_summary.get("similar_users", []), limit=2)
+        similar_user_titles = cls._normalize_string_list(history_summary.get("similar_user_titles", []), limit=3)
 
         average_top_rating = history_summary.get("average_top_rating")
         if average_top_rating is not None:
@@ -4058,6 +4072,15 @@ class VanguarrService:
             if liked_genres:
                 feedback_parts.append(f"keep leaning into {cls._human_join(liked_genres)}")
             lines.append(f"Explicit positive feedback says to {cls._human_join(feedback_parts)}.")
+
+        if seer_adjacent_titles:
+            lines.append(f"Seer recommendation neighborhoods keep clustering around {cls._human_join(seer_adjacent_titles)}.")
+        if similar_users and similar_user_titles:
+            lines.append(
+                f"Local overlap with profiles like {cls._human_join(similar_users)} also reinforces titles near {cls._human_join(similar_user_titles)}."
+            )
+        elif similar_users:
+            lines.append(f"Local overlap is strongest with profiles like {cls._human_join(similar_users)}.")
 
         if adjacent_genres:
             lane_line = f"Add-on lanes worth testing: {cls._human_join(adjacent_genres)}."
@@ -4127,6 +4150,9 @@ class VanguarrService:
         operator_notes = str(history_summary.get("operator_notes") or "").strip()
         top_keywords = cls._normalize_string_list(history_summary.get("top_keywords", []), limit=3)
         favorite_people = cls._normalize_string_list(history_summary.get("favorite_people", []), limit=2)
+        seer_adjacent_genres = cls._normalize_string_list(history_summary.get("seer_adjacent_genres", []), limit=3)
+        similar_users = cls._normalize_string_list(history_summary.get("similar_users", []), limit=2)
+        similar_user_genres = cls._normalize_string_list(history_summary.get("similar_user_genres", []), limit=3)
         preferred = str(format_preference.get("preferred") or "balanced")
         lines: list[str] = []
 
@@ -4151,6 +4177,15 @@ class VanguarrService:
         if top_keywords or favorite_people:
             detail = cls._human_join(top_keywords) if top_keywords else cls._human_join(favorite_people)
             lines.append(f"Use TMDb metadata to break ties when candidates line up on {detail}.")
+
+        if seer_adjacent_genres:
+            lines.append(
+                f"Let Seer neighborhood signals around {cls._human_join(seer_adjacent_genres)} act as a secondary tiebreaker after the personal profile."
+            )
+        if similar_users and similar_user_genres:
+            lines.append(
+                f"Use local similar-user lift from {cls._human_join(similar_users)} only as a supporting boost toward {cls._human_join(similar_user_genres)}."
+            )
 
         if adjacent_genres or adjacent_themes:
             extension = cls._human_join(adjacent_genres) if adjacent_genres else cls._human_join(adjacent_themes)
@@ -4199,6 +4234,405 @@ class VanguarrService:
         cleaned.pop("_last_played_score", None)
         return cleaned
 
+    @classmethod
+    def _apply_existing_profile_guidance(
+        cls,
+        history_summary: dict[str, Any],
+        existing_payload: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        summary = dict(history_summary)
+        existing = existing_payload if isinstance(existing_payload, dict) else {}
+        summary["explicit_feedback"] = cls._normalize_explicit_feedback(existing.get("explicit_feedback", {}))
+        summary["profile_exclusions"] = cls._normalize_string_list(existing.get("profile_exclusions", []), limit=8)
+        summary["operator_notes"] = str(existing.get("operator_notes") or "").strip()
+        return summary
+
+    async def _compose_profile_payload(
+        self,
+        username: str,
+        history: list[dict[str, Any]],
+        *,
+        existing_payload: dict[str, Any] | None = None,
+        peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
+        include_llm_enrichment: bool = True,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        stored_payload = existing_payload if isinstance(existing_payload, dict) else self.profile_store.read_payload(username)
+        history_summary = self._build_profile_history_context(
+            history,
+            top_limit=self.settings.profile_architect_top_titles_limit,
+            recent_limit=self.settings.profile_architect_recent_momentum_limit,
+        )
+        history_summary = self._apply_existing_profile_guidance(history_summary, stored_payload)
+        recommendation_seeds = self._build_recommendation_seed_pool(
+            history,
+            profile_summary=history_summary,
+            limit=self.settings.recommendation_seed_limit,
+        )
+        recommendation_seeds = self._resolve_tv_seed_media_ids_from_library_index(recommendation_seeds)
+        history_summary = await self._enrich_profile_summary_with_seer(
+            history_summary,
+            recommendation_seeds=recommendation_seeds,
+        )
+        history_summary = self._enrich_profile_summary_with_similar_users(
+            username,
+            history_summary,
+            peer_payload_overrides=peer_payload_overrides,
+        )
+        history_summary = await self._enrich_profile_summary_with_tmdb(
+            history_summary,
+            recommendation_seeds=recommendation_seeds,
+        )
+        heuristic_enrichment = self._build_heuristic_profile_enrichment(history_summary)
+        llm_enrichment = (
+            await self._suggest_profile_enrichment(
+                username,
+                history_summary,
+                existing_payload=stored_payload,
+            )
+            if include_llm_enrichment
+            else {}
+        )
+        profile_payload = self._build_profile_payload(
+            username,
+            history_summary,
+            enrichment=self._merge_profile_enrichment_layers(heuristic_enrichment, llm_enrichment),
+            existing_payload=stored_payload,
+        )
+        return profile_payload, recommendation_seeds
+
+    async def _prepare_runtime_profile_payload(
+        self,
+        username: str,
+        history: list[dict[str, Any]],
+        *,
+        existing_payload: dict[str, Any] | None = None,
+        peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
+        stored_payload = existing_payload if isinstance(existing_payload, dict) else self.profile_store.read_payload(username)
+        if ProfileStore.is_structured_payload(stored_payload):
+            history_summary = self._build_profile_history_context(
+                history,
+                top_limit=self.settings.profile_architect_top_titles_limit,
+                recent_limit=self.settings.profile_architect_recent_momentum_limit,
+            )
+            recommendation_seeds = self._build_recommendation_seed_pool(
+                history,
+                profile_summary=history_summary,
+                limit=self.settings.recommendation_seed_limit,
+            )
+            return stored_payload, self._resolve_tv_seed_media_ids_from_library_index(recommendation_seeds), False
+
+        profile_payload, recommendation_seeds = await self._compose_profile_payload(
+            username,
+            history,
+            existing_payload=stored_payload,
+            peer_payload_overrides=peer_payload_overrides,
+            include_llm_enrichment=False,
+        )
+        return profile_payload, recommendation_seeds, int(profile_payload.get("history_count") or 0) > 0
+
+    def _load_peer_profile_payloads(
+        self,
+        username: str,
+        *,
+        peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        peers: dict[str, dict[str, Any]] = {}
+        for candidate_username in self.profile_store.list_profiles():
+            if candidate_username == username:
+                continue
+            peers[candidate_username] = self.profile_store.read_payload(candidate_username)
+
+        if peer_payload_overrides:
+            for candidate_username, payload in peer_payload_overrides.items():
+                if candidate_username == username:
+                    continue
+                peers[candidate_username] = payload
+
+        return [
+            payload
+            for payload in peers.values()
+            if isinstance(payload, dict) and ProfileStore.is_structured_payload(payload)
+        ]
+
+    @classmethod
+    def _profile_extension_genres(
+        cls,
+        profile_summary: dict[str, Any],
+        *,
+        limit: int,
+    ) -> list[str]:
+        merged: list[str] = []
+        for source in (
+            profile_summary.get("discovery_lanes", []),
+            profile_summary.get("adjacent_genres", []),
+            profile_summary.get("seer_adjacent_genres", []),
+            profile_summary.get("similar_user_genres", []),
+        ):
+            merged = cls._merge_unique_strings(merged, cls._normalize_genres(source, limit=limit))
+        return merged[:limit]
+
+    @classmethod
+    def _blocked_profile_genres(
+        cls,
+        profile_summary: dict[str, Any],
+        *,
+        extra_genres: list[Any] | None = None,
+        limit: int = 8,
+    ) -> set[str]:
+        merged: list[str] = []
+        for source in (
+            profile_summary.get("primary_genres", []),
+            profile_summary.get("secondary_genres", []),
+            profile_summary.get("recent_genres", []),
+            profile_summary.get("discovery_lanes", []),
+        ):
+            merged = cls._merge_unique_strings(merged, cls._normalize_string_list(source, limit=limit))
+        if extra_genres:
+            merged = cls._merge_unique_strings(merged, cls._normalize_string_list(extra_genres, limit=limit))
+
+        blocked = {value.lower() for value in merged}
+        feedback = profile_summary.get("explicit_feedback", {})
+        blocked.update(
+            value.lower()
+            for value in cls._normalize_string_list(
+                feedback.get("disliked_genres", []) if isinstance(feedback, dict) else [],
+                limit=limit,
+            )
+        )
+        return blocked
+
+    @classmethod
+    def _profile_neighbor_similarity(
+        cls,
+        profile_summary: dict[str, Any],
+        peer_payload: dict[str, Any],
+    ) -> float:
+        current_primary = {value.lower() for value in cls._normalize_string_list(profile_summary.get("primary_genres", []), limit=4)}
+        peer_primary = {value.lower() for value in cls._normalize_string_list(peer_payload.get("primary_genres", []), limit=4)}
+        current_secondary = {value.lower() for value in cls._normalize_string_list(profile_summary.get("secondary_genres", []), limit=4)}
+        peer_secondary = {value.lower() for value in cls._normalize_string_list(peer_payload.get("secondary_genres", []), limit=4)}
+        current_recent = {value.lower() for value in cls._normalize_string_list(profile_summary.get("recent_genres", []), limit=4)}
+        peer_recent = {value.lower() for value in cls._normalize_string_list(peer_payload.get("recent_genres", []), limit=4)}
+        current_keywords = {value.lower() for value in cls._normalize_string_list(profile_summary.get("top_keywords", []), limit=6)}
+        peer_keywords = {value.lower() for value in cls._normalize_string_list(peer_payload.get("top_keywords", []), limit=6)}
+        current_titles = {
+            str(item.get("title") or "").strip().lower()
+            for item in cls._normalize_profile_entries(profile_summary.get("top_titles", []), limit=5)
+            if str(item.get("title") or "").strip()
+        }
+        peer_titles = {
+            str(item.get("title") or "").strip().lower()
+            for item in cls._normalize_profile_entries(peer_payload.get("top_titles", []), limit=5)
+            if str(item.get("title") or "").strip()
+        }
+
+        score = 0.0
+        score += min(0.36, 0.18 * len(current_primary & peer_primary))
+        score += min(0.16, 0.08 * len(current_secondary & peer_secondary))
+        score += min(0.14, 0.07 * len(current_recent & peer_recent))
+        score += min(0.2, 0.1 * len(current_titles & peer_titles))
+        score += min(0.1, 0.05 * len(current_keywords & peer_keywords))
+
+        current_format = str((profile_summary.get("format_preference") or {}).get("preferred") or "balanced")
+        peer_format = str((peer_payload.get("format_preference") or {}).get("preferred") or "balanced")
+        if current_format != "balanced" and current_format == peer_format:
+            score += 0.05
+
+        current_release = profile_summary.get("release_year_preference", {})
+        peer_release = peer_payload.get("release_year_preference", {})
+        current_bias = str(current_release.get("bias") or "balanced")
+        peer_bias = str(peer_release.get("bias") or "balanced")
+        current_average = cls._coerce_int(current_release.get("average_year"))
+        peer_average = cls._coerce_int(peer_release.get("average_year"))
+        if current_bias == peer_bias and current_average is not None and peer_average is not None:
+            if abs(current_average - peer_average) <= 6:
+                score += 0.03
+
+        return round(score, 3)
+
+    def _enrich_profile_summary_with_similar_users(
+        self,
+        username: str,
+        history_summary: dict[str, Any],
+        *,
+        peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        summary = dict(history_summary)
+        summary.setdefault("similar_users", [])
+        summary.setdefault("similar_user_genres", [])
+        summary.setdefault("similar_user_titles", [])
+
+        peer_payloads = self._load_peer_profile_payloads(username, peer_payload_overrides=peer_payload_overrides)
+        if not peer_payloads:
+            return summary
+
+        scored_peers: list[tuple[float, dict[str, Any]]] = []
+        for payload in peer_payloads:
+            score = self._profile_neighbor_similarity(summary, payload)
+            if score >= 0.18:
+                scored_peers.append((score, payload))
+
+        scored_peers.sort(
+            key=lambda item: (
+                -item[0],
+                -int(item[1].get("history_count") or 0),
+                str(item[1].get("username") or "").lower(),
+            )
+        )
+        if not scored_peers:
+            return summary
+        if len(scored_peers) < 2 and scored_peers[0][0] < 0.3:
+            return summary
+
+        top_peers = scored_peers[:3]
+        blocked_genres = self._blocked_profile_genres(
+            summary,
+            extra_genres=self._normalize_string_list(summary.get("seer_adjacent_genres", []), limit=4),
+        )
+        blocked_titles = {
+            str(item.get("title") or "").strip().lower()
+            for item in self._normalize_profile_entries(summary.get("top_titles", []), limit=8)
+            if str(item.get("title") or "").strip()
+        }
+        blocked_titles.update(
+            value.lower()
+            for value in self._normalize_string_list(
+                summary.get("explicit_feedback", {}).get("disliked_titles", []),
+                limit=8,
+            )
+        )
+
+        genre_scores: Counter[str] = Counter()
+        title_scores: Counter[str] = Counter()
+        for score, payload in top_peers:
+            genre_sources = (
+                (self._normalize_string_list(payload.get("adjacent_genres", []), limit=4), 1.3),
+                (self._normalize_string_list(payload.get("discovery_lanes", []), limit=4), 1.1),
+                (self._normalize_string_list(payload.get("primary_genres", []), limit=4), 0.8),
+                (self._normalize_string_list(payload.get("recent_genres", []), limit=4), 0.7),
+            )
+            for genres, multiplier in genre_sources:
+                for genre in genres:
+                    lowered = genre.lower()
+                    if lowered in blocked_genres:
+                        continue
+                    genre_scores[genre] += score * multiplier
+
+            for entry in self._normalize_profile_entries(payload.get("top_titles", []), limit=4):
+                title = str(entry.get("title") or "").strip()
+                lowered = title.lower()
+                if not title or lowered in blocked_titles:
+                    continue
+                title_scores[title] += score * (1.0 + min(0.5, int(entry.get("play_count") or 0) * 0.1))
+
+        summary["similar_users"] = [
+            str(payload.get("username") or "").strip()
+            for _score, payload in top_peers
+            if str(payload.get("username") or "").strip()
+        ][:3]
+        summary["similar_user_genres"] = self._rank_counter(genre_scores, limit=4)
+        summary["similar_user_titles"] = self._rank_counter(title_scores, limit=4)
+        return summary
+
+    async def _enrich_profile_summary_with_seer(
+        self,
+        history_summary: dict[str, Any],
+        *,
+        recommendation_seeds: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        summary = dict(history_summary)
+        summary.setdefault("seer_adjacent_titles", [])
+        summary.setdefault("seer_adjacent_genres", [])
+
+        if not recommendation_seeds or not hasattr(self.seer, "discover_candidates"):
+            return summary
+
+        seed_limit = max(1, min(4, int(self.settings.recommendation_seed_limit or 4)))
+        try:
+            candidates = await self.seer.discover_candidates(
+                recommendation_seeds[:seed_limit],
+                genre_seeds=[],
+                limit=max(8, seed_limit * 6),
+                genre_limit=0,
+                trending_limit=0,
+            )
+        except Exception as exc:
+            logger.warning("Seer profile enrichment skipped reason=%s", exc)
+            return summary
+
+        if not candidates:
+            return summary
+
+        blocked_genres = self._blocked_profile_genres(summary)
+        blocked_titles = {
+            str(item.get("title") or "").strip().lower()
+            for item in self._normalize_profile_entries(summary.get("top_titles", []), limit=8)
+            if str(item.get("title") or "").strip()
+        }
+        blocked_titles.update(
+            value.lower()
+            for value in self._normalize_string_list(
+                summary.get("explicit_feedback", {}).get("disliked_titles", []),
+                limit=8,
+            )
+        )
+
+        genre_scores: Counter[str] = Counter()
+        title_scores: Counter[str] = Counter()
+        for candidate in candidates:
+            source_count = max(1, len(self._normalize_string_list(candidate.get("sources", []), limit=6)))
+            try:
+                rating_value = float(candidate.get("rating") or 0.0)
+            except (TypeError, ValueError):
+                rating_value = 0.0
+            weight = 1.0 + min(1.0, (source_count - 1) * 0.5) + max(0.0, min(0.4, (rating_value - 6.5) / 5.0))
+
+            title = str(candidate.get("title") or "").strip()
+            if title and title.lower() not in blocked_titles:
+                title_scores[title] += weight
+            for genre in self._normalize_genres(candidate.get("genres", []), limit=4):
+                if genre.lower() in blocked_genres:
+                    continue
+                genre_scores[genre] += weight
+
+        summary["seer_adjacent_titles"] = self._rank_counter(title_scores, limit=4)
+        summary["seer_adjacent_genres"] = self._rank_counter(genre_scores, limit=4)
+        return summary
+
+    @classmethod
+    def _build_heuristic_profile_enrichment(cls, history_summary: dict[str, Any]) -> dict[str, list[str]]:
+        blocked_genres = cls._blocked_profile_genres(history_summary)
+        adjacent_genres: list[str] = []
+        for source_list in (
+            history_summary.get("seer_adjacent_genres", []),
+            history_summary.get("similar_user_genres", []),
+        ):
+            for value in cls._normalize_string_list(source_list, limit=4):
+                if value.lower() in blocked_genres:
+                    continue
+                adjacent_genres.append(value)
+
+        return {
+            "adjacent_genres": cls._merge_unique_strings([], adjacent_genres)[:4],
+            "adjacent_themes": [],
+        }
+
+    @classmethod
+    def _merge_profile_enrichment_layers(
+        cls,
+        base: dict[str, list[str]] | None,
+        overlay: dict[str, list[str]] | None,
+    ) -> dict[str, list[str]]:
+        base_genres = cls._normalize_string_list((base or {}).get("adjacent_genres", []), limit=4)
+        base_themes = cls._normalize_string_list((base or {}).get("adjacent_themes", []), limit=3)
+        overlay_genres = cls._normalize_string_list((overlay or {}).get("adjacent_genres", []), limit=4)
+        overlay_themes = cls._normalize_string_list((overlay or {}).get("adjacent_themes", []), limit=3)
+        return {
+            "adjacent_genres": cls._merge_unique_strings(overlay_genres, base_genres)[:4],
+            "adjacent_themes": cls._merge_unique_strings(overlay_themes, base_themes)[:3],
+        }
+
     @staticmethod
     def _rank_genres(
         genre_counts: Counter[str],
@@ -4211,6 +4645,14 @@ class VanguarrService:
 
         ranked.sort(key=lambda item: (-item[1], -item[2], item[0].lower()))
         return [(genre, score) for genre, score, _count in ranked]
+
+    @staticmethod
+    def _profile_signal_weight(play_count: Any) -> float:
+        try:
+            count = max(1, int(play_count or 0))
+        except (TypeError, ValueError):
+            count = 1
+        return 1.0 + min(1.0, max(0, count - 1) * 0.2)
 
     @classmethod
     def _build_discovery_lanes(
@@ -4334,6 +4776,10 @@ class VanguarrService:
             score += 0.04
         if "adjacent_genre_seed" in lane_lookup:
             score += 0.02
+        if "seer_genre_seed" in lane_lookup:
+            score += 0.03
+        if "similar_user_genre_seed" in lane_lookup:
+            score += 0.03
         if any(str(source).strip().lower().startswith("trending") for source in sources):
             score += 0.04
 
@@ -4642,6 +5088,10 @@ class VanguarrService:
             tags.append("genre_discovery_lane")
         if "adjacent_genre_seed" in lane_lookup:
             tags.append("adjacent_seed_lane")
+        if "seer_genre_seed" in lane_lookup:
+            tags.append("seer_neighbor_lane")
+        if "similar_user_genre_seed" in lane_lookup:
+            tags.append("similar_user_lane")
         if matched_primary:
             tags.append("top_genre_lane")
         if "recent_seed" in lane_lookup:

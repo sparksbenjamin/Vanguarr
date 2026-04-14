@@ -13,15 +13,16 @@ Rules:
 - Return JSON only.
 - Suggest at most 3 adjacent genres or sub-genres.
 - Suggest at most 2 short adjacent themes.
-- Do not repeat genres already listed as primary.
+- Treat explicit feedback, manual exclusions, and operator notes as hard constraints when present.
+- Do not repeat genres already listed as primary, secondary, recent, discovery, or existing adjacent lanes.
+- Do not suggest a lane unless it is a close extension of the observed viewing evidence.
 - Keep labels short and mainstream.
 - Do not mention infrastructure, credentials, or implementation details.
 
 Return JSON with this schema:
 {
   "adjacent_genres": ["genre"],
-  "adjacent_themes": ["theme"],
-  "notes": "One short sentence."
+  "adjacent_themes": ["theme"]
 }
 """
 

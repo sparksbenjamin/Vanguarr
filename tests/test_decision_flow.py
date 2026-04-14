@@ -256,7 +256,7 @@ def test_profile_history_context_compacts_repeated_titles() -> None:
     assert summary["top_titles"][0]["media_type"] == "tv"
     assert "Sci-Fi" in summary["top_genres"]
     assert summary["ranked_genres"][0]["genre"] in {"Sci-Fi", "Drama"}
-    assert any(item["genre"] == "Sci-Fi" and item["raw_count"] == 2 for item in summary["ranked_genres"])
+    assert any(item["genre"] == "Sci-Fi" and item["raw_count"] == 1 for item in summary["ranked_genres"])
     assert summary["recent_momentum"][0]["title"] == "Show Alpha"
     assert summary["recent_momentum"][0]["play_count"] == 2
     assert summary["release_year_preference"]["bias"] == "balanced"
@@ -269,15 +269,21 @@ def test_profile_enrichment_prompt_uses_viewing_summary() -> None:
         {
             "history_count": 12,
             "primary_genres": ["Sci-Fi"],
+            "secondary_genres": ["Drama"],
             "recent_genres": ["Mystery"],
             "top_titles": [{"title": "Show Alpha", "play_count": 4}],
             "discovery_lanes": ["Thriller"],
+            "explicit_feedback": {"disliked_genres": ["Anime"]},
+            "profile_exclusions": ["reality tv"],
+            "operator_notes": "Keep this grounded.",
         },
     )
 
     assert "adjacent_genres" in messages[0]["content"]
     assert "Show Alpha" in messages[1]["content"]
     assert "code-derived viewing summary" in messages[1]["content"]
+    assert "Anime" in messages[1]["content"]
+    assert "Keep this grounded." in messages[1]["content"]
 
 
 def test_render_profile_block_uses_code_derived_signals() -> None:
@@ -328,6 +334,41 @@ def test_render_profile_block_uses_code_derived_signals() -> None:
     assert "Add-on lanes worth testing:" in block
     assert "Adventure" in block
     assert "found family" in block
+
+
+def test_profile_history_context_caps_repeat_episode_weighting() -> None:
+    history = [
+        {
+            "Name": f"Episode {index}",
+            "SeriesName": "Anime Loop",
+            "Type": "Episode",
+            "Genres": ["Animation", "Anime"],
+            "CommunityRating": 7.5,
+            "UserData": {"LastPlayedDate": f"2026-04-{index:02d}T10:00:00Z"},
+        }
+        for index in range(1, 6)
+    ] + [
+        {
+            "Name": "Courtroom One",
+            "Type": "Movie",
+            "Genres": ["Drama", "Crime"],
+            "CommunityRating": 8.1,
+            "UserData": {"LastPlayedDate": "2026-04-06T10:00:00Z"},
+        },
+        {
+            "Name": "Courtroom Two",
+            "Type": "Movie",
+            "Genres": ["Drama", "Crime"],
+            "CommunityRating": 8.0,
+            "UserData": {"LastPlayedDate": "2026-04-05T10:00:00Z"},
+        },
+    ]
+
+    summary = VanguarrService._build_profile_history_context(history, top_limit=5, recent_limit=3, recent_window=6)
+
+    assert summary["format_preference"]["preferred"] == "movie"
+    assert summary["primary_genres"][:2] == ["Crime", "Drama"]
+    assert "Animation" not in summary["primary_genres"][:2]
 
 
 def test_recover_interrupted_tasks_marks_running_rows(tmp_path) -> None:
@@ -454,6 +495,15 @@ def test_viewing_history_context_reuses_profile_summary_signals() -> None:
     ]
 
     summary = VanguarrService._build_profile_history_context(history, top_limit=5, recent_limit=3, recent_window=3)
+    summary.update(
+        {
+            "seer_adjacent_titles": ["Galaxy Court"],
+            "seer_adjacent_genres": ["Space Opera"],
+            "similar_users": ["bob"],
+            "similar_user_genres": ["Mystery"],
+            "similar_user_titles": ["Orbit Docket"],
+        }
+    )
     viewing_history = VanguarrService._build_viewing_history_context(
         history,
         recommendation_seeds=[{"title": "Show Alpha", "media_type": "tv", "media_id": 101}],
@@ -462,8 +512,10 @@ def test_viewing_history_context_reuses_profile_summary_signals() -> None:
 
     assert "Sci-Fi" in viewing_history["primary_genres"]
     assert any(item["genre"] == "Sci-Fi" for item in viewing_history["ranked_genres"])
-    assert viewing_history["format_preference"]["preferred"] == "tv"
+    assert viewing_history["format_preference"]["preferred"] == "balanced"
     assert viewing_history["recent_momentum"][0]["title"] == "Show Alpha"
+    assert viewing_history["seer_adjacent_titles"] == ["Galaxy Court"]
+    assert viewing_history["similar_users"] == ["bob"]
 
 
 def test_candidate_pool_ranking_favors_anchor_and_genre_overlap() -> None:
@@ -638,20 +690,32 @@ def test_build_recommendation_seed_pool_blends_behavior_lanes() -> None:
     assert any("recent_seed" in seed["seed_lanes"] for seed in seeds)
 
 
-def test_build_genre_discovery_seeds_prioritizes_primary_recent_then_adjacent() -> None:
+def test_build_genre_discovery_seeds_prioritizes_primary_recent_adjacent_and_enrichment_lanes() -> None:
     seeds = VanguarrService._build_genre_discovery_seeds(
         {
             "primary_genres": ["Drama", "History"],
             "recent_genres": ["Drama", "Crime"],
             "adjacent_genres": ["Mystery", "Thriller"],
+            "seer_adjacent_genres": ["Legal Thriller", "Mystery"],
+            "similar_user_genres": ["Procedural", "Mystery"],
             "format_preference": {"preferred": "tv"},
         }
     )
 
-    assert [seed["genre_name"] for seed in seeds] == ["Drama", "History", "Crime", "Mystery", "Thriller"]
+    assert [seed["genre_name"] for seed in seeds] == [
+        "Drama",
+        "History",
+        "Crime",
+        "Mystery",
+        "Thriller",
+        "Legal Thriller",
+        "Procedural",
+    ]
     assert seeds[0]["source_lanes"] == ["primary_genre_seed"]
     assert seeds[2]["source_lanes"] == ["recent_genre_seed"]
     assert seeds[3]["source_lanes"] == ["adjacent_genre_seed"]
+    assert seeds[5]["source_lanes"] == ["seer_genre_seed"]
+    assert seeds[6]["source_lanes"] == ["similar_user_genre_seed"]
     assert all(seed["media_types"] == ["tv", "movie"] for seed in seeds)
 
 
@@ -675,6 +739,170 @@ def test_normalize_saved_profile_payload_regenerates_summary() -> None:
     assert payload["profile_state"] == "ready"
     assert payload["summary_block"].startswith("[VANGUARR_PROFILE_SUMMARY_V1]")
     assert "Operator note: Prefer high-conviction Sci-Fi." in payload["summary_block"]
+
+
+def test_build_profile_payload_replaces_stale_adjacent_lanes_when_enrichment_succeeds() -> None:
+    payload = VanguarrService._build_profile_payload(
+        "alice",
+        {
+            "history_count": 4,
+            "unique_titles": 2,
+            "primary_genres": ["Sci-Fi", "Thriller"],
+            "top_genres": ["Sci-Fi", "Thriller"],
+            "ranked_genres": [{"genre": "Sci-Fi", "raw_count": 2, "recent_count": 1, "weighted_score": 2.75}],
+            "top_titles": [{"title": "Show Alpha", "play_count": 3, "media_type": "tv"}],
+            "recent_momentum": [{"title": "Show Alpha", "play_count": 2, "media_type": "tv"}],
+            "repeat_titles": [{"title": "Show Alpha", "play_count": 3, "media_type": "tv"}],
+        },
+        enrichment={"adjacent_genres": ["Mystery"], "adjacent_themes": ["closed-circle tension"]},
+        existing_payload={
+            "adjacent_genres": ["Animation", "Adventure"],
+            "adjacent_themes": ["school rivalry"],
+        },
+    )
+
+    assert payload["adjacent_genres"] == ["Mystery"]
+    assert payload["adjacent_themes"] == ["closed-circle tension"]
+
+
+def test_compose_profile_payload_blends_seer_similar_tmdb_and_llm_layers(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(enabled=False),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    peer_payload = VanguarrService._normalize_saved_profile_payload(
+        "bob",
+        {
+            "history_count": 8,
+            "unique_titles": 4,
+            "primary_genres": ["Crime", "Drama"],
+            "secondary_genres": ["Mystery"],
+            "recent_genres": ["Crime"],
+            "top_genres": ["Crime", "Drama", "Mystery"],
+            "ranked_genres": [
+                {"genre": "Crime", "raw_count": 4, "recent_count": 2, "weighted_score": 5.5},
+                {"genre": "Drama", "raw_count": 3, "recent_count": 1, "weighted_score": 4.0},
+            ],
+            "top_titles": [
+                {"title": "Case Brief", "play_count": 4, "media_type": "tv"},
+                {"title": "State of Evidence", "play_count": 2, "media_type": "tv"},
+            ],
+            "repeat_titles": [{"title": "Case Brief", "play_count": 4, "media_type": "tv"}],
+            "recent_momentum": [{"title": "State of Evidence", "play_count": 2, "media_type": "tv"}],
+            "adjacent_genres": ["Political Thriller"],
+            "discovery_lanes": ["Procedural"],
+            "format_preference": {"preferred": "tv", "movie_plays": 1, "tv_plays": 7},
+            "release_year_preference": {"bias": "balanced", "average_year": 2020},
+            "top_keywords": ["courtroom"],
+        },
+    )
+    service.profile_store.write_payload("bob", peer_payload)
+
+    existing_payload = {
+        "explicit_feedback": {
+            "liked_titles": ["Case Brief"],
+            "disliked_titles": ["Anime Loop"],
+            "liked_genres": ["Crime"],
+            "disliked_genres": ["Anime"],
+        },
+        "profile_exclusions": ["reality tv"],
+        "operator_notes": "Keep this grounded.",
+        "adjacent_themes": ["institutional pressure"],
+    }
+
+    history = [
+        {
+            "Name": "Episode 1",
+            "SeriesName": "Case Brief",
+            "Type": "Episode",
+            "Genres": ["Crime", "Drama"],
+            "CommunityRating": 8.4,
+            "ProviderIds": {"Tmdb": "101"},
+            "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+        },
+        {
+            "Name": "Episode 2",
+            "SeriesName": "Case Brief",
+            "Type": "Episode",
+            "Genres": ["Crime", "Drama"],
+            "CommunityRating": 8.4,
+            "ProviderIds": {"Tmdb": "101"},
+            "UserData": {"LastPlayedDate": "2026-04-07T10:00:00Z"},
+        },
+        {
+            "Name": "Bench Trial",
+            "Type": "Movie",
+            "Genres": ["Crime", "Drama"],
+            "CommunityRating": 8.0,
+            "ProviderIds": {"Tmdb": "202"},
+            "UserData": {"LastPlayedDate": "2026-04-06T10:00:00Z"},
+        },
+    ]
+
+    async def fake_seer(summary: dict, *, recommendation_seeds: list[dict]) -> dict:
+        assert summary["explicit_feedback"]["disliked_genres"] == ["Anime"]
+        assert recommendation_seeds
+        return {
+            **summary,
+            "seer_adjacent_titles": ["State of Evidence"],
+            "seer_adjacent_genres": ["Legal Thriller"],
+        }
+
+    async def fake_tmdb(summary: dict, *, recommendation_seeds: list[dict]) -> dict:
+        return {
+            **summary,
+            "top_keywords": ["courtroom"],
+            "favorite_people": ["Actor Prime"],
+        }
+
+    async def fake_llm(
+        username: str,
+        history_summary: dict,
+        *,
+        existing_payload: dict | None = None,
+    ) -> dict:
+        assert username == "alice"
+        assert history_summary["similar_users"] == ["bob"]
+        assert history_summary["top_keywords"] == ["courtroom"]
+        assert existing_payload is not None
+        return {
+            "adjacent_genres": ["Political Thriller"],
+            "adjacent_themes": ["institutional pressure"],
+        }
+
+    service._enrich_profile_summary_with_seer = fake_seer  # type: ignore[method-assign]
+    service._enrich_profile_summary_with_tmdb = fake_tmdb  # type: ignore[method-assign]
+    service._suggest_profile_enrichment = fake_llm  # type: ignore[method-assign]
+
+    profile_payload, recommendation_seeds = asyncio.run(
+        service._compose_profile_payload("alice", history, existing_payload=existing_payload)
+    )
+
+    assert recommendation_seeds
+    assert profile_payload["seer_adjacent_titles"] == ["State of Evidence"]
+    assert profile_payload["similar_users"] == ["bob"]
+    assert profile_payload["similar_user_titles"] == ["State of Evidence"]
+    assert profile_payload["top_keywords"] == ["courtroom"]
+    assert profile_payload["adjacent_genres"][:2] == ["Political Thriller", "Legal Thriller"]
+    assert profile_payload["adjacent_themes"] == ["institutional pressure"]
+    assert profile_payload["explicit_feedback"]["disliked_genres"] == ["Anime"]
+    assert "Seer recommendation neighborhoods keep clustering around State of Evidence." in profile_payload["summary_block"]
+    assert "Local overlap with profiles like bob" in profile_payload["summary_block"]
 
 
 def test_profile_store_writes_json_and_summary(tmp_path) -> None:
@@ -1106,6 +1334,90 @@ def test_resolve_tv_seed_media_ids_uses_library_index_series_tmdb(tmp_path) -> N
     assert resolved[0]["external_ids"]["tvdb"] == "555"
 
 
+def test_run_profile_architect_resolves_tv_seeds_before_tmdb_enrichment(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    class FakeMediaServer:
+        async def list_users(self) -> list[dict]:
+            return [{"Id": "user-1", "Name": "alice"}]
+
+        async def get_playback_history(self, user_id: str, limit: int) -> list[dict]:
+            return [
+                {
+                    "Name": "Episode 1",
+                    "SeriesName": "Show Alpha",
+                    "Type": "Episode",
+                    "Genres": ["Sci-Fi"],
+                    "CommunityRating": 8.4,
+                    "ProviderIds": {"Tmdb": "1932395"},
+                    "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+                }
+            ]
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    with session_factory() as session:
+        session.add(
+            LibraryMedia(
+                source_provider="jellyfin",
+                media_server_id="series-1",
+                media_type="tv",
+                title="Show Alpha",
+                sort_title="Show Alpha",
+                overview="Series overview.",
+                production_year=2024,
+                release_date="2024-01-01",
+                community_rating=8.5,
+                genres_json='["Sci-Fi"]',
+                state="available",
+                tmdb_id=101,
+                tvdb_id=555,
+                imdb_id="ttshowalpha",
+                payload_json="{}",
+            )
+        )
+        session.commit()
+
+    async def fake_tmdb_enrichment(summary: dict, *, recommendation_seeds: list[dict]) -> dict:
+        assert recommendation_seeds[0]["media_id"] == 101
+        assert recommendation_seeds[0]["external_ids"]["tmdb"] == "101"
+        return {**summary, "top_keywords": ["space opera"]}
+
+    async def fake_enrichment(
+        username: str,
+        compact_history: dict,
+        *,
+        existing_payload: dict | None = None,
+    ) -> dict:
+        return {"adjacent_genres": ["Mystery"], "adjacent_themes": ["found family"]}
+
+    async def fake_refresh(_user: dict) -> dict:
+        return {"stored": 0, "scored": 0, "ai_scored": 0, "ai_reused": 0}
+
+    service._enrich_profile_summary_with_tmdb = fake_tmdb_enrichment  # type: ignore[method-assign]
+    service._suggest_profile_enrichment = fake_enrichment  # type: ignore[method-assign]
+    service._refresh_user_suggestions = fake_refresh  # type: ignore[method-assign]
+
+    result = asyncio.run(service.run_profile_architect("alice"))
+
+    assert result["status"] == "success"
+
+
 def test_library_sync_skips_suggestion_refresh_when_library_is_unchanged(tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
@@ -1451,7 +1763,12 @@ def test_run_profile_architect_writes_operation_log(tmp_path) -> None:
     async def passthrough_profile_summary(summary: dict, *, recommendation_seeds: list[dict]) -> dict:
         return summary
 
-    async def fake_enrichment(username: str, compact_history: dict) -> dict:
+    async def fake_enrichment(
+        username: str,
+        compact_history: dict,
+        *,
+        existing_payload: dict | None = None,
+    ) -> dict:
         return {"adjacent_genres": [], "adjacent_themes": []}
 
     async def fake_refresh(_user: dict) -> dict:
