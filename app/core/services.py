@@ -220,6 +220,11 @@ class VanguarrService:
         self.session_factory = session_factory
         self.profile_store = ProfileStore(settings.profiles_dir)
 
+    def _playback_history_limit(self) -> int | None:
+        if bool(getattr(self.settings, "profile_use_full_history", False)):
+            return None
+        return max(1, int(self.settings.profile_history_limit))
+
     @contextmanager
     def session_scope(self) -> Session:
         session = self.session_factory()
@@ -747,7 +752,7 @@ class VanguarrService:
                     )
                     history = await self.media_server.get_playback_history(
                         user["Id"],
-                        self.settings.profile_history_limit,
+                        self._playback_history_limit(),
                     )
                     completed_steps = user_base_step + 1
                     stored_payload = self.profile_store.read_payload(current_username)
@@ -1002,7 +1007,7 @@ class VanguarrService:
                     )
                     history = await self.media_server.get_playback_history(
                         user["Id"],
-                        self.settings.profile_history_limit,
+                        self._playback_history_limit(),
                     )
                     stored_profile = self.profile_store.read_payload(current_username)
                     profile_payload, recommendation_seeds, should_persist = await self._prepare_runtime_profile_payload(
@@ -1967,7 +1972,7 @@ class VanguarrService:
         emit_progress(f"Loading playback history for {current_username}.", 0, "history")
         history = await self.media_server.get_playback_history(
             jellyfin_user_id,
-            self.settings.profile_history_limit,
+            self._playback_history_limit(),
         )
         stored_profile = self.profile_store.read_payload(current_username)
         profile_payload, recommendation_seeds, should_persist = await self._prepare_runtime_profile_payload(

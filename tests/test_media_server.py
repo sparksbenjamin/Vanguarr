@@ -1,3 +1,5 @@
+import asyncio
+
 from app.api.jellyfin import JellyfinClient, VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL
 from app.api.media_server import MediaServerClient
 from app.api.plex import PlexClient
@@ -94,3 +96,58 @@ def test_jellyfin_repository_upsert_enables_existing_repo() -> None:
     assert enabled is True
     assert changed is True
     assert repositories[0]["Enabled"] is True
+
+
+def test_jellyfin_playback_history_fetches_all_pages_when_full_history_enabled() -> None:
+    settings = Settings(
+        jellyfin_base_url="http://jellyfin:8096",
+        jellyfin_api_key="secret-token",
+        profile_history_limit=2,
+        profile_use_full_history=True,
+    )
+    client = JellyfinClient(settings)
+    calls: list[dict[str, object]] = []
+
+    async def fake_request(method: str, path: str, params=None, **kwargs):
+        calls.append(dict(params or {}))
+        start_index = int((params or {}).get("startIndex") or 0)
+        if start_index == 0:
+            return {"Items": [{"Id": "one"}, {"Id": "two"}], "TotalRecordCount": 3}
+        return {"Items": [{"Id": "three"}], "TotalRecordCount": 3}
+
+    client._request = fake_request  # type: ignore[method-assign]
+
+    history = asyncio.run(client.get_playback_history("user-1"))
+
+    assert [item["Id"] for item in history] == ["one", "two", "three"]
+    assert len(calls) == 2
+    assert calls[0]["startIndex"] == 0
+    assert calls[1]["startIndex"] == 2
+
+
+def test_plex_history_items_fetch_all_pages_when_full_history_enabled() -> None:
+    settings = Settings(
+        media_server_provider="plex",
+        plex_base_url="http://plex:32400",
+        plex_api_token="secret-token",
+        profile_history_limit=2,
+        profile_use_full_history=True,
+    )
+    client = PlexClient(settings)
+    calls: list[dict[str, object]] = []
+
+    async def fake_request(method: str, path: str, params=None, **kwargs):
+        calls.append(dict(params or {}))
+        start = int((params or {}).get("X-Plex-Container-Start") or 0)
+        if start == 0:
+            return {"MediaContainer": {"Metadata": [{"ratingKey": "1"}, {"ratingKey": "2"}], "totalSize": 3}}
+        return {"MediaContainer": {"Metadata": [{"ratingKey": "3"}], "totalSize": 3}}
+
+    client._request = fake_request  # type: ignore[method-assign]
+
+    history = asyncio.run(client._get_history_items(account_id="user-1", limit=None))
+
+    assert [item["ratingKey"] for item in history] == ["1", "2", "3"]
+    assert len(calls) == 2
+    assert calls[0]["X-Plex-Container-Start"] == 0
+    assert calls[1]["X-Plex-Container-Start"] == 2

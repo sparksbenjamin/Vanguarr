@@ -119,7 +119,9 @@ class PlexClient(BaseAPIClient):
         if not settings.plex_api_token:
             raise ClientConfigError("PLEX_API_TOKEN is required to query playback history.")
 
-        max_items = limit or settings.profile_history_limit
+        max_items = limit
+        if max_items is None and not settings.profile_use_full_history:
+            max_items = settings.profile_history_limit
         history_items = await self._get_history_items(account_id=user_id, limit=max_items)
         rating_keys = {
             rating_key
@@ -144,15 +146,15 @@ class PlexClient(BaseAPIClient):
         self,
         *,
         account_id: str | None = None,
-        limit: int,
+        limit: int | None,
         page_size: int = 100,
     ) -> list[dict[str, Any]]:
-        target_limit = max(1, int(limit))
+        target_limit = max(1, int(limit)) if limit is not None else None
         start = 0
         items: list[dict[str, Any]] = []
 
-        while len(items) < target_limit:
-            batch_size = min(page_size, target_limit - len(items))
+        while True:
+            batch_size = page_size if target_limit is None else min(page_size, target_limit - len(items))
             payload = await self._request(
                 "GET",
                 "/status/sessions/history/all",
@@ -173,13 +175,19 @@ class PlexClient(BaseAPIClient):
 
             items.extend(page_items)
             total_size = int(container.get("totalSize") or 0)
+            if target_limit is not None and len(items) >= target_limit:
+                break
             start += len(page_items)
+            if total_size:
+                if start >= total_size:
+                    break
+                continue
             if len(page_items) < batch_size:
                 break
-            if total_size and start >= total_size:
-                break
 
-        return items[:target_limit]
+        if target_limit is not None:
+            return items[:target_limit]
+        return items
 
     @staticmethod
     def _build_history_params(

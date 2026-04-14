@@ -31,6 +31,7 @@ def test_profile_architect_max_tokens_default() -> None:
 def test_profile_architect_grouping_defaults() -> None:
     settings = Settings()
 
+    assert settings.profile_use_full_history is False
     assert settings.profile_architect_top_titles_limit == 8
     assert settings.profile_architect_recent_momentum_limit == 5
 

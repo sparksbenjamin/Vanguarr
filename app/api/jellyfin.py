@@ -100,12 +100,21 @@ class JellyfinClient(BaseAPIClient):
         if not settings.jellyfin_api_key:
             raise ClientConfigError("JELLYFIN_API_KEY is required to query playback history.")
 
-        payload = await self._request(
-            "GET",
-            "/Items",
-            params={
+        target_limit = limit
+        if target_limit is None and not settings.profile_use_full_history:
+            target_limit = settings.profile_history_limit
+        if target_limit is not None:
+            target_limit = max(1, int(target_limit))
+
+        page_size = min(target_limit or 200, 200)
+        start_index = 0
+        items: list[dict[str, Any]] = []
+
+        while True:
+            params: dict[str, Any] = {
                 "userId": user_id,
-                "limit": limit or settings.profile_history_limit,
+                "limit": page_size,
+                "startIndex": start_index,
                 "recursive": "true",
                 "includeItemTypes": "Movie,Series,Episode",
                 "filters": "IsPlayed",
@@ -115,9 +124,28 @@ class JellyfinClient(BaseAPIClient):
                     "Overview,Genres,CommunityRating,ProviderIds,ProductionYear,"
                     "PremiereDate,SeriesName,SeriesId,Taglines,UserData"
                 ),
-            },
-        )
-        return payload.get("Items", []) if isinstance(payload, dict) else []
+            }
+            payload = await self._request("GET", "/Items", params=params)
+            batch = payload.get("Items", []) if isinstance(payload, dict) else []
+            items.extend(batch)
+
+            total_record_count = int(payload.get("TotalRecordCount") or 0) if isinstance(payload, dict) else 0
+            if not batch:
+                break
+            if target_limit is not None and len(items) >= target_limit:
+                break
+
+            start_index += len(batch)
+            if total_record_count:
+                if len(items) >= total_record_count:
+                    break
+                continue
+            if len(batch) < page_size:
+                break
+
+        if target_limit is not None:
+            return items[:target_limit]
+        return items
 
     async def get_resumable_items(self, user_id: str, limit: int = 150) -> list[dict[str, Any]]:
         settings = self._refresh_connection()

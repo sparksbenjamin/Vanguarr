@@ -315,8 +315,10 @@
                 <span class="text-sm text-[var(--text-soft)]">{{ settings.decision_cron }}</span>
               </div>
               <div class="label-pair">
-                <span class="label">History limit</span>
-                <span class="text-sm text-[var(--text-soft)]">{{ settings.profile_history_limit }}</span>
+                <span class="label">History mode</span>
+                <span class="text-sm text-[var(--text-soft)]">
+                  {{ "Full playback history" if settings.profile_use_full_history else "Last " ~ settings.profile_history_limit ~ " events" }}
+                </span>
               </div>
               <div class="label-pair">
                 <span class="label">Candidate funnel</span>

@@ -61,6 +61,7 @@ def test_tuning_settings_page_shows_ai_weight_slider() -> None:
 
     assert response.status_code == 200
     assert "AI Decision Weight" in response.text
+    assert "Use Full Playback History" in response.text
     assert "Genre Candidate Limit" in response.text
     assert "Suggestion AI Threshold" in response.text
     assert "Suggestion Recent Cooldown Days" in response.text

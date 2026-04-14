@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     library_sync_cron: str = "0 */4 * * *"
     health_cache_seconds: int = 30
     profile_history_limit: int = 40
+    profile_use_full_history: bool = False
     profile_architect_max_output_tokens: int = 384
     profile_architect_top_titles_limit: int = 8
     profile_architect_recent_momentum_limit: int = 5
@@ -613,8 +614,18 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         key="profile_history_limit",
         label="Profile History Limit",
         group="Tuning",
-        description="How many playback events are used per user.",
+        description="How many playback events are used per user when full-history mode is off.",
         input_type="number",
+    ),
+    SettingFieldDefinition(
+        key="profile_use_full_history",
+        label="Use Full Playback History",
+        group="Tuning",
+        description=(
+            "Ignore the history limit and fetch all available playback history for profile rebuilds, "
+            "decision runs, and Suggested For You refreshes."
+        ),
+        input_type="checkbox",
     ),
     SettingFieldDefinition(
         key="profile_architect_max_output_tokens",
