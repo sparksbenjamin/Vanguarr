@@ -85,3 +85,24 @@ def test_background_runner_launches_library_sync() -> None:
         assert runner.is_running("library_sync") is False
 
     asyncio.run(scenario())
+
+
+def test_background_runner_async_wrappers_launch_jobs_on_event_loop() -> None:
+    async def scenario() -> None:
+        service = FakeService()
+        runner = BackgroundEngineRunner(service)
+
+        started, library_message = await runner.launch_library_sync_async()
+        decision_started, decision_message = await runner.launch_decision_engine_async(None)
+
+        assert started is True
+        assert library_message == "Library Sync started in the background for the Jellyfin library."
+        assert decision_started is True
+        assert decision_message == "Decision Engine started in the background for all users."
+
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert service.library_calls == 1
+        assert service.decision_calls == [None]
+
+    asyncio.run(scenario())

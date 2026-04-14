@@ -38,7 +38,7 @@ class EngineScheduler:
         timezone = ZoneInfo(settings.timezone)
         scheduler = AsyncIOScheduler(timezone=timezone)
         scheduler.add_job(
-            self.runner.launch_profile_architect,
+            self.runner.launch_profile_architect_async,
             trigger=CronTrigger.from_crontab(settings.profile_cron, timezone=timezone),
             id="profile_architect",
             name="Profile Architect",
@@ -47,7 +47,7 @@ class EngineScheduler:
             max_instances=1,
         )
         scheduler.add_job(
-            self.runner.launch_decision_engine,
+            self.runner.launch_decision_engine_async,
             trigger=CronTrigger.from_crontab(settings.decision_cron, timezone=timezone),
             id="decision_engine",
             name="Decision Engine",
@@ -57,7 +57,7 @@ class EngineScheduler:
         )
         if settings.library_sync_enabled:
             scheduler.add_job(
-                self.runner.launch_library_sync,
+                self.runner.launch_library_sync_async,
                 trigger=CronTrigger.from_crontab(settings.library_sync_cron, timezone=timezone),
                 id="library_sync",
                 name="Library Sync",

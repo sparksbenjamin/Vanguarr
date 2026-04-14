@@ -25,6 +25,9 @@ class BackgroundEngineRunner:
             job_factory=lambda: self.service.run_profile_architect(username),
         )
 
+    async def launch_profile_architect_async(self, username: str | None = None) -> tuple[bool, str]:
+        return self.launch_profile_architect(username)
+
     def launch_decision_engine(self, username: str | None = None) -> tuple[bool, str]:
         return self._launch(
             engine_name="decision_engine",
@@ -32,6 +35,9 @@ class BackgroundEngineRunner:
             target=username,
             job_factory=lambda: self.service.run_decision_engine(username),
         )
+
+    async def launch_decision_engine_async(self, username: str | None = None) -> tuple[bool, str]:
+        return self.launch_decision_engine(username)
 
     def launch_suggested_for_you(self, username: str | None = None) -> tuple[bool, str]:
         return self._launch(
@@ -41,6 +47,9 @@ class BackgroundEngineRunner:
             job_factory=lambda: self.service.run_suggested_for_you(username),
         )
 
+    async def launch_suggested_for_you_async(self, username: str | None = None) -> tuple[bool, str]:
+        return self.launch_suggested_for_you(username)
+
     def launch_library_sync(self) -> tuple[bool, str]:
         return self._launch(
             engine_name="library_sync",
@@ -48,6 +57,9 @@ class BackgroundEngineRunner:
             target="the Jellyfin library",
             job_factory=self.service.run_library_sync,
         )
+
+    async def launch_library_sync_async(self) -> tuple[bool, str]:
+        return self.launch_library_sync()
 
     def is_running(self, engine_name: str) -> bool:
         task = self._tasks.get(engine_name)

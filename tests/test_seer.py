@@ -266,6 +266,7 @@ def test_request_media_tv_defaults_to_season_one_and_returns_request_id() -> Non
 
     class FakeAsyncClient:
         last_json: dict | None = None
+        last_headers: dict | None = None
 
         def __init__(self, *args, **kwargs) -> None:
             pass
@@ -278,6 +279,7 @@ def test_request_media_tv_defaults_to_season_one_and_returns_request_id() -> Non
 
         async def request(self, *, method: str, url: str, json: dict, headers: dict):
             FakeAsyncClient.last_json = json
+            FakeAsyncClient.last_headers = headers
             return FakeResponse(201, {"id": 42, "status": 2})
 
     async def scenario() -> None:
@@ -298,8 +300,9 @@ def test_request_media_tv_defaults_to_season_one_and_returns_request_id() -> Non
             "mediaId": 1932395,
             "seasons": [1],
             "tvdbId": 12345,
-            "userId": 12,
         }
+        assert FakeAsyncClient.last_headers is not None
+        assert FakeAsyncClient.last_headers["X-Api-User"] == "12"
 
     asyncio.run(scenario())
 

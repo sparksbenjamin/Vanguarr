@@ -118,8 +118,10 @@ class SeerClient(BaseAPIClient):
             body["seasons"] = [1]
             if tvdb_id is not None:
                 body["tvdbId"] = tvdb_id
+        request_headers = dict(self.headers)
         if settings.seer_request_user_id is not None:
-            body["userId"] = settings.seer_request_user_id
+            # Attribute the request to a Seer user without forcing admin-style request handling.
+            request_headers["X-Api-User"] = str(settings.seer_request_user_id)
 
         self._require_base_url()
         try:
@@ -128,7 +130,7 @@ class SeerClient(BaseAPIClient):
                     method="POST",
                     url=f"{self.base_url}/api/v1/request",
                     json=body,
-                    headers=self.headers,
+                    headers=request_headers,
                 )
         except httpx.HTTPError as exc:
             detail = str(exc).strip() or exc.__class__.__name__
