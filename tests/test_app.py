@@ -298,6 +298,38 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
         monkeypatch.setattr(client.app.state.vanguarr, "read_profile_summary", lambda username: "profile summary")
         monkeypatch.setattr(
             client.app.state.vanguarr,
+            "get_profile_payload_with_live_context",
+            lambda username: {
+                "profile_review": {
+                    "health_score": 78,
+                    "health_status": "healthy",
+                    "freshness": "fresh",
+                    "confidence": "medium",
+                    "summary": "Profile health 78/100.",
+                    "warnings": ["Recent rebuild looks healthy."],
+                    "strengths": ["Recent momentum is captured."],
+                    "diff_summary": ["Primary genres: +Sci-Fi"],
+                    "evidence": {"history_items": 24, "unique_titles": 12},
+                },
+                "explicit_feedback": {
+                    "liked_titles": ["Arrival"],
+                    "disliked_titles": [],
+                    "liked_genres": ["Sci-Fi"],
+                    "disliked_genres": [],
+                },
+                "blocked_titles": ["Anime Trap"],
+                "request_outcome_insights": {
+                    "counts": {"approved": 2, "downloaded": 1},
+                    "positive_titles": ["Arrival"],
+                    "negative_titles": [],
+                    "positive_genres": ["Sci-Fi"],
+                    "negative_genres": [],
+                },
+            },
+        )
+        monkeypatch.setattr(client.app.state.vanguarr, "get_request_history", lambda username, limit=8: [])
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
             "get_profile_task_snapshots",
             lambda username: {
                 "profile_architect": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
@@ -332,6 +364,121 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
     assert "Run Decision Engine" in response.text
     assert "Refresh Suggestions" in response.text
     assert "Last run: Never" in response.text or "Last run:" in response.text
+    assert "Health, freshness, and drift" in response.text
+    assert "What happened after requests" in response.text
+    assert "Anime Trap" in response.text
+
+
+def test_manifest_page_renders_decision_sandbox_preview(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(client.app.state.vanguarr, "list_profiles", lambda: ["alice"])
+        monkeypatch.setattr(client.app.state.vanguarr, "read_profile", lambda username: '{"username": "alice"}')
+        monkeypatch.setattr(client.app.state.vanguarr, "read_profile_summary", lambda username: "profile summary")
+        monkeypatch.setattr(client.app.state.vanguarr, "get_profile_payload_with_live_context", lambda username: {})
+        monkeypatch.setattr(client.app.state.vanguarr, "get_request_history", lambda username, limit=8: [])
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_profile_task_snapshots",
+            lambda username: {
+                "profile_architect": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
+                "decision_engine": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
+                "suggested_for_you": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
+            },
+        )
+        monkeypatch.setattr(client.app.state.vanguarr, "get_suggestions", lambda **kwargs: [])
+
+        async def fake_preview(username: str, limit: int = 8) -> dict[str, object]:
+            return {
+                "summary": "Dry-run reviewed 1 shortlisted candidate.",
+                "candidates": [
+                    {
+                        "media_type": "movie",
+                        "title": "Arrival",
+                        "overview": "First contact drama.",
+                        "genres": ["Sci-Fi", "Drama"],
+                        "sources": ["recommended:Interstellar"],
+                        "release_date": "2016-11-11",
+                        "rating": 8.2,
+                        "decision": "REQUEST",
+                        "hybrid_confidence": 0.82,
+                        "llm_vote": "REQUEST",
+                        "reasoning": "Final score 0.82.",
+                        "features": {"score_breakdown": {"genre_affinity": 0.22, "outcome_fit": 0.05}},
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(client.app.state.vanguarr, "preview_decision_candidates", fake_preview)
+
+        response = client.get("/manifest?username=alice&review=1")
+
+    assert response.status_code == 200
+    assert "Top candidate review" in response.text
+    assert "Dry-run reviewed 1 shortlisted candidate." in response.text
+    assert "Arrival" in response.text
+    assert "More Like This" in response.text
+    assert "Never Again" in response.text
+
+
+def test_manifest_profile_feedback_action_redirects_back_to_manifest(monkeypatch) -> None:
+    with TestClient(app) as client:
+        received: dict[str, object] = {}
+
+        def fake_update_profile_feedback(**kwargs):
+            received.update(kwargs)
+            return {}
+
+        monkeypatch.setattr(client.app.state.vanguarr, "update_profile_feedback", fake_update_profile_feedback)
+
+        response = client.post(
+            "/manifest/actions/profile-feedback",
+            data={
+                "username": "alice",
+                "action": "more_like_this",
+                "title": "Arrival",
+                "genres": "Sci-Fi,Drama",
+                "media_type": "movie",
+                "review": "1",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/manifest?username=alice&review=1&toast=Saved+more+like+this+feedback+for+Arrival."
+    assert received == {
+        "username": "alice",
+        "action": "more_like_this",
+        "title": "Arrival",
+        "genres": ["Sci-Fi", "Drama"],
+        "media_type": "movie",
+        "source": "manifest",
+    }
+
+
+def test_manifest_request_outcome_action_redirects_back_to_manifest(monkeypatch) -> None:
+    with TestClient(app) as client:
+        def fake_record_request_outcome(**kwargs):
+            assert kwargs["username"] == "alice"
+            assert kwargs["requested_media_id"] == 7
+            assert kwargs["outcome"] == "watched"
+            assert kwargs["source"] == "manifest"
+            return {"outcome": "watched", "media_title": "Arrival"}
+
+        monkeypatch.setattr(client.app.state.vanguarr, "record_request_outcome", fake_record_request_outcome)
+
+        response = client.post(
+            "/manifest/actions/request-outcome",
+            data={
+                "username": "alice",
+                "requested_media_id": "7",
+                "outcome": "watched",
+                "review": "1",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/manifest?username=alice&review=1&toast=Recorded+watched+for+Arrival."
 
 
 def test_manifest_suggested_for_you_action_redirects_back_to_manifest(monkeypatch) -> None:

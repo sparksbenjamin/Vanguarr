@@ -147,6 +147,283 @@
     </div>
   </section>
 
+  {% if selected_user %}
+  {% set live_review = profile_payload_live.get("profile_review", {}) %}
+  {% set outcome_insights = profile_payload_live.get("request_outcome_insights", {}) %}
+  <section class="grid gap-5 2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+    <section class="surface rounded-[1.45rem] overflow-hidden">
+      <div class="border-b border-white/5 px-5 py-4">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p class="panel-kicker">Profile Review</p>
+            <h2 class="mt-2 panel-title">Health, freshness, and drift</h2>
+            <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+              Review the current manifest the same way the engine sees it, including freshness warnings, evidence depth, and the last rebuild diff.
+            </p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <span class="status-pill {{ 'status-good' if live_review.get('health_status') in ['healthy', 'strong'] else 'status-warn' if live_review.get('health_status') == 'watch' else 'status-bad' }}">
+              {{ live_review.get("health_status", "unknown") }}
+            </span>
+            <span class="status-pill {{ 'status-good' if live_review.get('freshness') == 'fresh' else 'status-warn' if live_review.get('freshness') == 'aging' else 'status-bad' if live_review.get('freshness') == 'stale' else 'status-neutral' }}">
+              {{ live_review.get("freshness", "unknown") }}
+            </span>
+            <span class="status-pill status-neutral">Confidence {{ live_review.get("confidence", "low") }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="grid gap-4 px-5 py-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4">
+          <p class="panel-kicker">Score</p>
+          <div class="mt-3 flex items-end gap-3">
+            <p class="text-4xl font-semibold">{{ live_review.get("health_score", 0) }}</p>
+            <p class="pb-1 text-sm text-[var(--text-soft)]">/ 100</p>
+          </div>
+          <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">
+            {{ live_review.get("summary", "No review summary yet.") }}
+          </p>
+          <div class="mt-4 grid gap-3 sm:grid-cols-2">
+            {% for label, value in live_review.get("evidence", {}).items() %}
+            <div class="rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-3">
+              <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">{{ label.replace("_", " ") }}</p>
+              <p class="mt-2 text-lg font-medium">{{ value }}</p>
+            </div>
+            {% endfor %}
+          </div>
+        </article>
+
+        <div class="space-y-4">
+          <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4">
+            <p class="panel-kicker">Freshness Warnings</p>
+            <div class="mt-3 space-y-2 text-sm leading-6 text-[var(--text-soft)]">
+              {% for warning in live_review.get("warnings", []) %}
+              <p class="rounded-2xl border border-[rgba(255,127,127,0.14)] bg-[rgba(255,127,127,0.06)] px-4 py-3">{{ warning }}</p>
+              {% else %}
+              <p class="rounded-2xl border border-[rgba(90,217,158,0.14)] bg-[rgba(90,217,158,0.06)] px-4 py-3">No active profile warnings.</p>
+              {% endfor %}
+            </div>
+          </article>
+
+          <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4">
+            <p class="panel-kicker">Strengths And Diff</p>
+            <div class="mt-3 space-y-2 text-sm leading-6 text-[var(--text-soft)]">
+              {% for strength in live_review.get("strengths", [])[:3] %}
+              <p class="rounded-2xl border border-[rgba(90,217,158,0.14)] bg-[rgba(90,217,158,0.06)] px-4 py-3">{{ strength }}</p>
+              {% endfor %}
+              {% for item in live_review.get("diff_summary", []) %}
+              <p class="rounded-2xl border border-[rgba(246,189,103,0.14)] bg-[rgba(246,189,103,0.06)] px-4 py-3">{{ item }}</p>
+              {% else %}
+              {% if not live_review.get("strengths", []) %}
+              <p class="rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-3">No rebuild diff is stored yet for this profile.</p>
+              {% endif %}
+              {% endfor %}
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <div class="space-y-5">
+      <section class="surface rounded-[1.45rem] overflow-hidden">
+        <div class="border-b border-white/5 px-5 py-4">
+          <p class="panel-kicker">Human Guidance</p>
+          <h2 class="mt-2 panel-title">Likes, dislikes, and hard blocks</h2>
+        </div>
+        <div class="space-y-4 px-5 py-5 text-sm leading-6 text-[var(--text-soft)]">
+          <div>
+            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Liked Titles</p>
+            <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("liked_titles", [])|join(", ") or "None yet." }}</p>
+          </div>
+          <div>
+            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Disliked Titles</p>
+            <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("disliked_titles", [])|join(", ") or "None yet." }}</p>
+          </div>
+          <div>
+            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Liked Genres</p>
+            <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("liked_genres", [])|join(", ") or "None yet." }}</p>
+          </div>
+          <div>
+            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Disliked Genres</p>
+            <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("disliked_genres", [])|join(", ") or "None yet." }}</p>
+          </div>
+          <div>
+            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Never Again</p>
+            <p class="mt-2">{{ profile_payload_live.get("blocked_titles", [])|join(", ") or "No hard-blocked titles." }}</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface rounded-[1.45rem] overflow-hidden">
+        <div class="border-b border-white/5 px-5 py-4">
+          <p class="panel-kicker">Outcome Learning</p>
+          <h2 class="mt-2 panel-title">What happened after requests</h2>
+        </div>
+        <div class="space-y-4 px-5 py-5">
+          <div class="grid gap-3 sm:grid-cols-3">
+            {% for label, value in outcome_insights.get("counts", {}).items() %}
+            <div class="rounded-2xl border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-3">
+              <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">{{ label }}</p>
+              <p class="mt-2 text-xl font-medium">{{ value }}</p>
+            </div>
+            {% else %}
+            <div class="rounded-2xl border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-3 sm:col-span-3">
+              <p class="text-sm leading-6 text-[var(--text-soft)]">No request outcomes have been captured for this profile yet.</p>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="grid gap-4 lg:grid-cols-2">
+            <article class="rounded-[1.25rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+              <p class="panel-kicker">Positive Signals</p>
+              <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">Titles: {{ outcome_insights.get("positive_titles", [])|join(", ") or "None yet." }}</p>
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Genres: {{ outcome_insights.get("positive_genres", [])|join(", ") or "None yet." }}</p>
+            </article>
+            <article class="rounded-[1.25rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+              <p class="panel-kicker">Negative Signals</p>
+              <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">Titles: {{ outcome_insights.get("negative_titles", [])|join(", ") or "None yet." }}</p>
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Genres: {{ outcome_insights.get("negative_genres", [])|join(", ") or "None yet." }}</p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section class="surface rounded-[1.45rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p class="panel-kicker">Decision Sandbox</p>
+          <h2 class="mt-2 panel-title">Top candidate review</h2>
+          <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+            Run a dry-run shortlist against the current profile to see exactly what Vanguarr would favor before it sends anything to Seer.
+          </p>
+        </div>
+        <form method="get" action="/manifest" class="flex flex-col gap-3 sm:flex-row">
+          <input type="hidden" name="username" value="{{ selected_user }}" />
+          <input type="hidden" name="review" value="1" />
+          <button class="button button-amber" type="submit">{{ "Refresh Dry Run" if review_requested else "Run Dry Run Review" }}</button>
+        </form>
+      </div>
+    </div>
+    <div class="space-y-4 px-5 py-5">
+      {% if decision_preview_error %}
+      <div class="rounded-2xl border border-[rgba(255,127,127,0.18)] bg-[rgba(255,127,127,0.08)] px-4 py-3 text-sm text-[var(--red)]">{{ decision_preview_error }}</div>
+      {% elif decision_preview %}
+      <div class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4 text-sm leading-6 text-[var(--text-soft)]">
+        {{ decision_preview.get("summary", "Dry-run complete.") }}
+      </div>
+      <div class="grid gap-4">
+        {% for item in decision_preview.get("candidates", []) %}
+        <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] p-4">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p class="panel-kicker">{{ item.media_type }}</p>
+              <h3 class="mt-2 text-lg font-semibold">{{ item.title }}</h3>
+              <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+                {{ item.genres|join(", ") or "No genres" }}{% if item.release_date %} / {{ item.release_date }}{% endif %}{% if item.rating %} / rating {{ "%.1f"|format(item.rating) }}{% endif %}
+              </p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <span class="status-pill {{ 'status-good' if item.decision == 'REQUEST' else 'status-neutral' }}">{{ item.decision|lower }}</span>
+              <span class="status-pill status-neutral">Score {{ "%.2f"|format(item.hybrid_confidence) }}</span>
+              <span class="status-pill status-neutral">LLM {{ item.llm_vote|lower }}</span>
+            </div>
+          </div>
+          {% if item.overview %}
+          <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">{{ item.overview }}</p>
+          {% endif %}
+          <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">{{ item.reasoning }}</p>
+          <div class="mt-4 flex flex-wrap gap-2 text-xs text-[var(--text-dim)]">
+            {% for source in item.sources %}
+            <span class="rounded-full border border-[rgba(160,182,207,0.08)] px-3 py-1">{{ source }}</span>
+            {% endfor %}
+          </div>
+          <details class="mt-4 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-3">
+            <summary class="cursor-pointer text-sm font-medium text-white">Score breakdown</summary>
+            <div class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {% for key, value in item.features.get("score_breakdown", {}).items() %}
+              <div class="rounded-2xl border border-[rgba(160,182,207,0.08)] bg-white/5 px-3 py-2">
+                <p class="mono text-[0.68rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">{{ key.replace("_", " ") }}</p>
+                <p class="mt-1 text-sm">{{ "%.3f"|format(value) }}</p>
+              </div>
+              {% endfor %}
+            </div>
+          </details>
+          <form method="post" action="/manifest/actions/profile-feedback" class="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+            <input type="hidden" name="username" value="{{ selected_user }}" />
+            <input type="hidden" name="title" value="{{ item.title }}" />
+            <input type="hidden" name="media_type" value="{{ item.media_type }}" />
+            <input type="hidden" name="genres" value="{{ item.genres|join(',') }}" />
+            <input type="hidden" name="review" value="{{ '1' if review_requested else '' }}" />
+            <button class="button button-primary" type="submit" name="action" value="like">Like</button>
+            <button class="button button-ghost" type="submit" name="action" value="dislike">Dislike</button>
+            <button class="button button-ghost" type="submit" name="action" value="more_like_this">More Like This</button>
+            <button class="button button-ghost" type="submit" name="action" value="less_like_this">Less Like This</button>
+            <button class="button button-ghost" type="submit" name="action" value="never_again">Never Again</button>
+          </form>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state">
+        Run the dry-run review to inspect the current shortlist, see the score breakdown, and steer the profile with likes, dislikes, or hard blocks.
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="surface rounded-[1.45rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
+      <p class="panel-kicker">Request History</p>
+      <h2 class="mt-2 panel-title">Outcome timeline</h2>
+    </div>
+    <div class="space-y-4 px-5 py-5">
+      {% if request_history %}
+      {% for item in request_history %}
+      <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p class="panel-kicker">{{ item.media_type }}</p>
+            <h3 class="mt-2 text-lg font-semibold">{{ item.media_title }}</h3>
+            <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+              Requested {{ item.created_at or "unknown" }}{% if item.genres %} / {{ item.genres|join(", ") }}{% endif %}
+            </p>
+          </div>
+          <span class="status-pill {{ 'status-good' if item.latest_outcome in ['approved', 'downloaded', 'watched'] else 'status-bad' if item.latest_outcome in ['denied', 'ignored', 'unavailable'] else 'status-neutral' }}">
+            {{ item.latest_outcome }}
+          </span>
+        </div>
+        {% if item.latest_outcome_detail %}
+        <p class="mt-3 text-sm leading-6 text-[var(--text-soft)]">{{ item.latest_outcome_detail }}</p>
+        {% endif %}
+        <details class="mt-4 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-3">
+          <summary class="cursor-pointer text-sm font-medium text-white">Open outcome timeline</summary>
+          <div class="mt-3 space-y-2 text-sm leading-6 text-[var(--text-soft)]">
+            {% for event in item.timeline %}
+            <p>{{ event.created_at or "unknown" }} / {{ event.outcome }} / {{ event.source }}{% if event.detail %} / {{ event.detail }}{% endif %}</p>
+            {% endfor %}
+          </div>
+        </details>
+        <form method="post" action="/manifest/actions/request-outcome" class="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+          <input type="hidden" name="username" value="{{ selected_user }}" />
+          <input type="hidden" name="requested_media_id" value="{{ item.id }}" />
+          <input type="hidden" name="review" value="{{ '1' if review_requested else '' }}" />
+          <button class="button button-ghost" type="submit" name="outcome" value="approved">Approved</button>
+          <button class="button button-ghost" type="submit" name="outcome" value="denied">Denied</button>
+          <button class="button button-ghost" type="submit" name="outcome" value="ignored">Ignored</button>
+          <button class="button button-ghost" type="submit" name="outcome" value="unavailable">Unavailable</button>
+          <button class="button button-ghost" type="submit" name="outcome" value="downloaded">Downloaded</button>
+          <button class="button button-primary" type="submit" name="outcome" value="watched">Watched</button>
+        </form>
+      </article>
+      {% endfor %}
+      {% else %}
+      <div class="empty-state">No request history is stored for this profile yet.</div>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
   <div class="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
     <aside class="space-y-5 xl:sticky xl:top-24 xl:self-start">
       <section class="surface rounded-[1.45rem] overflow-hidden">

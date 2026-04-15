@@ -131,6 +131,14 @@ def redirect_with_toast(path: str, message: str, **params: str) -> RedirectRespo
     return RedirectResponse(f"{path}?{urlencode(payload)}", status_code=303)
 
 
+def redirect_to_manifest(message: str, *, username: str = "", review: str = "") -> RedirectResponse:
+    return redirect_with_toast("/manifest", message, username=username, review=review)
+
+
+def parse_csv_values(raw: str) -> list[str]:
+    return [value.strip() for value in str(raw or "").split(",") if value.strip()]
+
+
 def _extract_bearer_token(header_value: str | None) -> str | None:
     raw = str(header_value or "").strip()
     if not raw:
@@ -672,13 +680,14 @@ async def library_sync_status(request: Request) -> JSONResponse:
 
 
 @app.get("/manifest", response_class=HTMLResponse)
-async def manifest(request: Request, username: str = "") -> HTMLResponse:
+async def manifest(request: Request, username: str = "", review: str = "") -> HTMLResponse:
     service: VanguarrService = request.app.state.vanguarr
     settings = current_settings(request.app, force=True)
     profiles = service.list_profiles()
     selected_user = username or (profiles[0] if profiles else "")
     profile_content = service.read_profile(selected_user) if selected_user else ""
     profile_summary = service.read_profile_summary(selected_user) if selected_user else ""
+    profile_payload_live = service.get_profile_payload_with_live_context(selected_user) if selected_user else {}
     profile_json_path = service.profile_store.json_path_for(selected_user) if selected_user else None
     profile_summary_path = service.profile_store.summary_path_for(selected_user) if selected_user else None
     suggestions_preview = (
@@ -686,7 +695,16 @@ async def manifest(request: Request, username: str = "") -> HTMLResponse:
         if selected_user
         else []
     )
+    request_history = service.get_request_history(selected_user, limit=8) if selected_user else []
     profile_task_snapshots = service.get_profile_task_snapshots(selected_user) if selected_user else {}
+    review_requested = str(review or "").strip() in {"1", "true", "yes", "on"}
+    decision_preview: dict[str, object] | None = None
+    decision_preview_error = ""
+    if selected_user and review_requested:
+        try:
+            decision_preview = await service.preview_decision_candidates(selected_user, limit=8)
+        except Exception as exc:
+            decision_preview_error = str(exc)
     return templates.TemplateResponse(
         request=request,
         name="manifest.html",
@@ -699,11 +717,16 @@ async def manifest(request: Request, username: str = "") -> HTMLResponse:
             "selected_user": selected_user,
             "profile_content": profile_content,
             "profile_summary": profile_summary,
+            "profile_payload_live": profile_payload_live,
             "profile_json_path": profile_json_path,
             "profile_summary_path": profile_summary_path,
             "suggestions_preview": suggestions_preview,
             "suggestions_limit": settings.suggestions_limit,
+            "request_history": request_history,
             "profile_task_snapshots": profile_task_snapshots,
+            "review_requested": review_requested,
+            "decision_preview": decision_preview,
+            "decision_preview_error": decision_preview_error,
         },
     )
 
@@ -722,11 +745,75 @@ async def manifest_save(
     try:
         service.save_profile(cleaned_username, content)
     except json.JSONDecodeError:
-        return redirect_with_toast("/manifest", "Profile manifest must be valid JSON.", username=cleaned_username)
+        return redirect_to_manifest("Profile manifest must be valid JSON.", username=cleaned_username)
     except ValueError as exc:
-        return redirect_with_toast("/manifest", str(exc), username=cleaned_username)
+        return redirect_to_manifest(str(exc), username=cleaned_username)
 
-    return redirect_with_toast("/manifest", f"Saved profile manifest for {cleaned_username}.", username=cleaned_username)
+    return redirect_to_manifest(f"Saved profile manifest for {cleaned_username}.", username=cleaned_username)
+
+
+@app.post("/manifest/actions/profile-feedback")
+async def manifest_action_profile_feedback(
+    request: Request,
+    username: str = Form(""),
+    action: str = Form(""),
+    title: str = Form(""),
+    genres: str = Form(""),
+    media_type: str = Form("unknown"),
+    review: str = Form(""),
+) -> RedirectResponse:
+    cleaned_username = username.strip()
+    if not cleaned_username:
+        return redirect_to_manifest("Select a profile before sending feedback.")
+
+    try:
+        request.app.state.vanguarr.update_profile_feedback(
+            username=cleaned_username,
+            action=action,
+            title=title,
+            genres=parse_csv_values(genres),
+            media_type=media_type,
+            source="manifest",
+        )
+    except ValueError as exc:
+        return redirect_to_manifest(str(exc), username=cleaned_username, review=review)
+
+    return redirect_to_manifest(
+        f"Saved {action.replace('_', ' ')} feedback for {title.strip() or 'that title'}.",
+        username=cleaned_username,
+        review=review,
+    )
+
+
+@app.post("/manifest/actions/request-outcome")
+async def manifest_action_request_outcome(
+    request: Request,
+    username: str = Form(""),
+    requested_media_id: int = Form(...),
+    outcome: str = Form(""),
+    detail: str = Form(""),
+    review: str = Form(""),
+) -> RedirectResponse:
+    cleaned_username = username.strip()
+    if not cleaned_username:
+        return redirect_to_manifest("Select a profile before recording a request outcome.")
+
+    try:
+        result = request.app.state.vanguarr.record_request_outcome(
+            username=cleaned_username,
+            requested_media_id=requested_media_id,
+            outcome=outcome,
+            source="manifest",
+            detail=detail,
+        )
+    except ValueError as exc:
+        return redirect_to_manifest(str(exc), username=cleaned_username, review=review)
+
+    return redirect_to_manifest(
+        f"Recorded {result['outcome']} for {result['media_title']}.",
+        username=cleaned_username,
+        review=review,
+    )
 
 
 @app.post("/manifest/actions/suggested-for-you")

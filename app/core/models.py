@@ -45,6 +45,23 @@ class RequestedMedia(Base):
     seer_request_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class RequestOutcomeEvent(Base):
+    __tablename__ = "request_outcome_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    requested_media_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    username: Mapped[str] = mapped_column(String(255), index=True)
+    media_type: Mapped[str] = mapped_column(String(32), index=True)
+    media_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    media_title: Mapped[str] = mapped_column(String(255), index=True)
+    request_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    outcome: Mapped[str] = mapped_column(String(32), index=True)
+    source: Mapped[str] = mapped_column(String(64), default="manual", index=True)
+    detail: Mapped[str] = mapped_column(Text, default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class TaskRun(Base):
     __tablename__ = "task_runs"
 

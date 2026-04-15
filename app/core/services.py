@@ -25,6 +25,7 @@ from app.api.tmdb import TMDbClient
 from app.core.models import (
     DecisionLog,
     LibraryMedia,
+    RequestOutcomeEvent,
     RequestedMedia,
     SeerWebhookEvent,
     SuggestedMedia,
@@ -159,8 +160,30 @@ class ProfileStore:
                 "liked_genres": [],
                 "disliked_genres": [],
             },
+            "blocked_titles": [],
             "profile_exclusions": [],
             "operator_notes": "",
+            "request_outcome_insights": {
+                "counts": {},
+                "positive_titles": [],
+                "negative_titles": [],
+                "positive_genres": [],
+                "negative_genres": [],
+                "recent_outcomes": [],
+            },
+            "profile_review": {
+                "health_score": 0,
+                "health_status": "unknown",
+                "confidence": "low",
+                "freshness": "unknown",
+                "warnings": [],
+                "strengths": [],
+                "changed_fields": [],
+                "diff_summary": [],
+                "evidence": {},
+                "summary": "",
+                "last_reviewed_at": None,
+            },
             "top_keywords": [],
             "favorite_people": [],
             "preferred_brands": [],
@@ -426,6 +449,9 @@ class VanguarrService:
             "decision_engine": "Decision Engine",
             "suggested_for_you": "Suggested For You",
             "library_sync": "Library Sync",
+            "profile_feedback": "Profile Feedback",
+            "request_outcome": "Request Outcome",
+            "decision_preview": "Decision Dry Run",
         }
         normalized = str(engine or "").strip()
         return labels.get(normalized, normalized.replace("_", " ").title() or "System")
@@ -464,6 +490,355 @@ class VanguarrService:
         with self.session_scope() as session:
             stmt = select(RequestedMedia).order_by(desc(RequestedMedia.created_at)).limit(limit)
             return list(session.scalars(stmt))
+
+    def get_profile_payload_with_live_context(self, username: str) -> dict[str, Any]:
+        payload = self.profile_store.read_payload(username)
+        return self._with_live_profile_context(username, payload)
+
+    def _with_live_profile_context(self, username: str, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = self._normalize_saved_profile_payload(username, payload)
+        insights = self._build_request_outcome_insights(username)
+        normalized["request_outcome_insights"] = insights
+        stored_review = self._normalize_profile_review(payload.get("profile_review", {}))
+        live_review = self._build_profile_review(normalized)
+        if stored_review.get("diff_summary"):
+            live_review["diff_summary"] = stored_review["diff_summary"]
+            live_review["changed_fields"] = stored_review["changed_fields"]
+        normalized["profile_review"] = live_review
+        return normalized
+
+    def _requested_media_payload(self, session: Session, row: RequestedMedia) -> dict[str, Any]:
+        conditions = [
+            DecisionLog.username == row.username,
+            DecisionLog.media_type == row.media_type,
+            DecisionLog.media_id == row.media_id,
+            DecisionLog.requested.is_(True),
+        ]
+        if row.seer_request_id is not None:
+            conditions = [or_(DecisionLog.request_id == row.seer_request_id, *conditions)]
+        log = session.scalar(
+            select(DecisionLog)
+            .where(*conditions)
+            .order_by(desc(DecisionLog.created_at))
+            .limit(1)
+        )
+        if log is None:
+            return {}
+        try:
+            payload = json.loads(log.payload_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def get_request_history(self, username: str, limit: int = 10) -> list[dict[str, Any]]:
+        cleaned_username = str(username or "").strip()
+        if not cleaned_username:
+            return []
+
+        with self.session_scope() as session:
+            requested_rows = list(
+                session.scalars(
+                    select(RequestedMedia)
+                    .where(RequestedMedia.username == cleaned_username)
+                    .order_by(desc(RequestedMedia.created_at))
+                    .limit(limit)
+                )
+            )
+            if not requested_rows:
+                return []
+
+            requested_ids = [row.id for row in requested_rows]
+            request_ids = [row.seer_request_id for row in requested_rows if row.seer_request_id is not None]
+            outcome_rows = list(
+                session.scalars(
+                    select(RequestOutcomeEvent)
+                    .where(
+                        or_(
+                            RequestOutcomeEvent.requested_media_id.in_(requested_ids),
+                            RequestOutcomeEvent.request_id.in_(request_ids) if request_ids else False,
+                            RequestOutcomeEvent.username == cleaned_username,
+                        )
+                    )
+                    .order_by(desc(RequestOutcomeEvent.created_at))
+                )
+            )
+
+            payload_cache = {
+                row.id: self._requested_media_payload(session, row)
+                for row in requested_rows
+            }
+
+        history: list[dict[str, Any]] = []
+        for row in requested_rows:
+            matching_events = [
+                event
+                for event in outcome_rows
+                if (
+                    event.requested_media_id == row.id
+                    or (row.seer_request_id is not None and event.request_id == row.seer_request_id)
+                    or (
+                        event.username == row.username
+                        and event.media_type == row.media_type
+                        and event.media_id == row.media_id
+                    )
+                )
+            ]
+            timeline = [
+                {
+                    "id": event.id,
+                    "outcome": self._normalize_request_outcome_label(event.outcome),
+                    "detail": str(event.detail or "").strip(),
+                    "source": str(event.source or "").strip() or "manual",
+                    "created_at": event.created_at.isoformat() if event.created_at else None,
+                }
+                for event in matching_events[:6]
+            ]
+            latest = timeline[0] if timeline else None
+            payload = payload_cache.get(row.id, {})
+            history.append(
+                {
+                    "id": row.id,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "username": row.username,
+                    "media_type": row.media_type,
+                    "media_id": row.media_id,
+                    "media_title": row.media_title,
+                    "source": row.source,
+                    "seer_request_id": row.seer_request_id,
+                    "latest_outcome": latest["outcome"] if latest else "requested",
+                    "latest_outcome_source": latest["source"] if latest else "decision_engine",
+                    "latest_outcome_detail": latest["detail"] if latest else "",
+                    "timeline": timeline,
+                    "genres": self._normalize_genres(payload.get("genres", []), limit=5),
+                }
+            )
+        return history
+
+    def update_profile_feedback(
+        self,
+        *,
+        username: str,
+        action: str,
+        title: str,
+        genres: list[str] | None = None,
+        media_type: str = "unknown",
+        source: str = "manual",
+    ) -> dict[str, Any]:
+        cleaned_username = str(username or "").strip()
+        cleaned_title = str(title or "").strip()
+        normalized_action = str(action or "").strip().lower().replace("-", "_")
+        if not cleaned_username or not cleaned_title:
+            raise ValueError("Username and title are required for profile feedback.")
+
+        payload = self.profile_store.read_payload(cleaned_username)
+        feedback = self._normalize_explicit_feedback(payload.get("explicit_feedback", {}))
+        blocked_titles = self._normalize_string_list(payload.get("blocked_titles", []), limit=12)
+        candidate_genres = self._normalize_genres(genres or [], limit=5)
+
+        def add_unique(items: list[str], value: str, *, limit: int) -> list[str]:
+            return self._normalize_string_list(items + [value], limit=limit)
+
+        def remove_casefold(items: list[str], value: str) -> list[str]:
+            lowered = value.lower()
+            return [item for item in items if item.lower() != lowered]
+
+        if normalized_action == "like":
+            feedback["liked_titles"] = add_unique(feedback["liked_titles"], cleaned_title, limit=12)
+            feedback["disliked_titles"] = remove_casefold(feedback["disliked_titles"], cleaned_title)
+            blocked_titles = remove_casefold(blocked_titles, cleaned_title)
+        elif normalized_action == "dislike":
+            feedback["disliked_titles"] = add_unique(feedback["disliked_titles"], cleaned_title, limit=12)
+            feedback["liked_titles"] = remove_casefold(feedback["liked_titles"], cleaned_title)
+        elif normalized_action == "more_like_this":
+            feedback["liked_titles"] = add_unique(feedback["liked_titles"], cleaned_title, limit=12)
+            feedback["disliked_titles"] = remove_casefold(feedback["disliked_titles"], cleaned_title)
+            blocked_titles = remove_casefold(blocked_titles, cleaned_title)
+            for genre in candidate_genres:
+                feedback["liked_genres"] = add_unique(feedback["liked_genres"], genre, limit=8)
+                feedback["disliked_genres"] = remove_casefold(feedback["disliked_genres"], genre)
+        elif normalized_action == "less_like_this":
+            feedback["disliked_titles"] = add_unique(feedback["disliked_titles"], cleaned_title, limit=12)
+            feedback["liked_titles"] = remove_casefold(feedback["liked_titles"], cleaned_title)
+            for genre in candidate_genres:
+                feedback["disliked_genres"] = add_unique(feedback["disliked_genres"], genre, limit=8)
+                feedback["liked_genres"] = remove_casefold(feedback["liked_genres"], genre)
+        elif normalized_action == "never_again":
+            blocked_titles = add_unique(blocked_titles, cleaned_title, limit=12)
+            feedback["disliked_titles"] = add_unique(feedback["disliked_titles"], cleaned_title, limit=12)
+            feedback["liked_titles"] = remove_casefold(feedback["liked_titles"], cleaned_title)
+        else:
+            raise ValueError(f"Unsupported feedback action: {action}")
+
+        payload["explicit_feedback"] = feedback
+        payload["blocked_titles"] = blocked_titles
+        normalized = self._normalize_saved_profile_payload(cleaned_username, payload)
+        normalized["request_outcome_insights"] = self._normalize_request_outcome_insights(
+            payload.get("request_outcome_insights", {})
+        )
+        normalized["profile_review"] = self._build_profile_review(normalized)
+        self.profile_store.write_payload(cleaned_username, normalized)
+
+        verb_lookup = {
+            "like": "liked",
+            "dislike": "disliked",
+            "more_like_this": "asked for more titles like",
+            "less_like_this": "asked for less titles like",
+            "never_again": "blocked",
+        }
+        self.record_operation_event(
+            engine="profile_feedback",
+            username=cleaned_username,
+            media_type=media_type or "unknown",
+            media_title=cleaned_title,
+            source=source,
+            decision=normalized_action.upper(),
+            reasoning=(
+                f"Operator {verb_lookup.get(normalized_action, normalized_action)} {cleaned_title}"
+                + (f" with genre hints {self._human_join(candidate_genres)}." if candidate_genres and normalized_action in {"more_like_this", "less_like_this"} else ".")
+            ),
+            detail_payload={
+                "action": normalized_action,
+                "title": cleaned_title,
+                "genres": candidate_genres,
+            },
+        )
+        return normalized
+
+    def record_request_outcome(
+        self,
+        *,
+        username: str,
+        requested_media_id: int,
+        outcome: str,
+        source: str = "manual",
+        detail: str = "",
+    ) -> dict[str, Any]:
+        cleaned_username = str(username or "").strip()
+        normalized_outcome = self._normalize_request_outcome_label(outcome)
+        if normalized_outcome not in {"approved", "denied", "ignored", "unavailable", "downloaded", "watched"}:
+            raise ValueError("Unsupported request outcome.")
+
+        with self.session_scope() as session:
+            requested_row = session.get(RequestedMedia, requested_media_id)
+            if requested_row is None or requested_row.username != cleaned_username:
+                raise ValueError("Requested media entry was not found for that user.")
+
+            payload = self._requested_media_payload(session, requested_row)
+            event = RequestOutcomeEvent(
+                requested_media_id=requested_row.id,
+                username=requested_row.username,
+                media_type=requested_row.media_type,
+                media_id=requested_row.media_id,
+                media_title=requested_row.media_title,
+                request_id=requested_row.seer_request_id,
+                outcome=normalized_outcome,
+                source=source,
+                detail=str(detail or "").strip(),
+                payload_json=json.dumps(payload, ensure_ascii=True),
+            )
+            session.add(event)
+
+        self.record_operation_event(
+            engine="request_outcome",
+            username=cleaned_username,
+            media_type=requested_row.media_type,
+            media_title=requested_row.media_title,
+            source=source,
+            decision=normalized_outcome.upper(),
+            reasoning=f"Recorded request outcome {normalized_outcome} for {requested_row.media_title}.",
+            detail_payload={
+                "requested_media_id": requested_media_id,
+                "request_id": requested_row.seer_request_id,
+                "outcome": normalized_outcome,
+            },
+        )
+        live_payload = self._with_live_profile_context(cleaned_username, self.profile_store.read_payload(cleaned_username))
+        self.profile_store.write_payload(cleaned_username, live_payload)
+        return {
+            "requested_media_id": requested_media_id,
+            "outcome": normalized_outcome,
+            "media_title": requested_row.media_title,
+        }
+
+    def _build_request_outcome_insights(self, username: str) -> dict[str, Any]:
+        cleaned_username = str(username or "").strip()
+        if not cleaned_username:
+            return self._normalize_request_outcome_insights({})
+
+        with self.session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(RequestOutcomeEvent)
+                    .where(RequestOutcomeEvent.username == cleaned_username)
+                    .order_by(desc(RequestOutcomeEvent.created_at))
+                    .limit(80)
+                )
+            )
+
+        if not rows:
+            return self._normalize_request_outcome_insights({})
+
+        latest_by_key: dict[tuple[Any, ...], RequestOutcomeEvent] = {}
+        recent_outcomes: list[dict[str, Any]] = []
+        for row in rows:
+            outcome = self._normalize_request_outcome_label(row.outcome)
+            key = (
+                int(row.requested_media_id or 0),
+                str(row.media_type or ""),
+                int(row.media_id or 0),
+                str(row.media_title or "").strip().lower(),
+            )
+            latest_by_key.setdefault(key, row)
+            recent_outcomes.append(
+                {
+                    "title": row.media_title,
+                    "outcome": outcome,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "source": row.source,
+                }
+            )
+            if len(recent_outcomes) >= 8:
+                break
+
+        positive_outcomes = {"approved", "downloaded", "watched"}
+        negative_outcomes = {"denied", "ignored", "unavailable"}
+        counts: Counter[str] = Counter()
+        positive_titles: Counter[str] = Counter()
+        negative_titles: Counter[str] = Counter()
+        positive_genres: Counter[str] = Counter()
+        negative_genres: Counter[str] = Counter()
+
+        for row in latest_by_key.values():
+            outcome = self._normalize_request_outcome_label(row.outcome)
+            counts[outcome] += 1
+            title = str(row.media_title or "").strip()
+            try:
+                payload = json.loads(row.payload_json or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            payload = payload if isinstance(payload, dict) else {}
+            genres = self._normalize_genres(payload.get("genres", []), limit=5)
+            if outcome in positive_outcomes:
+                if title:
+                    positive_titles[title] += 1
+                for genre in genres:
+                    positive_genres[genre] += 1
+            elif outcome in negative_outcomes:
+                if title:
+                    negative_titles[title] += 1
+                for genre in genres:
+                    negative_genres[genre] += 1
+
+        return self._normalize_request_outcome_insights(
+            {
+                "counts": dict(counts),
+                "positive_titles": self._rank_counter(positive_titles, limit=4),
+                "negative_titles": self._rank_counter(negative_titles, limit=4),
+                "positive_genres": self._rank_counter(positive_genres, limit=4),
+                "negative_genres": self._rank_counter(negative_genres, limit=4),
+                "recent_outcomes": recent_outcomes,
+            }
+        )
 
     def get_suggestions(
         self,
@@ -1005,18 +1380,13 @@ class VanguarrService:
                             "errors": list(errors),
                         },
                     )
-                    history = await self.media_server.get_playback_history(
-                        user["Id"],
-                        self._playback_history_limit(),
-                    )
-                    stored_profile = self.profile_store.read_payload(current_username)
-                    profile_payload, recommendation_seeds, should_persist = await self._prepare_runtime_profile_payload(
-                        current_username,
-                        history,
-                        existing_payload=stored_profile,
-                    )
-                    if should_persist:
-                        self.profile_store.write_payload(current_username, profile_payload)
+                    prepared = await self._prepare_decision_candidates_for_user(user)
+                    profile_payload = prepared["profile_payload"]
+                    viewing_history = prepared["viewing_history"]
+                    candidates = prepared["shortlisted_candidates"]
+                    requested_media_keys = set(prepared["requested_media_keys"])
+                    scored += int(prepared["scored"] or 0)
+                    skipped += int(prepared["skipped"] or 0)
                     completed_steps += 1
                     self._update_task(
                         task.id,
@@ -1037,64 +1407,6 @@ class VanguarrService:
                             "skipped": skipped,
                             "errors": list(errors),
                         },
-                    )
-
-                    viewing_history = self._build_viewing_history_context(
-                        history,
-                        recommendation_seeds=recommendation_seeds,
-                        profile_summary=profile_payload,
-                    )
-                    genre_seeds = self._build_genre_discovery_seeds(profile_payload)
-                    candidate_pool = await self.seer.discover_candidates(
-                        recommendation_seeds,
-                        genre_seeds=genre_seeds,
-                        limit=self.settings.candidate_limit,
-                        genre_limit=self.settings.genre_candidate_limit,
-                        trending_limit=self.settings.trending_candidate_limit,
-                    )
-                    watched_media_keys = self._build_watched_media_keys(history)
-                    ranked_candidates = self._rank_candidate_pool(
-                        candidate_pool,
-                        profile_summary=profile_payload,
-                    )
-
-                    with self.session_scope() as session:
-                        requested_media_keys = self._requested_media_keys(session, current_username)
-
-                    filtered_candidates: list[dict[str, Any]] = []
-                    for candidate in ranked_candidates:
-                        scored += 1
-                        if self._is_managed_candidate(candidate):
-                            skipped += 1
-                            continue
-                        if self._candidate_key(candidate) in watched_media_keys:
-                            skipped += 1
-                            continue
-                        if self._candidate_key(candidate) in requested_media_keys:
-                            skipped += 1
-                            continue
-
-                        deterministic_score = float(
-                            candidate.get("recommendation_features", {}).get("deterministic_score") or 0.0
-                        )
-                        if deterministic_score < self._decision_prefilter_threshold():
-                            skipped += 1
-                            continue
-
-                        filtered_candidates.append(candidate)
-
-                    filtered_candidates = await self._enrich_candidate_pool_with_tmdb(
-                        filtered_candidates,
-                        limit=self.settings.tmdb_candidate_enrichment_limit,
-                    )
-                    filtered_candidates = self._rank_candidate_pool(
-                        filtered_candidates,
-                        profile_summary=profile_payload,
-                    )
-
-                    candidates = self._diversify_candidates(
-                        filtered_candidates,
-                        limit=self.settings.decision_shortlist_limit,
                     )
                     shortlisted += len(candidates)
                     completed_steps += 1
@@ -1349,6 +1661,123 @@ class VanguarrService:
             "requested": requested,
             "skipped": skipped,
             "errors": errors,
+        }
+
+    async def preview_decision_candidates(self, username: str, *, limit: int = 8) -> dict[str, Any]:
+        cleaned_username = str(username or "").strip()
+        if not cleaned_username:
+            raise ValueError("Select a profile before running a dry-run review.")
+
+        users = await self.media_server.list_users()
+        target_user = next((user for user in users if str(user.get("Name") or "") == cleaned_username), None)
+        if target_user is None:
+            raise ValueError(f"No {self.settings.media_server_label} user matched {cleaned_username}.")
+
+        prepared = await self._prepare_decision_candidates_for_user(
+            target_user,
+            shortlist_limit=max(limit, self.settings.decision_shortlist_limit),
+        )
+        profile_payload = prepared["profile_payload"]
+        viewing_history = prepared["viewing_history"]
+        candidates = list(prepared["shortlisted_candidates"])[: max(1, int(limit))]
+        preview_rows: list[dict[str, Any]] = []
+
+        for candidate in candidates:
+            deterministic_score = float(candidate.get("recommendation_features", {}).get("deterministic_score") or 0.0)
+            llm_vote = "UNAVAILABLE"
+            llm_confidence: float | None = None
+            llm_reasoning = ""
+
+            try:
+                llm_payload = await self.llm.generate_json(
+                    messages=build_decision_messages(
+                        username=cleaned_username,
+                        profile_payload=profile_payload,
+                        viewing_history=viewing_history,
+                        candidate=candidate,
+                        global_exclusions=self._parse_global_exclusions(),
+                    ),
+                    temperature=0,
+                    purpose="decision",
+                )
+                llm_vote = str(llm_payload.get("decision", "IGNORE")).upper()
+                if llm_vote not in {"REQUEST", "IGNORE"}:
+                    llm_vote = "IGNORE"
+                llm_confidence = self._coerce_float(llm_payload.get("confidence"))
+                llm_reasoning = str(llm_payload.get("reasoning", "No reasoning provided.")).strip()
+            except Exception as exc:
+                logger.warning(
+                    "Decision preview LLM fallback triggered user=%s title=%s reason=%s",
+                    cleaned_username,
+                    candidate.get("title", "unknown"),
+                    exc,
+                )
+
+            confidence = self._blend_confidences(
+                deterministic_score=deterministic_score,
+                llm_confidence=llm_confidence,
+                llm_vote=llm_vote,
+                llm_weight_percent=self.settings.decision_ai_weight_percent,
+            )
+            decision = "REQUEST" if confidence >= self.settings.request_threshold else "IGNORE"
+            reasoning = self._compose_decision_reasoning(
+                candidate,
+                deterministic_score=deterministic_score,
+                hybrid_confidence=confidence,
+                decision=decision,
+                request_threshold=self.settings.request_threshold,
+                llm_vote=llm_vote,
+                llm_reasoning=llm_reasoning,
+            )
+            preview_rows.append(
+                {
+                    "media_type": str(candidate.get("media_type") or "unknown"),
+                    "media_id": int(candidate.get("media_id") or 0),
+                    "title": str(candidate.get("title") or "Unknown"),
+                    "overview": str(candidate.get("overview") or "").strip(),
+                    "genres": self._normalize_genres(candidate.get("genres", []), limit=6),
+                    "sources": self._normalize_string_list(candidate.get("sources", []), limit=6),
+                    "release_date": candidate.get("release_date"),
+                    "rating": self._coerce_optional_number(candidate.get("rating")),
+                    "vote_count": int(candidate.get("vote_count") or 0),
+                    "decision": decision,
+                    "hybrid_confidence": round(confidence, 3),
+                    "threshold": float(self.settings.request_threshold),
+                    "llm_vote": llm_vote,
+                    "llm_confidence": llm_confidence,
+                    "llm_reasoning": llm_reasoning,
+                    "reasoning": reasoning,
+                    "features": candidate.get("recommendation_features", {}),
+                }
+            )
+
+        summary = (
+            f"Dry-run reviewed {len(preview_rows)} shortlisted candidate(s) for {cleaned_username}. "
+            f"Scored {int(prepared['scored'] or 0)} total and skipped {int(prepared['skipped'] or 0)} before the shortlist."
+        )
+        self.record_operation_event(
+            engine="decision_preview",
+            username=cleaned_username,
+            media_type="candidate",
+            media_title=f"Decision dry run for {cleaned_username}",
+            source="manifest",
+            decision="PREVIEW",
+            reasoning=summary,
+            detail_payload={
+                "previewed": len(preview_rows),
+                "scored": int(prepared["scored"] or 0),
+                "skipped": int(prepared["skipped"] or 0),
+                "skip_reasons": prepared.get("skip_reasons", {}),
+            },
+        )
+        return {
+            "username": cleaned_username,
+            "summary": summary,
+            "profile_review": profile_payload.get("profile_review", {}),
+            "candidates": preview_rows,
+            "scored": int(prepared["scored"] or 0),
+            "skipped": int(prepared["skipped"] or 0),
+            "skip_reasons": prepared.get("skip_reasons", {}),
         }
 
     async def run_suggested_for_you(self, username: str | None = None) -> dict[str, Any]:
@@ -1923,6 +2352,24 @@ class VanguarrService:
                 "notification_type": notification_type or "unknown",
             }
 
+        recorded_outcome: str | None = None
+        outcome_label = self._request_outcome_from_webhook(
+            notification_type=notification_type,
+            event_name=event_name,
+            media_status=media_status,
+        )
+        if outcome_label and requested_by_username:
+            recorded_outcome = self._record_request_outcome_from_webhook(
+                username=requested_by_username,
+                outcome=outcome_label,
+                request_id=request_id,
+                media_type=media_type,
+                media_id=tmdb_id,
+                media_title=subject,
+                payload=payload,
+                source=notification_type or "seer_webhook",
+            )
+
         refreshed = False
         if (
             self.settings.suggestions_enabled
@@ -1943,8 +2390,116 @@ class VanguarrService:
             "delivery_key": delivery_key,
             "notification_type": notification_type or "unknown",
             "requested_by_username": requested_by_username,
+            "recorded_outcome": recorded_outcome,
             "refreshed_suggestions": refreshed,
         }
+
+    @staticmethod
+    def _request_outcome_from_webhook(
+        *,
+        notification_type: str,
+        event_name: str,
+        media_status: str | None,
+    ) -> str | None:
+        combined = " ".join(
+            part.strip().upper()
+            for part in (notification_type, event_name, media_status or "")
+            if str(part).strip()
+        )
+        if "AVAILABLE" in combined:
+            return "downloaded"
+        if "APPROV" in combined:
+            return "approved"
+        if "DECLIN" in combined or "DENIED" in combined:
+            return "denied"
+        if "FAILED" in combined or "UNAVAILABLE" in combined:
+            return "unavailable"
+        return None
+
+    def _record_request_outcome_from_webhook(
+        self,
+        *,
+        username: str,
+        outcome: str,
+        request_id: int | None,
+        media_type: str | None,
+        media_id: int | None,
+        media_title: str,
+        payload: dict[str, Any],
+        source: str,
+    ) -> str:
+        cleaned_username = str(username or "").strip()
+        if not cleaned_username:
+            return outcome
+
+        requested_row_id: int | None = None
+        resolved_media_type = str(media_type or "unknown").strip().lower() or "unknown"
+        resolved_media_id = int(media_id or 0)
+        resolved_title = str(media_title or "").strip() or "Unknown"
+
+        with self.session_scope() as session:
+            requested_row = None
+            if request_id is not None:
+                requested_row = session.scalar(
+                    select(RequestedMedia)
+                    .where(
+                        RequestedMedia.username == cleaned_username,
+                        RequestedMedia.seer_request_id == request_id,
+                    )
+                    .order_by(desc(RequestedMedia.created_at))
+                    .limit(1)
+                )
+            if requested_row is None and resolved_media_type in {"movie", "tv"} and resolved_media_id > 0:
+                requested_row = session.scalar(
+                    select(RequestedMedia)
+                    .where(
+                        RequestedMedia.username == cleaned_username,
+                        RequestedMedia.media_type == resolved_media_type,
+                        RequestedMedia.media_id == resolved_media_id,
+                    )
+                    .order_by(desc(RequestedMedia.created_at))
+                    .limit(1)
+                )
+
+            if requested_row is not None:
+                requested_row_id = requested_row.id
+                resolved_media_type = requested_row.media_type
+                resolved_media_id = requested_row.media_id
+                resolved_title = requested_row.media_title
+
+            session.add(
+                RequestOutcomeEvent(
+                    requested_media_id=requested_row_id,
+                    username=cleaned_username,
+                    media_type=resolved_media_type,
+                    media_id=resolved_media_id,
+                    media_title=resolved_title,
+                    request_id=request_id,
+                    outcome=outcome,
+                    source=source,
+                    detail=str(payload.get("subject") or payload.get("event") or payload.get("media_status") or "").strip(),
+                    payload_json=json.dumps(payload, ensure_ascii=True),
+                )
+            )
+
+        self.record_operation_event(
+            engine="request_outcome",
+            username=cleaned_username,
+            media_type=resolved_media_type,
+            media_title=resolved_title,
+            source=source,
+            decision=outcome.upper(),
+            reasoning=f"Seer webhook recorded request outcome {outcome} for {resolved_title}.",
+            detail_payload={
+                "request_id": request_id,
+                "media_id": resolved_media_id,
+                "webhook_source": source,
+                "outcome": outcome,
+            },
+        )
+        live_payload = self._with_live_profile_context(cleaned_username, self.profile_store.read_payload(cleaned_username))
+        self.profile_store.write_payload(cleaned_username, live_payload)
+        return outcome
 
     def _jellyfin_client(self) -> JellyfinClient:
         if isinstance(self.media_server, JellyfinClient):
@@ -2002,7 +2557,8 @@ class VanguarrService:
         filtered_candidates = [
             candidate
             for candidate in available_candidates
-            if self._suggestion_exclusion_reason(candidate, exclusion_context) is None
+            if self._candidate_feedback_block_reason(candidate, profile_payload) is None
+            and self._suggestion_exclusion_reason(candidate, exclusion_context) is None
         ]
         ranked_candidates = self._rank_candidate_pool(
             filtered_candidates,
@@ -2997,6 +3553,7 @@ class VanguarrService:
         profile_brands = cls._normalize_string_list(profile_summary.get("preferred_brands", []), limit=6)
         profile_collections = cls._normalize_string_list(profile_summary.get("favorite_collections", []), limit=4)
         profile_theme_hints = cls._normalize_string_list(profile_summary.get("adjacent_themes", []), limit=4)
+        request_outcomes = cls._normalize_request_outcome_insights(profile_summary.get("request_outcome_insights", {}))
 
         matched_primary = cls._intersect_strings(candidate_genres, primary_genres)
         matched_secondary = cls._intersect_strings(candidate_genres, secondary_genres)
@@ -3009,6 +3566,24 @@ class VanguarrService:
         collection_match = candidate_collection if candidate_collection and candidate_collection.lower() in {
             value.lower() for value in profile_collections
         } else None
+        positive_outcome_genres = cls._intersect_strings(
+            candidate_genres,
+            cls._normalize_genres(request_outcomes.get("positive_genres", []), limit=5),
+        )
+        negative_outcome_genres = cls._intersect_strings(
+            candidate_genres,
+            cls._normalize_genres(request_outcomes.get("negative_genres", []), limit=5),
+        )
+        positive_outcome_titles = {
+            value.lower()
+            for value in cls._normalize_string_list(request_outcomes.get("positive_titles", []), limit=8)
+        }
+        negative_outcome_titles = {
+            value.lower()
+            for value in cls._normalize_string_list(request_outcomes.get("negative_titles", []), limit=8)
+        }
+        outcome_title_signal = str(candidate.get("title") or "").strip().lower()
+        feedback_block_reason = cls._candidate_feedback_block_reason(candidate, profile_summary)
 
         source_titles = cls._extract_source_titles(candidate.get("sources", []))
         top_titles = {str(item.get("title") or "").strip().lower() for item in profile_summary.get("top_titles", [])}
@@ -3070,6 +3645,11 @@ class VanguarrService:
             candidate_genres=candidate_genres,
             explicit_feedback=profile_summary.get("explicit_feedback", {}),
         )
+        score_breakdown["outcome_fit"] = cls._score_request_outcome_fit(
+            candidate_title=str(candidate.get("title") or ""),
+            candidate_genres=candidate_genres,
+            request_outcome_insights=request_outcomes,
+        )
         score_breakdown["tmdb_themes"] = cls._score_tmdb_theme_affinity(
             matched_keywords=matched_keywords,
             theme_matches=theme_matches,
@@ -3124,7 +3704,16 @@ class VanguarrService:
                 source_titles=source_titles,
                 lane_tags=lane_tags,
                 freshness_fit=freshness_fit,
+                positive_outcome_genres=positive_outcome_genres,
+                negative_outcome_genres=negative_outcome_genres,
+                positive_title_signal=outcome_title_signal in positive_outcome_titles,
+                negative_title_signal=outcome_title_signal in negative_outcome_titles,
             ),
+            "feedback_block_reason": feedback_block_reason,
+            "positive_outcome_genres": positive_outcome_genres,
+            "negative_outcome_genres": negative_outcome_genres,
+            "positive_title_signal": outcome_title_signal in positive_outcome_titles,
+            "negative_title_signal": outcome_title_signal in negative_outcome_titles,
         }
 
     @classmethod
@@ -3413,6 +4002,8 @@ class VanguarrService:
             f"format {float(breakdown.get('format_fit', 0.0)):.2f}, "
             f"freshness {float(breakdown.get('freshness_fit', 0.0)):.2f}, "
             f"quality {float(breakdown.get('quality', 0.0)):.2f}, "
+            f"feedback {float(breakdown.get('feedback_fit', 0.0)):.2f}, "
+            f"outcomes {float(breakdown.get('outcome_fit', 0.0)):.2f}, "
             f"themes {float(breakdown.get('tmdb_themes', 0.0)):.2f}, "
             f"people {float(breakdown.get('tmdb_people', 0.0)):.2f}, "
             f"brands {float(breakdown.get('tmdb_brands', 0.0)):.2f}."
@@ -3441,6 +4032,8 @@ class VanguarrService:
             f"format {float(breakdown.get('format_fit', 0.0)):.2f}, "
             f"freshness {float(breakdown.get('freshness_fit', 0.0)):.2f}, "
             f"quality {float(breakdown.get('quality', 0.0)):.2f}, "
+            f"feedback {float(breakdown.get('feedback_fit', 0.0)):.2f}, "
+            f"outcomes {float(breakdown.get('outcome_fit', 0.0)):.2f}, "
             f"themes {float(breakdown.get('tmdb_themes', 0.0)):.2f}, "
             f"people {float(breakdown.get('tmdb_people', 0.0)):.2f}, "
             f"brands {float(breakdown.get('tmdb_brands', 0.0)):.2f}."
@@ -3685,12 +4278,20 @@ class VanguarrService:
             payload.get("release_year_preference", {})
         )
         payload["explicit_feedback"] = cls._normalize_explicit_feedback(existing.get("explicit_feedback", {}))
+        payload["blocked_titles"] = cls._normalize_string_list(existing.get("blocked_titles", []), limit=12)
         payload["profile_exclusions"] = cls._normalize_string_list(existing.get("profile_exclusions", []), limit=8)
         payload["operator_notes"] = str(existing.get("operator_notes") or "").strip()
         payload["summary_block"] = (
             cls._limit_words(cls._render_profile_block(username, payload), max_words=500)
             if cls._has_profile_signal(payload)
             else ProfileStore.default_block(username)
+        )
+        payload["request_outcome_insights"] = cls._normalize_request_outcome_insights(
+            existing.get("request_outcome_insights", {})
+        )
+        payload["profile_review"] = cls._build_profile_review(
+            payload,
+            previous_payload=existing if isinstance(existing, dict) else None,
         )
         return payload
 
@@ -3738,6 +4339,7 @@ class VanguarrService:
             normalized.get("release_year_preference", {})
         )
         normalized["explicit_feedback"] = cls._normalize_explicit_feedback(normalized.get("explicit_feedback", {}))
+        normalized["blocked_titles"] = cls._normalize_string_list(normalized.get("blocked_titles", []), limit=12)
         normalized["profile_exclusions"] = cls._normalize_string_list(normalized.get("profile_exclusions", []), limit=8)
         normalized["operator_notes"] = str(normalized.get("operator_notes") or "").strip()
         normalized["profile_state"] = "ready" if cls._has_profile_signal(normalized) else "default"
@@ -3746,6 +4348,10 @@ class VanguarrService:
             if cls._has_profile_signal(normalized)
             else ProfileStore.default_block(username)
         )
+        normalized["request_outcome_insights"] = cls._normalize_request_outcome_insights(
+            normalized.get("request_outcome_insights", {})
+        )
+        normalized["profile_review"] = cls._normalize_profile_review(normalized.get("profile_review", {}))
         return normalized
 
     @classmethod
@@ -3885,6 +4491,313 @@ class VanguarrService:
             "liked_genres": cls._normalize_string_list(value.get("liked_genres", []), limit=8),
             "disliked_genres": cls._normalize_string_list(value.get("disliked_genres", []), limit=8),
         }
+
+    @classmethod
+    def _normalize_request_outcome_label(cls, value: Any) -> str:
+        normalized = str(value or "").strip().lower().replace(" ", "_")
+        aliases = {
+            "approve": "approved",
+            "approved": "approved",
+            "deny": "denied",
+            "declined": "denied",
+            "denied": "denied",
+            "ignore": "ignored",
+            "ignored": "ignored",
+            "unavailable": "unavailable",
+            "failed": "unavailable",
+            "downloaded": "downloaded",
+            "available": "downloaded",
+            "watched": "watched",
+        }
+        return aliases.get(normalized, normalized)
+
+    @classmethod
+    def _normalize_request_outcome_insights(cls, raw_value: Any) -> dict[str, Any]:
+        value = raw_value if isinstance(raw_value, dict) else {}
+        raw_counts = value.get("counts", {}) if isinstance(value.get("counts"), dict) else {}
+        counts: dict[str, int] = {}
+        for raw_key, raw_count in raw_counts.items():
+            key = cls._normalize_request_outcome_label(raw_key)
+            if not key:
+                continue
+            try:
+                counts[key] = max(0, int(raw_count or 0))
+            except (TypeError, ValueError):
+                continue
+
+        recent_outcomes: list[dict[str, Any]] = []
+        raw_recent = value.get("recent_outcomes", [])
+        if isinstance(raw_recent, list):
+            for item in raw_recent:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "").strip()
+                outcome = cls._normalize_request_outcome_label(item.get("outcome"))
+                if not title or not outcome:
+                    continue
+                recent_outcomes.append(
+                    {
+                        "title": title,
+                        "outcome": outcome,
+                        "created_at": str(item.get("created_at") or "").strip() or None,
+                        "source": str(item.get("source") or "").strip() or None,
+                    }
+                )
+                if len(recent_outcomes) >= 8:
+                    break
+
+        return {
+            "counts": counts,
+            "positive_titles": cls._normalize_string_list(value.get("positive_titles", []), limit=6),
+            "negative_titles": cls._normalize_string_list(value.get("negative_titles", []), limit=6),
+            "positive_genres": cls._normalize_string_list(value.get("positive_genres", []), limit=6),
+            "negative_genres": cls._normalize_string_list(value.get("negative_genres", []), limit=6),
+            "recent_outcomes": recent_outcomes,
+        }
+
+    @classmethod
+    def _normalize_profile_review(cls, raw_value: Any) -> dict[str, Any]:
+        value = raw_value if isinstance(raw_value, dict) else {}
+        health_status = str(value.get("health_status") or "unknown").strip().lower()
+        if health_status not in {"unknown", "weak", "watch", "healthy", "strong"}:
+            health_status = "unknown"
+
+        confidence = str(value.get("confidence") or "low").strip().lower()
+        if confidence not in {"low", "watch", "medium", "high"}:
+            confidence = "low"
+
+        freshness = str(value.get("freshness") or "unknown").strip().lower()
+        if freshness not in {"unknown", "fresh", "aging", "stale"}:
+            freshness = "unknown"
+
+        evidence_raw = value.get("evidence", {}) if isinstance(value.get("evidence"), dict) else {}
+        evidence: dict[str, int] = {}
+        for key, raw_count in evidence_raw.items():
+            try:
+                evidence[str(key)] = max(0, int(raw_count or 0))
+            except (TypeError, ValueError):
+                continue
+
+        return {
+            "health_score": max(0, min(100, int(value.get("health_score") or 0))),
+            "health_status": health_status,
+            "confidence": confidence,
+            "freshness": freshness,
+            "warnings": cls._normalize_string_list(value.get("warnings", []), limit=8),
+            "strengths": cls._normalize_string_list(value.get("strengths", []), limit=8),
+            "changed_fields": cls._normalize_string_list(value.get("changed_fields", []), limit=12),
+            "diff_summary": cls._normalize_string_list(value.get("diff_summary", []), limit=12),
+            "evidence": evidence,
+            "summary": str(value.get("summary") or "").strip(),
+            "last_reviewed_at": str(value.get("last_reviewed_at") or "").strip() or None,
+        }
+
+    @classmethod
+    def _profile_diff_titles(cls, raw_items: Any, *, limit: int) -> list[str]:
+        return [
+            str(item.get("title") or "").strip()
+            for item in cls._normalize_profile_entries(raw_items, limit=limit)
+            if str(item.get("title") or "").strip()
+        ]
+
+    @classmethod
+    def _profile_diff_strings(
+        cls,
+        previous_items: list[str],
+        current_items: list[str],
+    ) -> tuple[list[str], list[str]]:
+        previous_lookup = {value.lower(): value for value in previous_items}
+        current_lookup = {value.lower(): value for value in current_items}
+        added = [current_lookup[key] for key in current_lookup.keys() - previous_lookup.keys()]
+        removed = [previous_lookup[key] for key in previous_lookup.keys() - current_lookup.keys()]
+        added.sort(key=str.lower)
+        removed.sort(key=str.lower)
+        return added, removed
+
+    @classmethod
+    def _build_profile_diff_summary(
+        cls,
+        previous_payload: dict[str, Any] | None,
+        current_payload: dict[str, Any],
+    ) -> tuple[list[str], list[str]]:
+        if not isinstance(previous_payload, dict) or not ProfileStore.is_structured_payload(previous_payload):
+            return [], []
+
+        comparisons = (
+            ("Primary genres", cls._normalize_string_list(previous_payload.get("primary_genres", []), limit=6), cls._normalize_string_list(current_payload.get("primary_genres", []), limit=6)),
+            ("Secondary genres", cls._normalize_string_list(previous_payload.get("secondary_genres", []), limit=6), cls._normalize_string_list(current_payload.get("secondary_genres", []), limit=6)),
+            ("Recent genres", cls._normalize_string_list(previous_payload.get("recent_genres", []), limit=6), cls._normalize_string_list(current_payload.get("recent_genres", []), limit=6)),
+            ("Discovery lanes", cls._normalize_string_list(previous_payload.get("discovery_lanes", []), limit=6), cls._normalize_string_list(current_payload.get("discovery_lanes", []), limit=6)),
+            ("Adjacent genres", cls._normalize_string_list(previous_payload.get("adjacent_genres", []), limit=6), cls._normalize_string_list(current_payload.get("adjacent_genres", []), limit=6)),
+            ("Seer lift", cls._normalize_string_list(previous_payload.get("seer_adjacent_genres", []), limit=6), cls._normalize_string_list(current_payload.get("seer_adjacent_genres", []), limit=6)),
+            ("Similar-user lift", cls._normalize_string_list(previous_payload.get("similar_user_genres", []), limit=6), cls._normalize_string_list(current_payload.get("similar_user_genres", []), limit=6)),
+            ("Top titles", cls._profile_diff_titles(previous_payload.get("top_titles", []), limit=5), cls._profile_diff_titles(current_payload.get("top_titles", []), limit=5)),
+            ("Recent momentum", cls._profile_diff_titles(previous_payload.get("recent_momentum", []), limit=5), cls._profile_diff_titles(current_payload.get("recent_momentum", []), limit=5)),
+            ("TMDb keywords", cls._normalize_string_list(previous_payload.get("top_keywords", []), limit=6), cls._normalize_string_list(current_payload.get("top_keywords", []), limit=6)),
+            ("Favorite people", cls._normalize_string_list(previous_payload.get("favorite_people", []), limit=6), cls._normalize_string_list(current_payload.get("favorite_people", []), limit=6)),
+        )
+
+        changed_fields: list[str] = []
+        diff_summary: list[str] = []
+        for label, previous_items, current_items in comparisons:
+            added, removed = cls._profile_diff_strings(previous_items, current_items)
+            if not added and not removed:
+                continue
+            changed_fields.append(label)
+            parts: list[str] = []
+            if added:
+                parts.append(f"+{cls._human_join(added[:3])}")
+            if removed:
+                parts.append(f"-{cls._human_join(removed[:3])}")
+            diff_summary.append(f"{label}: {'; '.join(parts)}")
+            if len(diff_summary) >= 8:
+                break
+        return changed_fields, diff_summary
+
+    @staticmethod
+    def _days_since_iso_timestamp(value: Any) -> int | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        delta = datetime.utcnow() - parsed
+        return max(0, int(delta.total_seconds() // 86400))
+
+    @classmethod
+    def _build_profile_review(
+        cls,
+        payload: dict[str, Any],
+        *,
+        previous_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        history_count = max(0, int(payload.get("history_count") or 0))
+        unique_titles = max(0, int(payload.get("unique_titles") or 0))
+        tmdb_signal_count = sum(
+            1
+            for key in ("top_keywords", "favorite_people", "preferred_brands", "favorite_collections")
+            if payload.get(key)
+        )
+        seer_signal_count = len(cls._normalize_string_list(payload.get("seer_adjacent_titles", []), limit=6)) + len(
+            cls._normalize_string_list(payload.get("seer_adjacent_genres", []), limit=6)
+        )
+        similar_signal_count = len(cls._normalize_string_list(payload.get("similar_users", []), limit=4))
+        outcome_insights = cls._normalize_request_outcome_insights(payload.get("request_outcome_insights", {}))
+        outcome_count = sum(int(value) for value in outcome_insights.get("counts", {}).values())
+        days_old = cls._days_since_iso_timestamp(payload.get("generated_at"))
+
+        score = 0
+        score += min(34, history_count * 2)
+        score += min(18, unique_titles * 2)
+        if payload.get("primary_genres"):
+            score += 10
+        if payload.get("recent_momentum"):
+            score += 10
+        if tmdb_signal_count:
+            score += 8 + min(8, tmdb_signal_count * 2)
+        if seer_signal_count:
+            score += 8
+        if similar_signal_count:
+            score += 6
+        if outcome_count:
+            score += min(6, outcome_count)
+        if days_old is not None and days_old > 21:
+            score -= 10
+        elif days_old is not None and days_old > 7:
+            score -= 4
+        score = max(0, min(100, score))
+
+        if score >= 80:
+            health_status = "strong"
+            confidence = "high"
+        elif score >= 62:
+            health_status = "healthy"
+            confidence = "medium"
+        elif score >= 42:
+            health_status = "watch"
+            confidence = "watch"
+        else:
+            health_status = "weak"
+            confidence = "low"
+
+        if days_old is None:
+            freshness = "unknown"
+        elif days_old <= 7:
+            freshness = "fresh"
+        elif days_old <= 21:
+            freshness = "aging"
+        else:
+            freshness = "stale"
+
+        warnings: list[str] = []
+        if history_count == 0:
+            warnings.append("No playback history has been captured for this profile yet.")
+        elif history_count < 10:
+            warnings.append("This profile is still sparse and may overreact to a small sample.")
+        if unique_titles < 5 and history_count > 0:
+            warnings.append("Title diversity is low, so a single binge can still tilt the profile.")
+        if freshness == "stale":
+            warnings.append(f"This profile has not been rebuilt in {days_old} days.")
+        elif freshness == "aging":
+            warnings.append(f"This profile is aging and was last rebuilt {days_old} days ago.")
+        if tmdb_signal_count == 0:
+            warnings.append("TMDb enrichment is missing, so theme and talent matching is thin.")
+        if seer_signal_count == 0:
+            warnings.append("Seer neighborhood lift is missing, so discovery is relying on profile-only signals.")
+        if not payload.get("recent_momentum"):
+            warnings.append("Recent momentum is empty, so short-term taste may lag behind current viewing.")
+
+        strengths: list[str] = []
+        if history_count >= 20:
+            strengths.append("Durable playback history gives this profile a solid long-term base.")
+        if payload.get("recent_momentum"):
+            strengths.append("Recent momentum is captured, so current taste still has a live voice.")
+        if tmdb_signal_count:
+            strengths.append("TMDb enrichment is active across themes, people, brands, or collections.")
+        if seer_signal_count:
+            strengths.append("Seer recommendation neighborhoods are adding adjacent lanes.")
+        if similar_signal_count:
+            strengths.append("Local similar-user lift is contributing collaborative hints.")
+        if outcome_count:
+            strengths.append("Past request outcomes are being tracked for review and future tuning.")
+
+        changed_fields, diff_summary = cls._build_profile_diff_summary(previous_payload, payload)
+        if not diff_summary and not warnings and strengths:
+            diff_summary = [strengths[0]]
+
+        summary_parts: list[str] = [f"Profile health {score}/100 ({health_status})."]
+        if warnings:
+            summary_parts.append(warnings[0])
+        elif strengths:
+            summary_parts.append(strengths[0])
+
+        return cls._normalize_profile_review(
+            {
+                "health_score": score,
+                "health_status": health_status,
+                "confidence": confidence,
+                "freshness": freshness,
+                "warnings": warnings,
+                "strengths": strengths,
+                "changed_fields": changed_fields,
+                "diff_summary": diff_summary,
+                "evidence": {
+                    "history_items": history_count,
+                    "unique_titles": unique_titles,
+                    "tmdb_signals": tmdb_signal_count,
+                    "seer_signals": seer_signal_count,
+                    "similar_users": similar_signal_count,
+                    "outcomes": outcome_count,
+                },
+                "summary": " ".join(summary_parts),
+                "last_reviewed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            }
+        )
 
     @staticmethod
     def _coerce_optional_number(value: Any) -> float | None:
@@ -4338,7 +5251,8 @@ class VanguarrService:
                 profile_summary=history_summary,
                 limit=self.settings.recommendation_seed_limit,
             )
-            return stored_payload, self._resolve_tv_seed_media_ids_from_library_index(recommendation_seeds), False
+            live_payload = self._with_live_profile_context(username, stored_payload)
+            return live_payload, self._resolve_tv_seed_media_ids_from_library_index(recommendation_seeds), False
 
         profile_payload, recommendation_seeds = await self._compose_profile_payload(
             username,
@@ -4347,7 +5261,140 @@ class VanguarrService:
             peer_payload_overrides=peer_payload_overrides,
             include_llm_enrichment=False,
         )
-        return profile_payload, recommendation_seeds, int(profile_payload.get("history_count") or 0) > 0
+        live_payload = self._with_live_profile_context(username, profile_payload)
+        return live_payload, recommendation_seeds, int(live_payload.get("history_count") or 0) > 0
+
+    @staticmethod
+    def _candidate_title_key(candidate: dict[str, Any]) -> str:
+        return str(candidate.get("title") or "").strip().lower()
+
+    @classmethod
+    def _candidate_feedback_block_reason(
+        cls,
+        candidate: dict[str, Any],
+        profile_summary: dict[str, Any],
+    ) -> str | None:
+        blocked_titles = {
+            value.lower()
+            for value in cls._normalize_string_list(profile_summary.get("blocked_titles", []), limit=24)
+        }
+        title_key = cls._candidate_title_key(candidate)
+        if title_key and title_key in blocked_titles:
+            return "blocked_title"
+        return None
+
+    def _decision_candidate_skip_reason(
+        self,
+        candidate: dict[str, Any],
+        *,
+        profile_summary: dict[str, Any],
+        watched_media_keys: set[tuple[str, int]],
+        requested_media_keys: set[tuple[str, int]],
+    ) -> str | None:
+        if self._is_managed_candidate(candidate):
+            return "managed"
+        if self._candidate_key(candidate) in watched_media_keys:
+            return "already_watched"
+        if self._candidate_key(candidate) in requested_media_keys:
+            return "already_requested"
+        block_reason = self._candidate_feedback_block_reason(candidate, profile_summary)
+        if block_reason is not None:
+            return block_reason
+
+        deterministic_score = float(candidate.get("recommendation_features", {}).get("deterministic_score") or 0.0)
+        if deterministic_score < self._decision_prefilter_threshold():
+            return "below_threshold"
+        return None
+
+    async def _prepare_decision_candidates_for_user(
+        self,
+        user: dict[str, Any],
+        *,
+        shortlist_limit: int | None = None,
+        existing_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        current_username = str(user.get("Name") or "unknown")
+        history = await self.media_server.get_playback_history(
+            str(user.get("Id") or ""),
+            self._playback_history_limit(),
+        )
+        stored_profile = existing_payload if isinstance(existing_payload, dict) else self.profile_store.read_payload(current_username)
+        profile_payload, recommendation_seeds, should_persist = await self._prepare_runtime_profile_payload(
+            current_username,
+            history,
+            existing_payload=stored_profile,
+        )
+        if should_persist:
+            self.profile_store.write_payload(current_username, profile_payload)
+
+        viewing_history = self._build_viewing_history_context(
+            history,
+            recommendation_seeds=recommendation_seeds,
+            profile_summary=profile_payload,
+        )
+        genre_seeds = self._build_genre_discovery_seeds(profile_payload)
+        candidate_pool = await self.seer.discover_candidates(
+            recommendation_seeds,
+            genre_seeds=genre_seeds,
+            limit=self.settings.candidate_limit,
+            genre_limit=self.settings.genre_candidate_limit,
+            trending_limit=self.settings.trending_candidate_limit,
+        )
+        watched_media_keys = self._build_watched_media_keys(history)
+        ranked_candidates = self._rank_candidate_pool(
+            candidate_pool,
+            profile_summary=profile_payload,
+        )
+        with self.session_scope() as session:
+            requested_media_keys = self._requested_media_keys(session, current_username)
+
+        filtered_candidates: list[dict[str, Any]] = []
+        skip_reasons: Counter[str] = Counter()
+        scored = 0
+        skipped = 0
+        for candidate in ranked_candidates:
+            scored += 1
+            skip_reason = self._decision_candidate_skip_reason(
+                candidate,
+                profile_summary=profile_payload,
+                watched_media_keys=watched_media_keys,
+                requested_media_keys=requested_media_keys,
+            )
+            if skip_reason is not None:
+                skipped += 1
+                skip_reasons[skip_reason] += 1
+                continue
+            filtered_candidates.append(candidate)
+
+        filtered_candidates = await self._enrich_candidate_pool_with_tmdb(
+            filtered_candidates,
+            limit=self.settings.tmdb_candidate_enrichment_limit,
+        )
+        filtered_candidates = self._rank_candidate_pool(
+            filtered_candidates,
+            profile_summary=profile_payload,
+        )
+        shortlisted_candidates = self._diversify_candidates(
+            filtered_candidates,
+            limit=shortlist_limit or self.settings.decision_shortlist_limit,
+        )
+        return {
+            "username": current_username,
+            "history": history,
+            "profile_payload": profile_payload,
+            "recommendation_seeds": recommendation_seeds,
+            "viewing_history": viewing_history,
+            "candidate_pool": candidate_pool,
+            "ranked_candidates": ranked_candidates,
+            "filtered_candidates": filtered_candidates,
+            "shortlisted_candidates": shortlisted_candidates,
+            "requested_media_keys": requested_media_keys,
+            "watched_media_keys": watched_media_keys,
+            "scored": scored,
+            "skipped": skipped,
+            "skip_reasons": dict(skip_reasons),
+            "persisted_profile": should_persist,
+        }
 
     def _load_peer_profile_payloads(
         self,
@@ -5033,6 +6080,44 @@ class VanguarrService:
 
         return max(-0.12, min(0.12, score))
 
+    @classmethod
+    def _score_request_outcome_fit(
+        cls,
+        *,
+        candidate_title: str,
+        candidate_genres: list[str],
+        request_outcome_insights: dict[str, Any],
+    ) -> float:
+        insights = cls._normalize_request_outcome_insights(request_outcome_insights)
+        positive_titles = {
+            value.lower() for value in cls._normalize_string_list(insights.get("positive_titles", []), limit=8)
+        }
+        negative_titles = {
+            value.lower() for value in cls._normalize_string_list(insights.get("negative_titles", []), limit=8)
+        }
+        positive_genres = {
+            value.lower() for value in cls._normalize_string_list(insights.get("positive_genres", []), limit=6)
+        }
+        negative_genres = {
+            value.lower() for value in cls._normalize_string_list(insights.get("negative_genres", []), limit=6)
+        }
+
+        score = 0.0
+        lowered_title = candidate_title.strip().lower()
+        if lowered_title and lowered_title in positive_titles:
+            score += 0.06
+        if lowered_title and lowered_title in negative_titles:
+            score -= 0.08
+
+        for genre in candidate_genres:
+            lowered = genre.lower()
+            if lowered in positive_genres:
+                score += 0.025
+            if lowered in negative_genres:
+                score -= 0.03
+
+        return max(-0.14, min(0.14, score))
+
     @staticmethod
     def _match_theme_hints(candidate_keywords: list[str], theme_hints: list[str]) -> list[str]:
         matches: list[str] = []
@@ -5155,6 +6240,10 @@ class VanguarrService:
         source_titles: list[str],
         lane_tags: list[str],
         freshness_fit: str,
+        positive_outcome_genres: list[str],
+        negative_outcome_genres: list[str],
+        positive_title_signal: bool,
+        negative_title_signal: bool,
     ) -> str:
         parts: list[str] = []
         if source_titles:
@@ -5174,6 +6263,14 @@ class VanguarrService:
             parts.append(f"Brand or network overlap: {cls._human_join(matched_brands[:2])}.")
         if collection_match:
             parts.append(f"Franchise overlap via {collection_match}.")
+        if positive_title_signal:
+            parts.append("Past request outcomes on this exact title trended positive.")
+        elif negative_title_signal:
+            parts.append("Past request outcomes on this exact title trended negative.")
+        elif positive_outcome_genres:
+            parts.append(f"Past request outcomes leaned positive on {cls._human_join(positive_outcome_genres[:2])}.")
+        elif negative_outcome_genres:
+            parts.append(f"Past request outcomes leaned negative on {cls._human_join(negative_outcome_genres[:2])}.")
         if freshness_fit not in {"unknown", "balanced"}:
             parts.append(f"Release fit: {freshness_fit}.")
         if not parts:

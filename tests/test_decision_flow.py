@@ -1936,3 +1936,197 @@ def test_run_profile_architect_writes_operation_log(tmp_path) -> None:
     assert len(logs) == 2
     assert any(log.username == "alice" and log.decision == "REBUILD" for log in logs)
     assert any(log.decision == "RUN" and log.source == "manual" and "Updated 1 profile(s)" in log.reasoning for log in logs)
+
+
+def test_build_candidate_features_respects_blocked_titles_and_request_outcomes() -> None:
+    blocked_candidate = {
+        "media_type": "tv",
+        "media_id": 1,
+        "title": "Anime Trap",
+        "genres": ["Anime", "Animation"],
+        "sources": ["recommended:Loop Show"],
+        "source_lanes": ["top_seed"],
+        "tmdb_details": {},
+    }
+    positive_candidate = {
+        "media_type": "movie",
+        "media_id": 2,
+        "title": "Courtroom Return",
+        "genres": ["Drama", "Crime"],
+        "sources": ["recommended:Courtroom One"],
+        "source_lanes": ["top_seed"],
+        "tmdb_details": {},
+    }
+    profile_summary = {
+        "primary_genres": ["Drama"],
+        "secondary_genres": ["Crime"],
+        "recent_genres": ["Drama"],
+        "discovery_lanes": ["Mystery"],
+        "ranked_genres": [{"genre": "Drama", "weighted_score": 3.4}],
+        "format_preference": {"preferred": "balanced"},
+        "release_year_preference": {"bias": "balanced", "average_year": 2020},
+        "explicit_feedback": {"liked_titles": [], "disliked_titles": [], "liked_genres": [], "disliked_genres": []},
+        "blocked_titles": ["Anime Trap"],
+        "request_outcome_insights": {
+            "positive_titles": [],
+            "negative_titles": ["Anime Trap"],
+            "positive_genres": ["Drama"],
+            "negative_genres": ["Anime"],
+        },
+    }
+
+    blocked_features = VanguarrService._build_candidate_features(blocked_candidate, profile_summary=profile_summary)
+    positive_features = VanguarrService._build_candidate_features(positive_candidate, profile_summary=profile_summary)
+
+    assert blocked_features["feedback_block_reason"] == "blocked_title"
+    assert blocked_features["score_breakdown"]["outcome_fit"] < 0
+    assert positive_features["score_breakdown"]["outcome_fit"] > 0
+    assert "Past request outcomes leaned positive" in positive_features["analysis_summary"]
+
+
+def test_record_request_outcome_updates_request_history_and_live_profile_context(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+    service.profile_store.write_payload(
+        "alice",
+        {
+            "username": "alice",
+            "profile_state": "ready",
+            "history_count": 18,
+            "unique_titles": 9,
+            "primary_genres": ["Drama"],
+            "recent_momentum": [{"title": "Courtroom One", "play_count": 2}],
+            "summary_block": "summary",
+        },
+    )
+
+    with session_factory() as session:
+        session.add(
+            RequestedMedia(
+                id=7,
+                username="alice",
+                media_type="movie",
+                media_id=101,
+                media_title="Arrival",
+                source="recommended:Interstellar",
+                seer_request_id=77,
+            )
+        )
+        session.add(
+            DecisionLog(
+                username="alice",
+                media_type="movie",
+                media_id=101,
+                media_title="Arrival",
+                source="recommended:Interstellar",
+                decision="REQUEST",
+                confidence=0.91,
+                threshold=0.58,
+                requested=True,
+                request_id=77,
+                reasoning="Strong fit.",
+                payload_json=json.dumps({"genres": ["Sci-Fi", "Drama"]}),
+                error=None,
+            )
+        )
+        session.commit()
+
+    result = service.record_request_outcome(username="alice", requested_media_id=7, outcome="watched", source="test")
+    history = service.get_request_history("alice")
+    live_payload = service.get_profile_payload_with_live_context("alice")
+
+    assert result["outcome"] == "watched"
+    assert history[0]["latest_outcome"] == "watched"
+    assert live_payload["request_outcome_insights"]["counts"]["watched"] == 1
+    assert "Past request outcomes are being tracked" in " ".join(live_payload["profile_review"]["strengths"])
+
+
+def test_preview_decision_candidates_returns_review_cards(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    class FakeMediaServer:
+        async def list_users(self) -> list[dict]:
+            return [{"Id": "user-1", "Name": "alice"}]
+
+        async def get_playback_history(self, user_id: str, limit: int) -> list[dict]:
+            return [
+                {
+                    "Name": "Courtroom One",
+                    "Type": "Movie",
+                    "Genres": ["Drama", "Crime"],
+                    "CommunityRating": 8.1,
+                    "ProviderIds": {"Tmdb": "11"},
+                    "UserData": {"LastPlayedDate": "2026-04-10T10:00:00Z"},
+                }
+            ]
+
+    class FakeSeer:
+        async def discover_candidates(self, *args, **kwargs) -> list[dict]:
+            return [
+                {
+                    "media_type": "movie",
+                    "media_id": 202,
+                    "title": "Courtroom Return",
+                    "overview": "Another legal drama.",
+                    "genres": ["Drama", "Crime"],
+                    "rating": 8.3,
+                    "vote_count": 540,
+                    "popularity": 88,
+                    "release_date": "2025-01-01",
+                    "sources": ["recommended:Courtroom One"],
+                    "source_lanes": ["top_seed"],
+                    "tmdb_details": {},
+                }
+            ]
+
+    class FakeLLM:
+        async def generate_json(self, *args, **kwargs) -> dict:
+            return {"decision": "REQUEST", "confidence": 0.9, "reasoning": "Excellent profile fit."}
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=FakeSeer(),
+        tmdb=SimpleNamespace(),
+        llm=FakeLLM(),
+        session_factory=session_factory,
+    )
+
+    async def passthrough_profile_summary(summary: dict, *, recommendation_seeds: list[dict]) -> dict:
+        return summary
+
+    service._enrich_profile_summary_with_seer = passthrough_profile_summary  # type: ignore[method-assign]
+    service._enrich_profile_summary_with_tmdb = passthrough_profile_summary  # type: ignore[method-assign]
+    service._suggest_profile_enrichment = lambda *args, **kwargs: asyncio.sleep(0, result={})  # type: ignore[method-assign]
+    service._enrich_candidate_pool_with_tmdb = lambda candidates, limit: asyncio.sleep(0, result=candidates)  # type: ignore[method-assign]
+
+    preview = asyncio.run(service.preview_decision_candidates("alice", limit=4))
+
+    assert preview["username"] == "alice"
+    assert preview["candidates"][0]["title"] == "Courtroom Return"
+    assert preview["candidates"][0]["decision"] == "REQUEST"
+    assert preview["candidates"][0]["llm_vote"] == "REQUEST"
