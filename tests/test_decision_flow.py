@@ -1235,6 +1235,12 @@ def test_compose_decision_reasoning_uses_final_score_wording_and_threshold_conte
     assert "LLM vote: REQUEST." in reasoning
 
 
+def test_is_managed_candidate_handles_numeric_media_status() -> None:
+    assert VanguarrService._is_managed_candidate({"media_info": {"status": 2}}) is True
+    assert VanguarrService._is_managed_candidate({"media_info": {"status": 5}}) is True
+    assert VanguarrService._is_managed_candidate({"media_info": {"status": 1}}) is False
+
+
 def test_normalize_jellyfin_user_id_compacts_guid_values() -> None:
     assert normalize_jellyfin_user_id("66456a3a-4cd3-46e3-83ce-254e99d4b09a") == "66456a3a4cd346e383ce254e99d4b09a"
     assert normalize_jellyfin_user_id("66456a3a4cd346e383ce254e99d4b09a") == "66456a3a4cd346e383ce254e99d4b09a"
@@ -1944,6 +1950,259 @@ def test_run_decision_engine_does_not_mark_noop_tv_request_as_requested(tmp_path
     assert logs[0].requested is False
     assert logs[0].request_id is None
     assert "Request outcome: No seasons available to request" in logs[0].reasoning
+
+
+def test_run_decision_engine_tracks_existing_seer_request_without_recreating_it(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+        request_threshold=0.7,
+        tmdb_candidate_enrichment_limit=0,
+    )
+
+    class FakeMediaServer:
+        async def list_users(self) -> list[dict]:
+            return [{"Id": "user-1", "Name": "alice"}]
+
+        async def get_playback_history(self, user_id: str, limit: int) -> list[dict]:
+            return []
+
+    class FakeSeer:
+        async def discover_candidates(self, *args, **kwargs) -> list[dict]:
+            return [
+                {
+                    "media_type": "movie",
+                    "media_id": 505,
+                    "title": "Shared Favorite",
+                    "overview": "A shared request.",
+                    "genres": ["Drama"],
+                    "sources": ["recommended:Anchor Show"],
+                    "source_lanes": ["top_seed"],
+                    "media_info": {},
+                    "external_ids": {"tmdb": "505"},
+                }
+            ]
+
+        async def request_media(self, media_type: str, media_id: int, *, tvdb_id: int | None = None) -> SeerRequestResult:
+            assert media_type == "movie"
+            assert media_id == 505
+            return SeerRequestResult(
+                created=False,
+                request_id=88,
+                status_code=409,
+                message="Request already exists.",
+                payload={"request": {"id": 88, "status": 2}},
+            )
+
+    class FakeLLM:
+        async def generate_json(self, *args, **kwargs) -> dict:
+            return {
+                "decision": "REQUEST",
+                "confidence": 0.95,
+                "reasoning": "Strong fit for the user.",
+            }
+
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=FakeSeer(),
+        tmdb=SimpleNamespace(),
+        llm=FakeLLM(),
+        session_factory=session_factory,
+    )
+
+    async def passthrough_profile_summary(summary: dict, *, recommendation_seeds: list[dict]) -> dict:
+        return summary
+
+    async def passthrough_candidates(candidates: list[dict], *, limit: int) -> list[dict]:
+        return candidates
+
+    def ranked_candidates(candidates: list[dict], *, profile_summary: dict) -> list[dict]:
+        ranked: list[dict] = []
+        for candidate in candidates:
+            enriched = dict(candidate)
+            enriched["recommendation_features"] = {
+                "deterministic_score": 0.92,
+                "analysis_summary": "Strong drama match.",
+                "score_breakdown": {},
+                "lane_tags": ["because_you_watched"],
+            }
+            ranked.append(enriched)
+        return ranked
+
+    service._enrich_profile_summary_with_tmdb = passthrough_profile_summary  # type: ignore[method-assign]
+    service._enrich_candidate_pool_with_tmdb = passthrough_candidates  # type: ignore[method-assign]
+    service._rank_candidate_pool = ranked_candidates  # type: ignore[method-assign]
+    service._diversify_candidates = lambda candidates, limit: list(candidates)  # type: ignore[method-assign]
+
+    result = asyncio.run(service.run_decision_engine("alice"))
+
+    with session_factory() as session:
+        logs = list(session.scalars(select(DecisionLog)))
+        requests = list(session.scalars(select(RequestedMedia)))
+
+    assert result["status"] == "success"
+    assert result["requested"] == 0
+    assert len(requests) == 1
+    assert requests[0].media_id == 505
+    assert requests[0].seer_request_id == 88
+    assert len(logs) == 1
+    assert logs[0].requested is False
+    assert logs[0].request_id == 88
+    assert "Request outcome: Request already exists." in logs[0].reasoning
+
+
+def test_prepare_decision_candidates_skips_global_requests_and_exact_favorites(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+        tmdb_candidate_enrichment_limit=0,
+        decision_shortlist_limit=5,
+    )
+
+    with session_factory() as session:
+        session.add(
+            RequestedMedia(
+                username="bob",
+                media_type="movie",
+                media_id=44,
+                media_title="Shared Pick",
+                source="manual",
+            )
+        )
+        session.commit()
+
+    class FakeMediaServer:
+        async def get_playback_history(self, user_id: str, limit: int) -> list[dict]:
+            return []
+
+        async def get_favorite_items(self, user_id: str) -> list[dict]:
+            return [
+                {
+                    "Name": "Galaxy Quest",
+                    "Type": "Movie",
+                    "Genres": ["Sci-Fi", "Adventure"],
+                    "ProviderIds": {"Tmdb": "99"},
+                    "UserData": {"IsFavorite": True},
+                }
+            ]
+
+    class FakeSeer:
+        async def discover_candidates(self, *args, **kwargs) -> list[dict]:
+            return [
+                {
+                    "media_type": "movie",
+                    "media_id": 44,
+                    "title": "Shared Pick",
+                    "genres": ["Drama"],
+                    "sources": ["trending"],
+                    "source_lanes": ["trending_lane"],
+                    "media_info": {},
+                    "external_ids": {"tmdb": "44"},
+                },
+                {
+                    "media_type": "movie",
+                    "media_id": 99,
+                    "title": "Galaxy Quest",
+                    "genres": ["Sci-Fi", "Adventure"],
+                    "sources": ["recommended:Galaxy Quest"],
+                    "source_lanes": ["favorite_seed"],
+                    "media_info": {},
+                    "external_ids": {"tmdb": "99"},
+                },
+                {
+                    "media_type": "movie",
+                    "media_id": 77,
+                    "title": "Fresh Orbit",
+                    "genres": ["Sci-Fi", "Adventure"],
+                    "sources": ["recommended:Galaxy Quest"],
+                    "source_lanes": ["favorite_seed"],
+                    "media_info": {},
+                    "external_ids": {"tmdb": "77"},
+                },
+            ]
+
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=FakeSeer(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    async def fake_runtime_profile(
+        username: str,
+        history: list[dict[str, Any]],
+        *,
+        favorite_items: list[dict[str, Any]] | None = None,
+        existing_payload: dict[str, Any] | None = None,
+        peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
+        return (
+            {
+                "username": username,
+                "profile_state": "ready",
+                "history_count": 0,
+                "summary_block": "summary",
+                "primary_genres": ["Sci-Fi"],
+                "secondary_genres": ["Adventure"],
+                "recent_genres": [],
+                "discovery_lanes": [],
+                "ranked_genres": [{"genre": "Sci-Fi", "weighted_score": 3.1}],
+                "format_preference": {"preferred": "movie"},
+                "release_year_preference": {"bias": "balanced", "average_year": 2020},
+                "explicit_feedback": {"liked_titles": [], "disliked_titles": [], "liked_genres": [], "disliked_genres": []},
+                "favorite_titles": [{"title": "Galaxy Quest", "media_type": "movie"}],
+                "favorite_genres": ["Sci-Fi", "Adventure"],
+            },
+            [],
+            False,
+        )
+
+    def ranked_candidates(candidates: list[dict], *, profile_summary: dict) -> list[dict]:
+        ranked: list[dict] = []
+        for candidate in candidates:
+            enriched = dict(candidate)
+            enriched["recommendation_features"] = {
+                "deterministic_score": 0.88,
+                "analysis_summary": "Strong fit.",
+                "score_breakdown": {},
+                "lane_tags": [],
+            }
+            ranked.append(enriched)
+        return ranked
+
+    async def passthrough_candidates(candidates: list[dict], *, limit: int) -> list[dict]:
+        return candidates
+
+    service._prepare_runtime_profile_payload = fake_runtime_profile  # type: ignore[method-assign]
+    service._rank_candidate_pool = ranked_candidates  # type: ignore[method-assign]
+    service._enrich_candidate_pool_with_tmdb = passthrough_candidates  # type: ignore[method-assign]
+    service._diversify_candidates = lambda candidates, limit: list(candidates)  # type: ignore[method-assign]
+
+    prepared = asyncio.run(
+        service._prepare_decision_candidates_for_user(
+            {"Id": "user-1", "Name": "alice"},
+            shortlist_limit=5,
+        )
+    )
+
+    assert [candidate["title"] for candidate in prepared["shortlisted_candidates"]] == ["Fresh Orbit"]
+    assert prepared["skip_reasons"]["already_requested"] == 1
+    assert prepared["skip_reasons"]["already_favorited"] == 1
 
 
 def test_run_profile_architect_writes_operation_log(tmp_path) -> None:

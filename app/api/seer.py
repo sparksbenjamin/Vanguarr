@@ -152,7 +152,7 @@ class SeerClient(BaseAPIClient):
         if response.status_code in {202, 409} or (200 <= response.status_code < 300 and request_id is None):
             return SeerRequestResult(
                 created=False,
-                request_id=None,
+                request_id=request_id,
                 status_code=response.status_code,
                 message=message or "Seer did not create a request.",
                 payload=payload if isinstance(payload, dict) else {},
@@ -482,9 +482,61 @@ class SeerClient(BaseAPIClient):
             "poster_path": item.get("posterPath"),
             "backdrop_path": item.get("backdropPath"),
             "media_info": item.get("mediaInfo", {}),
+            "external_ids": SeerClient._extract_candidate_external_ids(item),
             "sources": [source],
             "source_lanes": list(source_lanes),
         }
+
+    @staticmethod
+    def _extract_candidate_external_ids(item: dict[str, Any]) -> dict[str, str]:
+        external_ids: dict[str, str] = {}
+
+        media_id = item.get("id")
+        try:
+            if media_id is not None:
+                external_ids["tmdb"] = str(int(media_id))
+        except (TypeError, ValueError):
+            pass
+
+        for block in (
+            item,
+            item.get("mediaInfo"),
+            item.get("media"),
+            item.get("requestedMedia"),
+        ):
+            if not isinstance(block, dict):
+                continue
+
+            for key, provider_name in (
+                ("tvdbId", "tvdb"),
+                ("TvdbId", "tvdb"),
+                ("imdbId", "imdb"),
+                ("ImdbId", "imdb"),
+                ("tmdbId", "tmdb"),
+                ("TmdbId", "tmdb"),
+            ):
+                value = block.get(key)
+                if value not in (None, ""):
+                    external_ids.setdefault(provider_name, str(value).strip())
+
+            provider_ids = block.get("externalIds")
+            if isinstance(provider_ids, dict):
+                for key, provider_name in (
+                    ("tvdb", "tvdb"),
+                    ("Tvdb", "tvdb"),
+                    ("TVDB", "tvdb"),
+                    ("imdb", "imdb"),
+                    ("Imdb", "imdb"),
+                    ("IMDB", "imdb"),
+                    ("tmdb", "tmdb"),
+                    ("Tmdb", "tmdb"),
+                    ("TMDB", "tmdb"),
+                ):
+                    value = provider_ids.get(key)
+                    if value not in (None, ""):
+                        external_ids.setdefault(provider_name, str(value).strip())
+
+        return external_ids
 
     @staticmethod
     def _decode_response_payload(response: httpx.Response) -> Any:
@@ -501,12 +553,36 @@ class SeerClient(BaseAPIClient):
     def _coerce_request_id(payload: Any) -> int | None:
         if not isinstance(payload, dict):
             return None
+        candidates: list[Any] = [
+            payload.get("id"),
+            payload.get("requestId"),
+        ]
 
-        raw_id = payload.get("id")
-        try:
-            return int(raw_id) if raw_id is not None else None
-        except (TypeError, ValueError):
-            return None
+        request_block = payload.get("request")
+        if isinstance(request_block, dict):
+            candidates.extend([request_block.get("id"), request_block.get("requestId")])
+
+        for block_key in ("media", "mediaInfo", "requestedMedia"):
+            block = payload.get(block_key)
+            if not isinstance(block, dict):
+                continue
+            nested_request = block.get("request")
+            if isinstance(nested_request, dict):
+                candidates.extend([nested_request.get("id"), nested_request.get("requestId")])
+            nested_requests = block.get("requests")
+            if isinstance(nested_requests, list):
+                for nested in nested_requests:
+                    if isinstance(nested, dict):
+                        candidates.extend([nested.get("id"), nested.get("requestId")])
+
+        for raw_id in candidates:
+            if raw_id is None:
+                continue
+            try:
+                return int(raw_id)
+            except (TypeError, ValueError):
+                continue
+        return None
 
     @staticmethod
     def _request_result_message(payload: Any, response: httpx.Response) -> str:

@@ -20,7 +20,7 @@ from app.api.base import ClientConfigError
 from app.api.jellyfin import JellyfinClient
 from app.api.llm import LLMClient
 from app.api.media_server import MediaServerClientProtocol
-from app.api.seer import SeerClient
+from app.api.seer import SeerClient, SeerRequestResult
 from app.api.tmdb import TMDbClient
 from app.core.models import (
     DecisionLog,
@@ -1704,6 +1704,7 @@ class VanguarrService:
                             request_id: int | None = None
                             error: str | None = None
                             request_created = False
+                            request_tracked = False
                             request_note = ""
                             if should_request:
                                 try:
@@ -1720,6 +1721,7 @@ class VanguarrService:
                                     request_id = request_result.request_id
                                     if request_result.created:
                                         request_created = True
+                                        request_tracked = True
                                         requested_media_keys.add(self._candidate_key(candidate))
                                         logger.info(
                                             "Decision Engine requested media user=%s title=%s type=%s request_id=%s",
@@ -1729,7 +1731,17 @@ class VanguarrService:
                                             request_id,
                                         )
                                     else:
+                                        request_tracked = self._should_track_request_result(
+                                            candidate=candidate,
+                                            request_result=request_result,
+                                        )
+                                        if request_tracked:
+                                            requested_media_keys.add(self._candidate_key(candidate))
                                         request_note = request_result.message or "Seer did not create a request."
+                                        if request_tracked and request_id is not None and not request_result.message:
+                                            request_note = (
+                                                f"Seer already had this title tracked as request {request_id}."
+                                            )
                                         logger.info(
                                             "Decision Engine request skipped user=%s title=%s type=%s status=%s reason=%s",
                                             current_username,
@@ -1751,18 +1763,33 @@ class VanguarrService:
                                 reasoning = f"{reasoning} Request outcome: {request_note}"
 
                             with self.session_scope() as session:
-                                if should_request and error is None and request_created:
-                                    requested += 1
-                                    session.add(
-                                        RequestedMedia(
-                                            username=current_username,
-                                            media_type=candidate["media_type"],
-                                            media_id=candidate["media_id"],
-                                            media_title=candidate["title"],
-                                            source=", ".join(candidate["sources"]),
-                                            seer_request_id=request_id,
+                                if should_request and error is None and request_tracked:
+                                    existing_request = session.scalar(
+                                        select(RequestedMedia)
+                                        .where(
+                                            RequestedMedia.username == current_username,
+                                            RequestedMedia.media_type == candidate["media_type"],
+                                            RequestedMedia.media_id == candidate["media_id"],
                                         )
                                     )
+                                    if existing_request is None:
+                                        session.add(
+                                            RequestedMedia(
+                                                username=current_username,
+                                                media_type=candidate["media_type"],
+                                                media_id=candidate["media_id"],
+                                                media_title=candidate["title"],
+                                                source=", ".join(candidate["sources"]),
+                                                seer_request_id=request_id,
+                                            )
+                                        )
+                                    else:
+                                        if request_id is not None and existing_request.seer_request_id is None:
+                                            existing_request.seer_request_id = request_id
+                                        if not str(existing_request.source or "").strip():
+                                            existing_request.source = ", ".join(candidate["sources"])
+                                    if request_created:
+                                        requested += 1
 
                                 session.add(
                                     DecisionLog(
@@ -3685,12 +3712,27 @@ class VanguarrService:
         return str(candidate.get("media_type") or "unknown"), int(candidate.get("media_id") or 0)
 
     @staticmethod
-    def _requested_media_keys(session: Session, username: str) -> set[tuple[str, int]]:
-        stmt = select(RequestedMedia).where(RequestedMedia.username == username)
+    def _requested_media_keys(session: Session, username: str | None = None) -> set[tuple[str, int]]:
+        stmt = select(RequestedMedia)
+        if username:
+            stmt = stmt.where(RequestedMedia.username == username)
         return {
             (item.media_type, item.media_id)
             for item in session.scalars(stmt)
         }
+
+    @staticmethod
+    def _requested_title_keys(session: Session, username: str | None = None) -> set[tuple[str, str]]:
+        stmt = select(RequestedMedia)
+        if username:
+            stmt = stmt.where(RequestedMedia.username == username)
+        keys: set[tuple[str, str]] = set()
+        for item in session.scalars(stmt):
+            media_type = str(item.media_type or "").strip()
+            title = str(item.media_title or "").strip().lower()
+            if media_type and title:
+                keys.add((media_type, title))
+        return keys
 
     @classmethod
     def _build_profile_history_context(
@@ -4273,14 +4315,73 @@ class VanguarrService:
 
     @classmethod
     def _build_watched_media_keys(cls, history: list[dict[str, Any]]) -> set[tuple[str, int]]:
-        watched: set[tuple[str, int]] = set()
-        for item in history:
+        return cls._build_media_item_match_context(history)["media_keys"]  # type: ignore[return-value]
+
+    @classmethod
+    def _build_media_item_match_context(
+        cls,
+        items: list[dict[str, Any]] | None,
+    ) -> dict[str, set[tuple[str, Any]]]:
+        media_keys: set[tuple[str, int]] = set()
+        external_keys: set[tuple[str, str, str]] = set()
+        title_keys: set[tuple[str, str]] = set()
+
+        for item in items or []:
             media_type = cls._map_history_media_type(item.get("Type"))
-            tmdb_id = cls._extract_tmdb_id(item)
-            if media_type not in {"movie", "tv"} or tmdb_id is None:
+            if media_type not in {"movie", "tv"}:
                 continue
-            watched.add((media_type, tmdb_id))
-        return watched
+
+            tmdb_id = cls._extract_tmdb_id(item)
+            if tmdb_id is not None:
+                media_keys.add((media_type, tmdb_id))
+
+            title_key = cls._history_title_key(item)
+            if title_key is not None:
+                title_keys.add(title_key)
+
+            external_ids = cls._extract_external_ids(item)
+            for provider_key, provider_id in external_ids.items():
+                external_keys.add((media_type, str(provider_key), str(provider_id)))
+
+        return {
+            "media_keys": media_keys,
+            "external_keys": external_keys,
+            "title_keys": title_keys,
+        }
+
+    @staticmethod
+    def _build_library_match_context(session: Session) -> dict[str, set[tuple[str, Any]]]:
+        media_keys: set[tuple[str, int]] = set()
+        external_keys: set[tuple[str, str, str]] = set()
+        title_keys: set[tuple[str, str]] = set()
+
+        rows = session.scalars(
+            select(LibraryMedia).where(LibraryMedia.state.in_(("available", "partial", "processing", "pending")))
+        )
+        for row in rows:
+            media_type = str(row.media_type or "").strip()
+            if media_type not in {"movie", "tv"}:
+                continue
+
+            if row.tmdb_id is not None:
+                media_keys.add((media_type, int(row.tmdb_id)))
+            for provider_key, provider_id in {
+                "tmdb": row.tmdb_id,
+                "tvdb": row.tvdb_id,
+                "imdb": row.imdb_id,
+            }.items():
+                if provider_id not in (None, ""):
+                    external_keys.add((media_type, provider_key, str(provider_id)))
+
+            title = str(row.title or "").strip().lower()
+            if title:
+                title_keys.add((media_type, title))
+
+        return {
+            "media_keys": media_keys,
+            "external_keys": external_keys,
+            "title_keys": title_keys,
+        }
 
     @classmethod
     def _build_history_watch_timestamps(
@@ -4367,6 +4468,7 @@ class VanguarrService:
         profile_people = cls._normalize_string_list(profile_summary.get("favorite_people", []), limit=6)
         profile_brands = cls._normalize_string_list(profile_summary.get("preferred_brands", []), limit=6)
         profile_collections = cls._normalize_string_list(profile_summary.get("favorite_collections", []), limit=4)
+        profile_favorite_genres = cls._normalize_genres(profile_summary.get("favorite_genres", []), limit=6)
         profile_theme_hints = cls._normalize_string_list(profile_summary.get("adjacent_themes", []), limit=4)
         request_outcomes = cls._normalize_request_outcome_insights(profile_summary.get("request_outcome_insights", {}))
 
@@ -4377,6 +4479,7 @@ class VanguarrService:
         matched_keywords = cls._intersect_strings(candidate_keywords, profile_keywords)
         matched_people = cls._intersect_strings(candidate_people, profile_people)
         matched_brands = cls._intersect_strings(candidate_brands, profile_brands)
+        matched_favorite_genres = cls._intersect_strings(candidate_genres, profile_favorite_genres)
         theme_matches = cls._match_theme_hints(candidate_keywords, profile_theme_hints)
         collection_match = candidate_collection if candidate_collection and candidate_collection.lower() in {
             value.lower() for value in profile_collections
@@ -4404,6 +4507,7 @@ class VanguarrService:
         top_titles = {str(item.get("title") or "").strip().lower() for item in profile_summary.get("top_titles", [])}
         repeat_titles = {str(item.get("title") or "").strip().lower() for item in profile_summary.get("repeat_titles", [])}
         recent_titles = {str(item.get("title") or "").strip().lower() for item in profile_summary.get("recent_momentum", [])}
+        favorite_titles = {str(item.get("title") or "").strip().lower() for item in profile_summary.get("favorite_titles", [])}
         recommended_source_titles = [title for title in source_titles if title.lower() in top_titles or title.lower() in repeat_titles]
 
         score_breakdown: dict[str, float] = {}
@@ -4422,6 +4526,11 @@ class VanguarrService:
             matched_recent=matched_recent,
             matched_discovery=matched_discovery,
             ranked_genres=profile_summary.get("ranked_genres", []),
+        )
+        score_breakdown["favorite_affinity"] = cls._score_favorite_affinity(
+            matched_favorite_genres=matched_favorite_genres,
+            source_titles=source_titles,
+            favorite_titles=favorite_titles,
         )
         score_breakdown["genre_guardrail"] = cls._score_genre_guardrail(
             candidate_genres=candidate_genres,
@@ -4496,6 +4605,7 @@ class VanguarrService:
             "theme_matches": theme_matches,
             "matched_people": matched_people,
             "matched_brands": matched_brands,
+            "matched_favorite_genres": matched_favorite_genres,
             "collection_match": collection_match,
             "source_titles": source_titles,
             "source_lanes": source_lanes,
@@ -6164,13 +6274,38 @@ class VanguarrService:
         *,
         profile_summary: dict[str, Any],
         watched_media_keys: set[tuple[str, int]],
+        watched_external_keys: set[tuple[str, str, str]],
+        watched_title_keys: set[tuple[str, str]],
+        favorite_external_keys: set[tuple[str, str, str]],
+        favorite_title_keys: set[tuple[str, str]],
         requested_media_keys: set[tuple[str, int]],
+        requested_title_keys: set[tuple[str, str]],
+        library_media_keys: set[tuple[str, int]],
+        library_external_keys: set[tuple[str, str, str]],
+        library_title_keys: set[tuple[str, str]],
     ) -> str | None:
-        if self._is_managed_candidate(candidate):
+        if (
+            self._is_managed_candidate(candidate)
+            or self._candidate_key(candidate) in library_media_keys
+            or self._candidate_matches_external_keys(candidate, library_external_keys)
+            or self._candidate_matches_title_keys(candidate, library_title_keys)
+        ):
             return "managed"
-        if self._candidate_key(candidate) in watched_media_keys:
+        if (
+            self._candidate_key(candidate) in watched_media_keys
+            or self._candidate_matches_external_keys(candidate, watched_external_keys)
+            or self._candidate_matches_title_keys(candidate, watched_title_keys)
+        ):
             return "already_watched"
-        if self._candidate_key(candidate) in requested_media_keys:
+        if (
+            self._candidate_matches_external_keys(candidate, favorite_external_keys)
+            or self._candidate_matches_title_keys(candidate, favorite_title_keys)
+        ):
+            return "already_favorited"
+        if (
+            self._candidate_key(candidate) in requested_media_keys
+            or self._candidate_matches_title_keys(candidate, requested_title_keys)
+        ):
             return "already_requested"
         block_reason = self._candidate_feedback_block_reason(candidate, profile_summary)
         if block_reason is not None:
@@ -6217,13 +6352,16 @@ class VanguarrService:
             genre_limit=self.settings.genre_candidate_limit,
             trending_limit=self.settings.trending_candidate_limit,
         )
-        watched_media_keys = self._build_watched_media_keys(history)
+        watched_context = self._build_media_item_match_context(history)
+        favorite_context = self._build_media_item_match_context(favorite_items)
         ranked_candidates = self._rank_candidate_pool(
             candidate_pool,
             profile_summary=profile_payload,
         )
         with self.session_scope() as session:
-            requested_media_keys = self._requested_media_keys(session, current_username)
+            requested_media_keys = self._requested_media_keys(session)
+            requested_title_keys = self._requested_title_keys(session)
+            library_context = self._build_library_match_context(session)
 
         filtered_candidates: list[dict[str, Any]] = []
         skip_reasons: Counter[str] = Counter()
@@ -6234,8 +6372,16 @@ class VanguarrService:
             skip_reason = self._decision_candidate_skip_reason(
                 candidate,
                 profile_summary=profile_payload,
-                watched_media_keys=watched_media_keys,
+                watched_media_keys=watched_context["media_keys"],  # type: ignore[arg-type]
+                watched_external_keys=watched_context["external_keys"],  # type: ignore[arg-type]
+                watched_title_keys=watched_context["title_keys"],  # type: ignore[arg-type]
+                favorite_external_keys=favorite_context["external_keys"],  # type: ignore[arg-type]
+                favorite_title_keys=favorite_context["title_keys"],  # type: ignore[arg-type]
                 requested_media_keys=requested_media_keys,
+                requested_title_keys=requested_title_keys,
+                library_media_keys=library_context["media_keys"],  # type: ignore[arg-type]
+                library_external_keys=library_context["external_keys"],  # type: ignore[arg-type]
+                library_title_keys=library_context["title_keys"],  # type: ignore[arg-type]
             )
             if skip_reason is not None:
                 skipped += 1
@@ -6266,7 +6412,7 @@ class VanguarrService:
             "filtered_candidates": filtered_candidates,
             "shortlisted_candidates": shortlisted_candidates,
             "requested_media_keys": requested_media_keys,
-            "watched_media_keys": watched_media_keys,
+            "watched_media_keys": watched_context["media_keys"],
             "scored": scored,
             "skipped": skipped,
             "skip_reasons": dict(skip_reasons),
@@ -6771,6 +6917,19 @@ class VanguarrService:
         score += min(0.08, rank_bonus)
         return min(0.38, score)
 
+    @staticmethod
+    def _score_favorite_affinity(
+        *,
+        matched_favorite_genres: list[str],
+        source_titles: list[str],
+        favorite_titles: set[str],
+    ) -> float:
+        score = min(0.06, 0.03 * len(matched_favorite_genres))
+        for title in source_titles:
+            if title.lower() in favorite_titles:
+                score += 0.04
+        return min(0.08, score)
+
     @classmethod
     def _score_genre_guardrail(
         cls,
@@ -7206,11 +7365,72 @@ class VanguarrService:
         raw = self.settings.global_exclusions.replace("\n", ",")
         return [item.strip() for item in raw.split(",") if item.strip()]
 
-    @staticmethod
-    def _is_managed_candidate(candidate: dict[str, Any]) -> bool:
-        media_info = candidate.get("media_info") or {}
-        status = str(media_info.get("status", "")).lower()
+    @classmethod
+    def _managed_media_status_label(cls, media_info: Any) -> str:
+        if not isinstance(media_info, dict):
+            return ""
+
+        combined = " ".join(
+            str(media_info.get(key) or "").strip().upper()
+            for key in ("status", "mediaStatus")
+            if str(media_info.get(key) or "").strip()
+        )
+        if "PARTIALLY_AVAILABLE" in combined or "PARTIAL" in combined:
+            return "partial"
+        if "AVAILABLE" in combined:
+            return "available"
+        if "PROCESSING" in combined:
+            return "processing"
+        if "PENDING" in combined:
+            return "pending"
+
+        status_value = cls._coerce_int(
+            media_info.get("status") if media_info.get("status") is not None else media_info.get("mediaStatus")
+        )
+        if status_value == 5:
+            return "available"
+        if status_value == 4:
+            return "partial"
+        if status_value == 3:
+            return "processing"
+        if status_value == 2:
+            return "pending"
+        return ""
+
+    @classmethod
+    def _is_managed_candidate(cls, candidate: dict[str, Any]) -> bool:
+        status = cls._managed_media_status_label(candidate.get("media_info") or {})
         return status in {"available", "partial", "processing", "pending"}
+
+    @classmethod
+    def _should_track_request_result(
+        cls,
+        *,
+        candidate: dict[str, Any],
+        request_result: SeerRequestResult,
+    ) -> bool:
+        if request_result.created or request_result.request_id is not None:
+            return True
+
+        message = str(request_result.message or "").strip().lower()
+        if any(
+            phrase in message
+            for phrase in (
+                "already requested",
+                "already exists",
+                "already been requested",
+                "request already exists",
+            )
+        ):
+            return True
+
+        payload = request_result.payload if isinstance(request_result.payload, dict) else {}
+        for key in ("media", "mediaInfo", "requestedMedia"):
+            block = payload.get(key)
+            if cls._managed_media_status_label(block) in {"available", "partial", "processing", "pending"}:
+                return True
+
+        return cls._is_managed_candidate(candidate)
 
     @staticmethod
     def _coerce_float(value: Any) -> float:

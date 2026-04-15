@@ -365,3 +365,51 @@ def test_request_media_returns_not_created_for_no_seasons_available() -> None:
         assert "No seasons available" in result.message
 
     asyncio.run(scenario())
+
+
+def test_request_media_returns_existing_request_id_for_duplicate_response() -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = {"content-type": "application/json"}
+            self.content = b"{}"
+            self.reason_phrase = "Conflict"
+            self.text = ""
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def request(self, *, method: str, url: str, json: dict, headers: dict):
+            return FakeResponse(
+                409,
+                {
+                    "message": "Request already exists.",
+                    "request": {"id": 77, "status": 2},
+                    "mediaInfo": {"status": 2, "tvdbId": 12345},
+                },
+            )
+
+    async def scenario() -> None:
+        settings = Settings(seer_base_url="http://seer.local", seer_api_key="token")
+        client = SeerClient(settings)
+
+        with patch("app.api.seer.httpx.AsyncClient", FakeAsyncClient):
+            result = await client.request_media("tv", 1932395)
+
+        assert result.created is False
+        assert result.request_id == 77
+        assert result.status_code == 409
+        assert "already exists" in result.message.lower()
+
+    asyncio.run(scenario())
