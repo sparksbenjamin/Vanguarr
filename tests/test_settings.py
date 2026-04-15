@@ -68,6 +68,8 @@ def test_suggested_for_you_defaults() -> None:
     assert settings.suggestion_repeat_watch_cutoff == 3
     assert settings.library_sync_enabled is True
     assert settings.library_sync_cron == "0 */4 * * *"
+    assert settings.request_status_sync_enabled is True
+    assert settings.request_status_sync_cron == "15 * * * *"
 
 
 def test_tmdb_defaults() -> None:

@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     decision_cron: str = "0 4 * * *"
     library_sync_enabled: bool = True
     library_sync_cron: str = "0 */4 * * *"
+    request_status_sync_enabled: bool = True
+    request_status_sync_cron: str = "15 * * * *"
     health_cache_seconds: int = 30
     profile_history_limit: int = 40
     profile_use_full_history: bool = False
@@ -248,7 +250,7 @@ class Settings(BaseSettings):
             raise ValueError(f"Media server provider must be one of: {', '.join(sorted(valid))}.")
         return provider
 
-    @field_validator("profile_cron", "decision_cron", "library_sync_cron")
+    @field_validator("profile_cron", "decision_cron", "library_sync_cron", "request_status_sync_cron")
     @classmethod
     def validate_cron_expression(cls, value: str) -> str:
         CronTrigger.from_crontab(value)
@@ -600,6 +602,20 @@ DB_MANAGED_SETTING_FIELDS: tuple[SettingFieldDefinition, ...] = (
         group="Scheduling",
         description="Cron expression for the Jellyfin library index refresh.",
         placeholder="0 */4 * * *",
+    ),
+    SettingFieldDefinition(
+        key="request_status_sync_enabled",
+        label="Request Status Sync Enabled",
+        group="Scheduling",
+        description="Poll Seer for status changes on tracked requests so profiles reflect approvals, denials, and availability.",
+        input_type="checkbox",
+    ),
+    SettingFieldDefinition(
+        key="request_status_sync_cron",
+        label="Request Status Sync Cron",
+        group="Scheduling",
+        description="Cron expression for the Seer request-status sync.",
+        placeholder="15 * * * *",
     ),
     SettingFieldDefinition(
         key="global_exclusions",

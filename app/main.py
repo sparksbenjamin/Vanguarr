@@ -512,6 +512,7 @@ async def settings_page(request: Request, section_slug: str) -> HTMLResponse:
     settings_page_def = get_settings_page_or_404(section_slug)
     settings = current_settings(request.app, force=True)
     library_sync_snapshot = request.app.state.vanguarr.get_library_sync_snapshot()
+    request_status_sync_snapshot = request.app.state.vanguarr.get_request_status_sync_snapshot()
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
@@ -527,6 +528,7 @@ async def settings_page(request: Request, section_slug: str) -> HTMLResponse:
             "jellyfin_plugin_name": VANGUARR_JELLYFIN_PLUGIN_NAME,
             "jellyfin_plugin_repository_url": VANGUARR_JELLYFIN_PLUGIN_REPOSITORY_URL,
             "library_sync_snapshot": library_sync_snapshot,
+            "request_status_sync_snapshot": request_status_sync_snapshot,
         },
     )
 
@@ -679,6 +681,46 @@ async def library_sync_status(request: Request) -> JSONResponse:
     )
 
 
+@app.post("/api/settings/scheduling/request-status-sync/run")
+async def run_request_status_sync_now(request: Request) -> JSONResponse:
+    settings = current_settings(request.app, force=True)
+    if not settings.seer_base_url or not settings.seer_api_key:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "detail": "Configure Seer base URL and API key before running request status sync.",
+            },
+        )
+
+    started, message = request.app.state.background_runner.launch_request_status_sync()
+    return JSONResponse(
+        {
+            "ok": True,
+            "started": started,
+            "detail": message,
+        }
+    )
+
+
+@app.get("/api/settings/scheduling/request-status-sync/status")
+async def request_status_sync_status(request: Request) -> JSONResponse:
+    snapshot = request.app.state.vanguarr.get_request_status_sync_snapshot()
+    task_snapshot = request.app.state.vanguarr.get_task_snapshot("request_status_sync")
+    return JSONResponse(
+        {
+            "ok": True,
+            "task": task_snapshot,
+            "snapshot": {
+                "tracked_requests": snapshot["tracked_requests"],
+                "seer_linked_requests": snapshot["seer_linked_requests"],
+                "synced_outcomes": snapshot["synced_outcomes"],
+                "last_task": task_snapshot,
+            },
+        }
+    )
+
+
 @app.get("/manifest", response_class=HTMLResponse)
 async def manifest(request: Request, username: str = "", custom_username: str = "", review: str = "") -> HTMLResponse:
     service: VanguarrService = request.app.state.vanguarr
@@ -697,14 +739,18 @@ async def manifest(request: Request, username: str = "", custom_username: str = 
     )
     request_history = service.get_request_history(selected_user, limit=8) if selected_user else []
     profile_task_snapshots = service.get_profile_task_snapshots(selected_user) if selected_user else {}
-    review_requested = str(review or "").strip() in {"1", "true", "yes", "on"}
-    decision_preview: dict[str, object] | None = None
-    decision_preview_error = ""
-    if selected_user and review_requested:
-        try:
-            decision_preview = await service.preview_decision_candidates(selected_user, limit=8)
-        except Exception as exc:
-            decision_preview_error = str(exc)
+    decision_preview_task = profile_task_snapshots.get("decision_preview", {}) if selected_user else {}
+    decision_preview_detail = (
+        decision_preview_task.get("detail", {})
+        if isinstance(decision_preview_task.get("detail", {}), dict)
+        else {}
+    )
+    decision_preview = decision_preview_detail.get("preview") if isinstance(decision_preview_detail, dict) else None
+    decision_preview_error = (
+        decision_preview_task.get("summary", "")
+        if str(decision_preview_task.get("status") or "").lower() == "error"
+        else ""
+    )
     return templates.TemplateResponse(
         request=request,
         name="manifest.html",
@@ -724,9 +770,10 @@ async def manifest(request: Request, username: str = "", custom_username: str = 
             "suggestions_limit": settings.suggestions_limit,
             "request_history": request_history,
             "profile_task_snapshots": profile_task_snapshots,
-            "review_requested": review_requested,
+            "review_requested": str(review or "").strip() in {"1", "true", "yes", "on"},
             "decision_preview": decision_preview,
             "decision_preview_error": decision_preview_error,
+            "decision_preview_task": decision_preview_task,
         },
     )
 
@@ -832,7 +879,7 @@ async def manifest_action_suggested_for_you(
 @app.get("/api/manifest/task-status")
 async def manifest_task_status(request: Request, username: str = "") -> JSONResponse:
     cleaned_username = username.strip()
-    engines = ("profile_architect", "decision_engine", "suggested_for_you")
+    engines = ("profile_architect", "decision_engine", "decision_preview", "suggested_for_you")
     service: VanguarrService = request.app.state.vanguarr
     return JSONResponse(
         {
@@ -847,6 +894,30 @@ async def manifest_task_status(request: Request, username: str = "") -> JSONResp
                 engine: request.app.state.background_runner.is_running(engine)
                 for engine in engines
             },
+        }
+    )
+
+
+@app.post("/api/manifest/actions/decision-preview")
+async def manifest_action_decision_preview_api(
+    request: Request,
+    username: str = Form(""),
+) -> JSONResponse:
+    cleaned_username = username.strip()
+    if not cleaned_username:
+        return JSONResponse({"ok": False, "detail": "Select a profile before running a dry run."}, status_code=400)
+
+    started, detail = request.app.state.background_runner.launch_decision_preview(cleaned_username)
+    if started:
+        await asyncio.sleep(0)
+    service: VanguarrService = request.app.state.vanguarr
+    return JSONResponse(
+        {
+            "ok": True,
+            "started": started,
+            "detail": detail,
+            "task": service.get_task_snapshot_for_target("decision_preview", cleaned_username),
+            "active_task": service.get_task_snapshot("decision_preview"),
         }
     )
 

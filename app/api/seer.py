@@ -161,6 +161,14 @@ class SeerClient(BaseAPIClient):
         message = self._request_result_message(payload, response)
         raise ExternalServiceError(f"{self.service_name} returned HTTP {response.status_code}: {message[:500]}")
 
+    async def get_request(self, request_id: int) -> dict[str, Any]:
+        settings = self._refresh_connection()
+        if not settings.seer_api_key:
+            raise ClientConfigError("SEER_API_KEY is required to read request status.")
+
+        payload = await self._request("GET", f"/api/v1/request/{int(request_id)}")
+        return payload if isinstance(payload, dict) else {}
+
     async def discover_candidates(
         self,
         seed_items: list[dict[str, Any]],

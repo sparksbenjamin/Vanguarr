@@ -268,6 +268,86 @@
       </div>
     </div>
   </section>
+  <section class="surface rounded-[1.45rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
+      <p class="panel-kicker">Seer Request Status Sync</p>
+      <h2 class="mt-2 panel-title">Track request state without rebuilding Seer</h2>
+    </div>
+    <div class="space-y-4 px-5 py-5">
+      <p class="text-sm leading-6 text-[var(--text-soft)]">
+        This sync only reads the current status of request IDs that Vanguarr already knows about in Seer. It updates local request outcomes for approvals, denials, and availability so profile review stays accurate without trying to replace Seer.
+      </p>
+      <div class="grid gap-3 md:grid-cols-3">
+        <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
+          <p class="panel-kicker">Tracked</p>
+          <p class="mt-2 text-2xl font-semibold" data-request-sync-tracked>{{ request_status_sync_snapshot.tracked_requests }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">local request rows</p>
+        </div>
+        <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
+          <p class="panel-kicker">Linked To Seer</p>
+          <p class="mt-2 text-2xl font-semibold" data-request-sync-linked>{{ request_status_sync_snapshot.seer_linked_requests }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">rows with Seer request IDs</p>
+        </div>
+        <div class="rounded-[1.1rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4">
+          <p class="panel-kicker">Synced Outcomes</p>
+          <p class="mt-2 text-2xl font-semibold" data-request-sync-outcomes>{{ request_status_sync_snapshot.synced_outcomes }}</p>
+          <p class="mt-2 text-sm text-[var(--text-soft)]">status events recorded from Seer</p>
+        </div>
+      </div>
+      <div class="rounded-[1.25rem] border border-[rgba(160,182,207,0.08)] bg-[rgba(255,255,255,0.03)] px-4 py-4">
+        <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p class="panel-kicker">Current Sync Status</p>
+            <h3 class="mt-2 text-lg font-semibold" data-request-sync-current-label>Ready</h3>
+            <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]" data-request-sync-current-summary>
+              Waiting for the next Seer status sync.
+            </p>
+          </div>
+          <span class="status-pill status-neutral" data-request-sync-current-badge>idle</span>
+        </div>
+        <div class="mt-4">
+          <div class="flex items-center justify-between gap-4 text-sm">
+            <span class="text-[var(--text-soft)]" data-request-sync-progress-copy>0 / 0 tracked requests checked</span>
+            <span class="mono text-[var(--text-dim)]" data-request-sync-percent>0%</span>
+          </div>
+          <div class="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+            <div class="h-full rounded-full bg-[var(--amber)] transition-all duration-300" style="width: 0%;" data-request-sync-bar></div>
+          </div>
+        </div>
+        <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">
+          Last sync task:
+          <span class="mono text-white" data-request-sync-last-started>
+            {{ request_status_sync_snapshot.last_task.started_at.isoformat() if request_status_sync_snapshot.last_task else "No runs yet" }}
+          </span>
+        </p>
+        <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]" data-request-sync-last-summary>
+          {% if request_status_sync_snapshot.last_task %}
+          {{ request_status_sync_snapshot.last_task.summary }}
+          {% else %}
+          Run this after Seer activity if you want the profile view to pick up new approvals or availability immediately.
+          {% endif %}
+        </p>
+      </div>
+      <div class="hidden rounded-2xl border px-4 py-3 text-sm" data-request-sync-status></div>
+      <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <button
+          type="button"
+          class="button button-primary w-full md:w-auto"
+          data-run-request-status-sync
+          {% if not settings.seer_base_url or not settings.seer_api_key %}disabled{% endif %}
+        >
+          Run Request Status Sync
+        </button>
+        <p class="text-sm leading-6 text-[var(--text-soft)]">
+          {% if settings.seer_base_url and settings.seer_api_key %}
+          This runs in the background and only reads status from Seer for requests Vanguarr already created or tracked.
+          {% else %}
+          Add the Seer base URL and API key before using request status sync.
+          {% endif %}
+        </p>
+      </div>
+    </div>
+  </section>
   {% endif %}
   {% elif settings_page.kind == "providers" %}
   <form class="space-y-5" method="post" action="/settings/save">
@@ -516,7 +596,21 @@
   const librarySyncSuggestionCopy = document.querySelector("[data-library-sync-suggestion-copy]");
   const librarySyncSuggestionBar = document.querySelector("[data-library-sync-suggestion-bar]");
   const librarySyncLibraryList = document.querySelector("[data-library-sync-library-list]");
+  const requestSyncButton = document.querySelector("[data-run-request-status-sync]");
+  const requestSyncStatus = document.querySelector("[data-request-sync-status]");
+  const requestSyncTracked = document.querySelector("[data-request-sync-tracked]");
+  const requestSyncLinked = document.querySelector("[data-request-sync-linked]");
+  const requestSyncOutcomes = document.querySelector("[data-request-sync-outcomes]");
+  const requestSyncLastStarted = document.querySelector("[data-request-sync-last-started]");
+  const requestSyncLastSummary = document.querySelector("[data-request-sync-last-summary]");
+  const requestSyncCurrentLabel = document.querySelector("[data-request-sync-current-label]");
+  const requestSyncCurrentSummary = document.querySelector("[data-request-sync-current-summary]");
+  const requestSyncCurrentBadge = document.querySelector("[data-request-sync-current-badge]");
+  const requestSyncProgressCopy = document.querySelector("[data-request-sync-progress-copy]");
+  const requestSyncPercent = document.querySelector("[data-request-sync-percent]");
+  const requestSyncBar = document.querySelector("[data-request-sync-bar]");
   let librarySyncPollTimer = null;
+  let requestSyncPollTimer = null;
 
   function setJellyfinPluginStatus(tone, message) {
     if (!jellyfinPluginStatus) return;
@@ -760,6 +854,134 @@
   if (librarySyncButton) {
     librarySyncButton.addEventListener("click", runLibrarySync);
     refreshLibrarySyncStatus();
+  }
+
+  function setRequestSyncStatus(tone, message) {
+    if (!requestSyncStatus) return;
+
+    const tones = {
+      info: "border-[rgba(160,182,207,0.12)] bg-[rgba(255,255,255,0.03)] text-[var(--text-soft)]",
+      loading: "border-[rgba(246,189,103,0.18)] bg-[rgba(246,189,103,0.08)] text-[var(--amber)]",
+      success: "border-[rgba(90,217,158,0.18)] bg-[rgba(90,217,158,0.08)] text-[var(--green)]",
+      error: "border-[rgba(255,127,127,0.18)] bg-[rgba(255,127,127,0.08)] text-[var(--red)]",
+    };
+
+    requestSyncStatus.hidden = false;
+    requestSyncStatus.className = `rounded-2xl border px-4 py-3 text-sm ${tones[tone] || tones.info}`;
+    requestSyncStatus.textContent = message;
+  }
+
+  function setRequestSyncBadge(status) {
+    if (!requestSyncCurrentBadge) return;
+
+    const normalized = String(status || "idle").toLowerCase();
+    const tone =
+      normalized === "success" ? "status-good" :
+      normalized === "running" || normalized === "partial" ? "status-warn" :
+      normalized === "idle" ? "status-neutral" :
+      "status-bad";
+
+    requestSyncCurrentBadge.className = `status-pill ${tone}`;
+    requestSyncCurrentBadge.textContent = normalized;
+  }
+
+  function renderRequestSyncStatus(payload) {
+    const task = payload?.task || {};
+    const snapshot = payload?.snapshot || {};
+    const overallPercent = Number(task.percent || 0);
+    const current = Number(task.progress_current || 0);
+    const total = Number(task.progress_total || 0);
+    const checked = Number(task.detail?.checked || current || 0);
+
+    if (requestSyncTracked) requestSyncTracked.textContent = String(snapshot.tracked_requests ?? 0);
+    if (requestSyncLinked) requestSyncLinked.textContent = String(snapshot.seer_linked_requests ?? 0);
+    if (requestSyncOutcomes) requestSyncOutcomes.textContent = String(snapshot.synced_outcomes ?? 0);
+    if (requestSyncLastStarted) requestSyncLastStarted.textContent = formatLibrarySyncTimestamp(task.started_at || snapshot.last_task?.started_at, "No runs yet");
+    if (requestSyncLastSummary) requestSyncLastSummary.textContent = task.summary || snapshot.last_task?.summary || "No request status sync runs yet.";
+    if (requestSyncCurrentLabel) requestSyncCurrentLabel.textContent = task.current_label || "Ready";
+    if (requestSyncCurrentSummary) requestSyncCurrentSummary.textContent = task.summary || "Waiting for the next Seer status sync.";
+    if (requestSyncProgressCopy) {
+      requestSyncProgressCopy.textContent = total > 0
+        ? `${checked} / ${total} tracked requests checked`
+        : "0 / 0 tracked requests checked";
+    }
+    if (requestSyncPercent) requestSyncPercent.textContent = `${overallPercent.toFixed(1)}%`;
+    if (requestSyncBar) {
+      requestSyncBar.style.width = `${overallPercent}%`;
+      requestSyncBar.classList.toggle("animate-pulse", String(task.status || "").toLowerCase() === "running");
+    }
+
+    setRequestSyncBadge(task.status || "idle");
+
+    const isRunning = String(task.status || "").toLowerCase() === "running";
+    if (isRunning && !requestSyncPollTimer) {
+      requestSyncPollTimer = window.setInterval(refreshRequestSyncStatus, 2000);
+    } else if (!isRunning && requestSyncPollTimer) {
+      window.clearInterval(requestSyncPollTimer);
+      requestSyncPollTimer = null;
+    }
+  }
+
+  async function refreshRequestSyncStatus() {
+    if (!requestSyncButton) return;
+
+    try {
+      const response = await fetch("/api/settings/scheduling/request-status-sync/status", {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+        },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.detail || "Could not load request status sync state.");
+      }
+      renderRequestSyncStatus(result);
+    } catch (error) {
+      if (requestSyncPollTimer) {
+        window.clearInterval(requestSyncPollTimer);
+        requestSyncPollTimer = null;
+      }
+      setRequestSyncStatus("error", error.message || "Could not load request status sync state.");
+    }
+  }
+
+  async function runRequestSync() {
+    if (!requestSyncButton) return;
+
+    const originalLabel = requestSyncButton.textContent;
+    requestSyncButton.disabled = true;
+    setRequestSyncStatus("loading", "Queueing a Seer request status sync in the background...");
+
+    try {
+      const response = await fetch("/api/settings/scheduling/request-status-sync/run", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+        },
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.detail || "Could not start request status sync.");
+      }
+
+      setRequestSyncStatus(result.started === false ? "info" : "success", result.detail || "Request status sync queued.");
+      await refreshRequestSyncStatus();
+      if (!requestSyncPollTimer) {
+        requestSyncPollTimer = window.setInterval(refreshRequestSyncStatus, 2000);
+      }
+    } catch (error) {
+      setRequestSyncStatus("error", error.message || "Could not start request status sync.");
+    } finally {
+      requestSyncButton.disabled = false;
+      requestSyncButton.textContent = originalLabel;
+    }
+  }
+
+  if (requestSyncButton) {
+    requestSyncButton.addEventListener("click", runRequestSync);
+    refreshRequestSyncStatus();
   }
 </script>
 {% endif %}

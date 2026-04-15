@@ -251,6 +251,25 @@ def test_discover_candidates_continues_when_recommendation_seed_fails() -> None:
     asyncio.run(scenario())
 
 
+def test_get_request_returns_request_payload() -> None:
+    async def scenario() -> None:
+        settings = Settings(seer_base_url="http://seer.local", seer_api_key="token")
+        client = SeerClient(settings)
+
+        async def fake_request(method: str, path: str, **kwargs) -> dict[str, object]:
+            assert method == "GET"
+            assert path == "/api/v1/request/42"
+            return {"id": 42, "status": 2, "media": {"status": 4}}
+
+        client._request = fake_request  # type: ignore[method-assign]
+        payload = await client.get_request(42)
+
+        assert payload["id"] == 42
+        assert payload["status"] == 2
+
+    asyncio.run(scenario())
+
+
 def test_request_media_tv_defaults_to_season_one_and_returns_request_id() -> None:
     class FakeResponse:
         def __init__(self, status_code: int, payload: dict) -> None:

@@ -452,6 +452,7 @@ class VanguarrService:
             "decision_engine": "Decision Engine",
             "suggested_for_you": "Suggested For You",
             "library_sync": "Library Sync",
+            "request_status_sync": "Request Status Sync",
             "profile_feedback": "Profile Feedback",
             "request_outcome": "Request Outcome",
             "decision_preview": "Decision Dry Run",
@@ -1084,6 +1085,36 @@ class VanguarrService:
             "task_status": self.get_task_snapshot("library_sync"),
         }
 
+    def get_request_status_sync_snapshot(self) -> dict[str, Any]:
+        with self.session_scope() as session:
+            tracked_requests = int(session.scalar(select(func.count(RequestedMedia.id))) or 0)
+            seer_linked_requests = int(
+                session.scalar(
+                    select(func.count(RequestedMedia.id)).where(RequestedMedia.seer_request_id.is_not(None))
+                )
+                or 0
+            )
+            synced_outcomes = int(
+                session.scalar(
+                    select(func.count(RequestOutcomeEvent.id)).where(RequestOutcomeEvent.source == "seer_sync")
+                )
+                or 0
+            )
+            last_task = session.scalar(
+                select(TaskRun)
+                .where(TaskRun.engine == "request_status_sync")
+                .order_by(desc(TaskRun.started_at))
+                .limit(1)
+            )
+
+        return {
+            "tracked_requests": tracked_requests,
+            "seer_linked_requests": seer_linked_requests,
+            "synced_outcomes": synced_outcomes,
+            "last_task": last_task,
+            "task_status": self.get_task_snapshot("request_status_sync"),
+        }
+
     def get_task_snapshot(self, engine_name: str) -> dict[str, Any]:
         with self.session_scope() as session:
             task = session.scalar(
@@ -1115,7 +1146,7 @@ class VanguarrService:
         return self._serialize_task_run(None)
 
     def get_profile_task_snapshots(self, username: str | None) -> dict[str, dict[str, Any]]:
-        engines = ("profile_architect", "decision_engine", "suggested_for_you")
+        engines = ("profile_architect", "decision_engine", "decision_preview", "suggested_for_you")
         return {
             engine: self.get_task_snapshot_for_target(engine, username)
             for engine in engines
@@ -1845,7 +1876,7 @@ class VanguarrService:
             "errors": errors,
         }
 
-    async def preview_decision_candidates(self, username: str, *, limit: int = 8) -> dict[str, Any]:
+    async def _build_decision_preview(self, username: str, *, limit: int = 8) -> dict[str, Any]:
         cleaned_username = str(username or "").strip()
         if not cleaned_username:
             raise ValueError("Select a profile before running a dry-run review.")
@@ -1937,21 +1968,6 @@ class VanguarrService:
             f"Dry-run reviewed {len(preview_rows)} shortlisted candidate(s) for {cleaned_username}. "
             f"Scored {int(prepared['scored'] or 0)} total and skipped {int(prepared['skipped'] or 0)} before the shortlist."
         )
-        self.record_operation_event(
-            engine="decision_preview",
-            username=cleaned_username,
-            media_type="candidate",
-            media_title=f"Decision dry run for {cleaned_username}",
-            source="manifest",
-            decision="PREVIEW",
-            reasoning=summary,
-            detail_payload={
-                "previewed": len(preview_rows),
-                "scored": int(prepared["scored"] or 0),
-                "skipped": int(prepared["skipped"] or 0),
-                "skip_reasons": prepared.get("skip_reasons", {}),
-            },
-        )
         return {
             "username": cleaned_username,
             "summary": summary,
@@ -1960,6 +1976,128 @@ class VanguarrService:
             "scored": int(prepared["scored"] or 0),
             "skipped": int(prepared["skipped"] or 0),
             "skip_reasons": prepared.get("skip_reasons", {}),
+        }
+
+    async def preview_decision_candidates(self, username: str, *, limit: int = 8) -> dict[str, Any]:
+        return await self._build_decision_preview(username, limit=limit)
+
+    async def run_decision_preview(
+        self,
+        username: str | None = None,
+        *,
+        trigger_source: str = "manual",
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        target_username = str(username or "").strip()
+        logger.info("Decision Dry Run started for target=%s", target_username or "missing-user")
+        with self.session_scope() as session:
+            task = self._start_task(session, "decision_preview")
+
+        preview: dict[str, Any] | None = None
+        errors: list[str] = []
+        try:
+            self._update_task(
+                task.id,
+                status="running",
+                summary=(
+                    f"Preparing a dry-run review for {target_username}."
+                    if target_username
+                    else "Waiting for a selected profile before running dry run."
+                ),
+                progress_current=0,
+                progress_total=3,
+                current_label=target_username or "Awaiting profile",
+                detail_payload={
+                    "target_username": target_username,
+                    "preview": None,
+                    "errors": [],
+                },
+            )
+            if not target_username:
+                raise ValueError("Select a profile before running a dry-run review.")
+
+            self._update_task(
+                task.id,
+                status="running",
+                summary=f"Loading profile context and shortlist for {target_username}.",
+                progress_current=1,
+                progress_total=3,
+                current_label=target_username,
+                detail_payload={
+                    "target_username": target_username,
+                    "preview": None,
+                    "errors": [],
+                },
+            )
+            preview = await self._build_decision_preview(target_username, limit=limit)
+            self._update_task(
+                task.id,
+                status="running",
+                summary=f"Scoring the dry-run shortlist for {target_username}.",
+                progress_current=2,
+                progress_total=3,
+                current_label=target_username,
+                detail_payload={
+                    "target_username": target_username,
+                    "preview": preview,
+                    "errors": [],
+                },
+            )
+            status = "success"
+            summary = str(preview.get("summary") or "Dry-run complete.")
+        except Exception as exc:
+            status = "error"
+            summary = str(exc).strip() or "Decision dry run failed."
+            errors.append(summary)
+
+        self._update_task(
+            task.id,
+            status=status,
+            summary=summary,
+            progress_current=3 if status == "success" else min(2, 3),
+            progress_total=3,
+            current_label=target_username or "Finished",
+            detail_payload={
+                "target_username": target_username,
+                "preview": preview,
+                "errors": list(errors),
+            },
+            finished=True,
+        )
+
+        self._record_operation_log(
+            engine="decision_preview",
+            username=target_username or "system",
+            media_type="candidate",
+            media_title=(
+                f"Decision dry run for {target_username}"
+                if target_username
+                else "Decision dry run without selected profile"
+            ),
+            source=trigger_source,
+            decision="PREVIEW" if status == "success" else "ERROR",
+            reasoning=summary,
+            error="; ".join(errors) if errors else None,
+            detail_payload={
+                "task_type": "decision_preview",
+                "run_scope": target_username or "missing-user",
+                "trigger": trigger_source,
+                "previewed": int((preview or {}).get("candidates") and len((preview or {}).get("candidates", [])) or 0),
+                "scored": int((preview or {}).get("scored") or 0),
+                "skipped": int((preview or {}).get("skipped") or 0),
+                "skip_reasons": (preview or {}).get("skip_reasons", {}),
+                "status": status,
+            },
+        )
+
+        logger.info("Decision Dry Run finished status=%s summary=%s", status, summary)
+
+        return {
+            "engine": "decision_preview",
+            "status": status,
+            "summary": summary,
+            "preview": preview,
+            "errors": errors,
         }
 
     async def run_suggested_for_you(self, username: str | None = None) -> dict[str, Any]:
@@ -2473,6 +2611,371 @@ class VanguarrService:
             "suggestion_refresh_state": suggestion_refresh["state"],
             "errors": errors,
         }
+
+    async def run_request_status_sync(
+        self,
+        username: str | None = None,
+        *,
+        trigger_source: str = "manual",
+    ) -> dict[str, Any]:
+        target_username = str(username or "").strip()
+        logger.info("Request Status Sync started for target=%s", target_username or "all-users")
+        with self.session_scope() as session:
+            task = self._start_task(session, "request_status_sync")
+
+        checked = 0
+        recorded = 0
+        processed_usernames: list[str] = []
+        errors: list[str] = []
+        outcome_counts: Counter[str] = Counter()
+
+        try:
+            if not self.seer.configured or not self.settings.seer_api_key:
+                raise ClientConfigError("Configure Seer base URL and API key before syncing request status.")
+
+            with self.session_scope() as session:
+                stmt = (
+                    select(RequestedMedia)
+                    .where(RequestedMedia.seer_request_id.is_not(None))
+                    .order_by(desc(RequestedMedia.created_at))
+                )
+                if target_username:
+                    stmt = stmt.where(RequestedMedia.username == target_username)
+                tracked_rows = list(session.scalars(stmt))
+
+            total_steps = max(1, len(tracked_rows))
+            self._update_task(
+                task.id,
+                status="running",
+                summary=(
+                    f"Preparing Seer request sync for {target_username}."
+                    if target_username
+                    else f"Preparing Seer request sync for {len(tracked_rows)} tracked request(s)."
+                ),
+                progress_current=0,
+                progress_total=total_steps,
+                current_label=target_username or "Preparing sync",
+                detail_payload={
+                    "target_username": target_username,
+                    "checked": 0,
+                    "recorded": 0,
+                    "processed_usernames": [],
+                    "outcome_counts": {},
+                    "errors": [],
+                },
+            )
+
+            for index, row in enumerate(tracked_rows, start=1):
+                current_username = str(row.username or "").strip() or "unknown"
+                if current_username not in processed_usernames:
+                    processed_usernames.append(current_username)
+
+                self._update_task(
+                    task.id,
+                    status="running",
+                    summary=f"Checking Seer request status for {row.media_title}.",
+                    progress_current=max(0, index - 1),
+                    progress_total=total_steps,
+                    current_label=current_username,
+                    detail_payload={
+                        "target_username": target_username,
+                        "checked": checked,
+                        "recorded": recorded,
+                        "processed_usernames": list(processed_usernames),
+                        "outcome_counts": dict(outcome_counts),
+                        "errors": list(errors),
+                    },
+                )
+
+                try:
+                    payload = await self.seer.get_request(int(row.seer_request_id or 0))
+                    checked += 1
+                    outcome = self._request_outcome_from_seer_request(payload)
+                    if outcome and self._record_request_outcome_from_seer_sync(
+                        requested_media_id=row.id,
+                        payload=payload,
+                        outcome=outcome,
+                        trigger_source=trigger_source,
+                    ):
+                        recorded += 1
+                        outcome_counts[outcome] += 1
+                except Exception as exc:
+                    errors.append(f"{current_username}::{row.media_title}: {exc}")
+                    logger.warning(
+                        "Request status sync failed username=%s title=%s request_id=%s reason=%s",
+                        current_username,
+                        row.media_title,
+                        row.seer_request_id,
+                        exc,
+                    )
+
+                self._update_task(
+                    task.id,
+                    status="running",
+                    summary=f"Checked {index}/{len(tracked_rows)} tracked request(s).",
+                    progress_current=index,
+                    progress_total=total_steps,
+                    current_label=current_username,
+                    detail_payload={
+                        "target_username": target_username,
+                        "checked": checked,
+                        "recorded": recorded,
+                        "processed_usernames": list(processed_usernames),
+                        "outcome_counts": dict(outcome_counts),
+                        "errors": list(errors),
+                    },
+                )
+
+            if not tracked_rows:
+                status = "success"
+                summary = (
+                    f"No Seer-linked requests are stored for {target_username}."
+                    if target_username
+                    else "No Seer-linked requests are stored yet."
+                )
+            elif errors and recorded == 0:
+                status = "partial"
+                summary = f"Checked {checked} tracked request(s) but hit {len(errors)} sync error(s)."
+            elif errors:
+                status = "partial"
+                summary = (
+                    f"Checked {checked} tracked request(s) and recorded {recorded} new status update(s), "
+                    f"with {len(errors)} sync error(s)."
+                )
+            else:
+                status = "success"
+                summary = f"Checked {checked} tracked request(s) and recorded {recorded} new status update(s)."
+        except Exception as exc:
+            status = "error"
+            summary = str(exc).strip() or "Request status sync failed."
+            errors.append(summary)
+
+        final_total_steps = max(1, locals().get("total_steps", 1))
+        self._update_task(
+            task.id,
+            status=status,
+            summary=summary,
+            progress_current=final_total_steps if status != "error" else min(final_total_steps, checked),
+            progress_total=final_total_steps,
+            current_label=target_username or "Finished",
+            detail_payload={
+                "target_username": target_username,
+                "checked": checked,
+                "recorded": recorded,
+                "processed_usernames": list(processed_usernames),
+                "outcome_counts": dict(outcome_counts),
+                "errors": list(errors),
+            },
+            finished=True,
+        )
+
+        self._record_operation_log(
+            engine="request_status_sync",
+            username=target_username or "system",
+            media_type="request",
+            media_title=(
+                f"Request Status Sync for {target_username}"
+                if target_username
+                else "Request Status Sync for all users"
+            ),
+            source=trigger_source,
+            decision="SYNC" if status != "error" else "ERROR",
+            reasoning=summary,
+            error="; ".join(errors) if errors else None,
+            detail_payload={
+                "task_type": "request_status_sync",
+                "run_scope": target_username or "all-users",
+                "trigger": trigger_source,
+                "checked": checked,
+                "recorded": recorded,
+                "outcome_counts": dict(outcome_counts),
+                "processed_usernames": list(processed_usernames),
+                "status": status,
+            },
+        )
+
+        logger.info("Request Status Sync finished status=%s summary=%s", status, summary)
+
+        return {
+            "engine": "request_status_sync",
+            "status": status,
+            "summary": summary,
+            "checked": checked,
+            "recorded": recorded,
+            "outcome_counts": dict(outcome_counts),
+            "errors": errors,
+        }
+
+    @classmethod
+    def _request_outcome_from_seer_request(cls, payload: dict[str, Any]) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+
+        request_block = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+        media_block = {}
+        for key in ("media", "mediaInfo", "requestedMedia"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                media_block = value
+                break
+
+        combined = " ".join(
+            part.strip().upper()
+            for part in (
+                str(payload.get("status") or ""),
+                str(payload.get("requestStatus") or ""),
+                str(request_block.get("status") or ""),
+                str(media_block.get("status") or ""),
+                str(media_block.get("mediaStatus") or ""),
+                str(payload.get("mediaStatus") or ""),
+            )
+            if part.strip()
+        )
+
+        if "DECLIN" in combined or "DENIED" in combined:
+            return "denied"
+        if "FAILED" in combined or "UNAVAILABLE" in combined:
+            return "unavailable"
+        if "PARTIALLY_AVAILABLE" in combined or "AVAILABLE" in combined or "DOWNLOADED" in combined:
+            return "downloaded"
+        if "APPROV" in combined:
+            return "approved"
+
+        request_status = cls._coerce_int(
+            payload.get("status")
+            if isinstance(payload.get("status"), int | float | str)
+            else request_block.get("status")
+        )
+        media_status = cls._coerce_int(
+            media_block.get("status")
+            if media_block.get("status") is not None
+            else media_block.get("mediaStatus")
+        )
+        if request_status == 3:
+            return "denied"
+        if media_status is not None and media_status >= 4:
+            return "downloaded"
+        if request_status == 2:
+            return "approved"
+        return None
+
+    @classmethod
+    def _describe_seer_request_sync(cls, payload: dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return "Updated from Seer request status sync."
+
+        request_block = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+        media_block = {}
+        for key in ("media", "mediaInfo", "requestedMedia"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                media_block = value
+                break
+
+        request_status = str(
+            request_block.get("status")
+            if request_block.get("status") is not None
+            else payload.get("status")
+            or ""
+        ).strip()
+        media_status = str(
+            media_block.get("status")
+            if media_block.get("status") is not None
+            else media_block.get("mediaStatus")
+            or payload.get("mediaStatus")
+            or ""
+        ).strip()
+        if request_status and media_status:
+            return f"Seer sync observed request status {request_status} and media status {media_status}."
+        if request_status:
+            return f"Seer sync observed request status {request_status}."
+        if media_status:
+            return f"Seer sync observed media status {media_status}."
+        return "Updated from Seer request status sync."
+
+    def _record_request_outcome_from_seer_sync(
+        self,
+        *,
+        requested_media_id: int,
+        payload: dict[str, Any],
+        outcome: str,
+        trigger_source: str,
+    ) -> bool:
+        normalized_outcome = self._normalize_request_outcome_label(outcome)
+        positive_rank = {"approved": 1, "downloaded": 2, "watched": 3}
+        detail = self._describe_seer_request_sync(payload)
+
+        with self.session_scope() as session:
+            requested_row = session.get(RequestedMedia, requested_media_id)
+            if requested_row is None:
+                return False
+
+            matching_events = list(
+                session.scalars(
+                    select(RequestOutcomeEvent)
+                    .where(
+                        or_(
+                            RequestOutcomeEvent.requested_media_id == requested_row.id,
+                            RequestOutcomeEvent.request_id == requested_row.seer_request_id,
+                        )
+                    )
+                    .order_by(desc(RequestOutcomeEvent.created_at))
+                )
+            )
+
+            if any(
+                self._normalize_request_outcome_label(event.outcome) == normalized_outcome
+                for event in matching_events
+            ):
+                return False
+
+            latest_outcome = (
+                self._normalize_request_outcome_label(matching_events[0].outcome)
+                if matching_events
+                else ""
+            )
+            if positive_rank.get(latest_outcome, 0) > positive_rank.get(normalized_outcome, 0) > 0:
+                return False
+
+            session.add(
+                RequestOutcomeEvent(
+                    requested_media_id=requested_row.id,
+                    username=requested_row.username,
+                    media_type=requested_row.media_type,
+                    media_id=requested_row.media_id,
+                    media_title=requested_row.media_title,
+                    request_id=requested_row.seer_request_id,
+                    outcome=normalized_outcome,
+                    source="seer_sync",
+                    detail=detail,
+                    payload_json=json.dumps(payload, ensure_ascii=True),
+                )
+            )
+            resolved_username = requested_row.username
+            resolved_media_type = requested_row.media_type
+            resolved_media_id = requested_row.media_id
+            resolved_title = requested_row.media_title
+            resolved_request_id = requested_row.seer_request_id
+
+        self.record_operation_event(
+            engine="request_outcome",
+            username=resolved_username,
+            media_type=resolved_media_type,
+            media_title=resolved_title,
+            source="seer_sync",
+            decision=normalized_outcome.upper(),
+            reasoning=f"Seer request sync recorded request outcome {normalized_outcome} for {resolved_title}.",
+            detail_payload={
+                "requested_media_id": requested_media_id,
+                "request_id": resolved_request_id,
+                "media_id": resolved_media_id,
+                "outcome": normalized_outcome,
+                "trigger": trigger_source,
+            },
+        )
+        live_payload = self._with_live_profile_context(resolved_username, self.profile_store.read_payload(resolved_username))
+        self.profile_store.write_payload(resolved_username, live_payload)
+        return True
 
     async def ingest_seer_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
         notification_type = str(

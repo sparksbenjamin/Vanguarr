@@ -2226,6 +2226,82 @@ def test_sync_watched_request_outcomes_from_history_infers_only_new_post_request
     assert outcomes[0].source == "profile_architect"
 
 
+def test_run_request_status_sync_records_new_outcomes_without_duplicates(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    class FakeSeer:
+        configured = True
+
+        async def get_request(self, request_id: int) -> dict[str, object]:
+            assert request_id == 44
+            return {"id": 44, "status": 2}
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+        seer_base_url="http://seer.local",
+        seer_api_key="token",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=FakeSeer(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+    service.profile_store.write_payload(
+        "alice",
+        {
+            "username": "alice",
+            "profile_state": "ready",
+            "history_count": 10,
+            "unique_titles": 6,
+            "primary_genres": ["Drama"],
+            "recent_momentum": [{"title": "Arrival", "play_count": 1}],
+            "summary_block": "summary",
+        },
+    )
+
+    with session_factory() as session:
+        session.add(
+            RequestedMedia(
+                id=1,
+                username="alice",
+                media_type="movie",
+                media_id=329865,
+                media_title="Arrival",
+                source="recommended:Interstellar",
+                seer_request_id=44,
+            )
+        )
+        session.commit()
+
+    first_sync = asyncio.run(service.run_request_status_sync("alice", trigger_source="test"))
+    second_sync = asyncio.run(service.run_request_status_sync("alice", trigger_source="test"))
+    live_payload = service.get_profile_payload_with_live_context("alice")
+    task_snapshot = service.get_task_snapshot_for_target("request_status_sync", "alice")
+
+    with session_factory() as session:
+        outcomes = list(session.scalars(select(RequestOutcomeEvent).order_by(RequestOutcomeEvent.id.asc())))
+
+    assert first_sync["status"] == "success"
+    assert first_sync["checked"] == 1
+    assert first_sync["recorded"] == 1
+    assert second_sync["recorded"] == 0
+    assert len(outcomes) == 1
+    assert outcomes[0].media_title == "Arrival"
+    assert outcomes[0].outcome == "approved"
+    assert outcomes[0].source == "seer_sync"
+    assert live_payload["request_outcome_insights"]["counts"]["approved"] == 1
+    assert task_snapshot["status"] == "success"
+    assert task_snapshot["detail"]["checked"] == 1
+
+
 def test_preview_decision_candidates_returns_review_cards(tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)

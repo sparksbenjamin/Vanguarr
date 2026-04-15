@@ -94,6 +94,11 @@ def test_scheduling_settings_page_shows_library_sync_box() -> None:
     assert "Keep Suggested For You aligned with the real library" in response.text
     assert "/api/settings/scheduling/library-sync/run" in response.text
     assert "/api/settings/scheduling/library-sync/status" in response.text
+    assert "Request Status Sync Enabled" in response.text
+    assert "Request Status Sync Cron" in response.text
+    assert "Track request state without rebuilding Seer" in response.text
+    assert "/api/settings/scheduling/request-status-sync/run" in response.text
+    assert "/api/settings/scheduling/request-status-sync/status" in response.text
     assert "Current Sync Status" in response.text
     assert "Suggestion refresh" in response.text
 
@@ -336,6 +341,7 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
             lambda username: {
                 "profile_architect": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
                 "decision_engine": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
+                "decision_preview": {"status": "idle", "summary": "No dry-run review has been captured yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready", "detail": {}},
                 "suggested_for_you": {"status": "success", "summary": "Stored snapshot.", "progress_total": 5, "progress_current": 5, "percent": 100.0, "current_label": "alice"},
             },
         )
@@ -364,6 +370,7 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
     assert "Matches sci-fi preference and avoids top-repeat comfort titles." in response.text
     assert "Run Profile Architect" in response.text
     assert "Run Decision Engine" in response.text
+    assert "Run Dry Run" in response.text
     assert "Refresh Suggestions" in response.text
     assert "Last run: Never" in response.text or "Last run:" in response.text
     assert "Health, freshness, and drift" in response.text
@@ -385,38 +392,43 @@ def test_manifest_page_renders_decision_sandbox_preview(monkeypatch) -> None:
             lambda username: {
                 "profile_architect": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
                 "decision_engine": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
+                "decision_preview": {
+                    "status": "success",
+                    "summary": "Dry-run reviewed 1 shortlisted candidate.",
+                    "progress_total": 3,
+                    "progress_current": 3,
+                    "percent": 100.0,
+                    "current_label": "alice",
+                    "detail": {
+                        "preview": {
+                            "summary": "Dry-run reviewed 1 shortlisted candidate.",
+                            "candidates": [
+                                {
+                                    "media_type": "movie",
+                                    "title": "Arrival",
+                                    "overview": "First contact drama.",
+                                    "genres": ["Sci-Fi", "Drama"],
+                                    "sources": ["recommended:Interstellar"],
+                                    "release_date": "2016-11-11",
+                                    "rating": 8.2,
+                                    "decision": "REQUEST",
+                                    "hybrid_confidence": 0.82,
+                                    "llm_vote": "REQUEST",
+                                    "reasoning": "Final score 0.82.",
+                                    "features": {"score_breakdown": {"genre_affinity": 0.22, "outcome_fit": 0.05}},
+                                }
+                            ],
+                        }
+                    },
+                },
                 "suggested_for_you": {"status": "idle", "summary": "No runs yet.", "progress_total": 0, "progress_current": 0, "percent": 0.0, "current_label": "Ready"},
             },
         )
         monkeypatch.setattr(client.app.state.vanguarr, "get_suggestions", lambda **kwargs: [])
-
-        async def fake_preview(username: str, limit: int = 8) -> dict[str, object]:
-            return {
-                "summary": "Dry-run reviewed 1 shortlisted candidate.",
-                "candidates": [
-                    {
-                        "media_type": "movie",
-                        "title": "Arrival",
-                        "overview": "First contact drama.",
-                        "genres": ["Sci-Fi", "Drama"],
-                        "sources": ["recommended:Interstellar"],
-                        "release_date": "2016-11-11",
-                        "rating": 8.2,
-                        "decision": "REQUEST",
-                        "hybrid_confidence": 0.82,
-                        "llm_vote": "REQUEST",
-                        "reasoning": "Final score 0.82.",
-                        "features": {"score_breakdown": {"genre_affinity": 0.22, "outcome_fit": 0.05}},
-                    }
-                ],
-            }
-
-        monkeypatch.setattr(client.app.state.vanguarr, "preview_decision_candidates", fake_preview)
-
-        response = client.get("/manifest?username=alice&review=1")
+        response = client.get("/manifest?username=alice")
 
     assert response.status_code == 200
-    assert "Top candidate review" in response.text
+    assert "Latest dry-run candidate review" in response.text
     assert "Dry-run reviewed 1 shortlisted candidate." in response.text
     assert "Arrival" in response.text
     assert "More Like This" in response.text
@@ -513,13 +525,14 @@ def test_manifest_task_status_endpoint_returns_profile_snapshots(monkeypatch) ->
             lambda username: {
                 "profile_architect": {"status": "running", "target_username": username, "summary": "Rebuilding profile."},
                 "decision_engine": {"status": "idle", "target_username": username, "summary": "No runs yet."},
+                "decision_preview": {"status": "success", "target_username": username, "summary": "Dry-run complete."},
                 "suggested_for_you": {"status": "success", "target_username": username, "summary": "Stored snapshot."},
             },
         )
         monkeypatch.setattr(
             client.app.state.vanguarr,
             "get_task_snapshot",
-            lambda engine_name: {"engine": engine_name, "status": "running" if engine_name == "profile_architect" else "idle"},
+            lambda engine_name: {"engine": engine_name, "status": "running" if engine_name == "profile_architect" else "success" if engine_name == "decision_preview" else "idle"},
         )
         monkeypatch.setattr(
             client.app.state.background_runner,
@@ -536,16 +549,19 @@ def test_manifest_task_status_endpoint_returns_profile_snapshots(monkeypatch) ->
         "tasks": {
             "profile_architect": {"status": "running", "target_username": "alice", "summary": "Rebuilding profile."},
             "decision_engine": {"status": "idle", "target_username": "alice", "summary": "No runs yet."},
+            "decision_preview": {"status": "success", "target_username": "alice", "summary": "Dry-run complete."},
             "suggested_for_you": {"status": "success", "target_username": "alice", "summary": "Stored snapshot."},
         },
         "active_tasks": {
             "profile_architect": {"engine": "profile_architect", "status": "running"},
             "decision_engine": {"engine": "decision_engine", "status": "idle"},
+            "decision_preview": {"engine": "decision_preview", "status": "success"},
             "suggested_for_you": {"engine": "suggested_for_you", "status": "idle"},
         },
         "global_running": {
             "profile_architect": True,
             "decision_engine": False,
+            "decision_preview": False,
             "suggested_for_you": False,
         },
     }
@@ -578,6 +594,36 @@ def test_manifest_profile_architect_api_starts_background_run(monkeypatch) -> No
         "detail": "Profile Architect started in the background for alice.",
         "task": {"engine": "profile_architect", "target_username": "alice", "status": "running"},
         "active_task": {"engine": "profile_architect", "status": "running"},
+    }
+
+
+def test_manifest_decision_preview_api_starts_background_run(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.background_runner,
+            "launch_decision_preview",
+            lambda username: (True, f"Decision Dry Run started in the background for {username}."),
+        )
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_task_snapshot_for_target",
+            lambda engine_name, username: {"engine": engine_name, "target_username": username, "status": "running"},
+        )
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_task_snapshot",
+            lambda engine_name: {"engine": engine_name, "status": "running"},
+        )
+
+        response = client.post("/api/manifest/actions/decision-preview", data={"username": "alice"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "started": True,
+        "detail": "Decision Dry Run started in the background for alice.",
+        "task": {"engine": "decision_preview", "target_username": "alice", "status": "running"},
+        "active_task": {"engine": "decision_preview", "status": "running"},
     }
 
 
@@ -933,6 +979,130 @@ def test_library_sync_status_endpoint_returns_snapshot(monkeypatch) -> None:
                     "phase": "indexing",
                     "libraries": [{"name": "Movies", "state": "running"}],
                     "suggestion_refresh": {"state": "pending", "completed_users": 0, "total_users": 5},
+                },
+            },
+        },
+    }
+
+
+def test_run_request_status_sync_endpoint_queues_background_job(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.settings,
+            "snapshot",
+            lambda force=False: SimpleNamespace(seer_base_url="http://seer.local", seer_api_key="token"),
+        )
+        monkeypatch.setattr(
+            client.app.state.background_runner,
+            "launch_request_status_sync",
+            lambda: (True, "Request Status Sync started in the background for all users."),
+        )
+
+        response = client.post("/api/settings/scheduling/request-status-sync/run")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "started": True,
+        "detail": "Request Status Sync started in the background for all users.",
+    }
+
+
+def test_run_request_status_sync_endpoint_requires_seer_config(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.settings,
+            "snapshot",
+            lambda force=False: SimpleNamespace(seer_base_url=None, seer_api_key=None),
+        )
+
+        response = client.post("/api/settings/scheduling/request-status-sync/run")
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "ok": False,
+        "detail": "Configure Seer base URL and API key before running request status sync.",
+    }
+
+
+def test_request_status_sync_status_endpoint_returns_snapshot(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_task_snapshot",
+            lambda engine_name: {
+                "id": 34,
+                "engine": engine_name,
+                "status": "running",
+                "summary": "Checked 2/5 tracked request(s).",
+                "started_at": "2026-04-14T09:15:00",
+                "finished_at": None,
+                "progress_current": 2,
+                "progress_total": 5,
+                "percent": 40.0,
+                "current_label": "alice",
+                "detail": {
+                    "checked": 2,
+                    "recorded": 1,
+                    "outcome_counts": {"approved": 1},
+                    "processed_usernames": ["alice"],
+                },
+            },
+        )
+        monkeypatch.setattr(
+            client.app.state.vanguarr,
+            "get_request_status_sync_snapshot",
+            lambda: {
+                "tracked_requests": 7,
+                "seer_linked_requests": 5,
+                "synced_outcomes": 3,
+                "last_task": None,
+            },
+        )
+
+        response = client.get("/api/settings/scheduling/request-status-sync/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "task": {
+            "id": 34,
+            "engine": "request_status_sync",
+            "status": "running",
+            "summary": "Checked 2/5 tracked request(s).",
+            "started_at": "2026-04-14T09:15:00",
+            "finished_at": None,
+            "progress_current": 2,
+            "progress_total": 5,
+            "percent": 40.0,
+            "current_label": "alice",
+            "detail": {
+                "checked": 2,
+                "recorded": 1,
+                "outcome_counts": {"approved": 1},
+                "processed_usernames": ["alice"],
+            },
+        },
+        "snapshot": {
+            "tracked_requests": 7,
+            "seer_linked_requests": 5,
+            "synced_outcomes": 3,
+            "last_task": {
+                "id": 34,
+                "engine": "request_status_sync",
+                "status": "running",
+                "summary": "Checked 2/5 tracked request(s).",
+                "started_at": "2026-04-14T09:15:00",
+                "finished_at": None,
+                "progress_current": 2,
+                "progress_total": 5,
+                "percent": 40.0,
+                "current_label": "alice",
+                "detail": {
+                    "checked": 2,
+                    "recorded": 1,
+                    "outcome_counts": {"approved": 1},
+                    "processed_usernames": ["alice"],
                 },
             },
         },

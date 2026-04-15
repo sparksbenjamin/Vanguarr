@@ -68,6 +68,23 @@ class BackgroundEngineRunner:
     async def launch_suggested_for_you_async(self, username: str | None = None) -> tuple[bool, str]:
         return self.launch_suggested_for_you(username, source="scheduler")
 
+    def launch_decision_preview(
+        self,
+        username: str | None = None,
+        *,
+        source: str = "manual",
+    ) -> tuple[bool, str]:
+        return self._launch(
+            engine_name="decision_preview",
+            label="Decision Dry Run",
+            target=username,
+            source=source,
+            job_factory=lambda: self.service.run_decision_preview(username, trigger_source=source),
+        )
+
+    async def launch_decision_preview_async(self, username: str | None = None) -> tuple[bool, str]:
+        return self.launch_decision_preview(username, source="scheduler")
+
     def launch_library_sync(self, *, source: str = "manual") -> tuple[bool, str]:
         return self._launch(
             engine_name="library_sync",
@@ -79,6 +96,23 @@ class BackgroundEngineRunner:
 
     async def launch_library_sync_async(self) -> tuple[bool, str]:
         return self.launch_library_sync(source="scheduler")
+
+    def launch_request_status_sync(
+        self,
+        username: str | None = None,
+        *,
+        source: str = "manual",
+    ) -> tuple[bool, str]:
+        return self._launch(
+            engine_name="request_status_sync",
+            label="Request Status Sync",
+            target=username,
+            source=source,
+            job_factory=lambda: self.service.run_request_status_sync(username, trigger_source=source),
+        )
+
+    async def launch_request_status_sync_async(self, username: str | None = None) -> tuple[bool, str]:
+        return self.launch_request_status_sync(username, source="scheduler")
 
     def is_running(self, engine_name: str) -> bool:
         task = self._tasks.get(engine_name)

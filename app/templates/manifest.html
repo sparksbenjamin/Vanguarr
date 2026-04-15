@@ -87,6 +87,7 @@
       <div class="grid gap-4 xl:grid-cols-3">
         {% set profile_architect_task = profile_task_snapshots.get("profile_architect", {}) %}
         {% set decision_engine_task = profile_task_snapshots.get("decision_engine", {}) %}
+        {% set decision_preview_task = profile_task_snapshots.get("decision_preview", {}) %}
         {% set suggested_for_you_task = profile_task_snapshots.get("suggested_for_you", {}) %}
 
         <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4" data-profile-task-card data-engine="profile_architect">
@@ -153,6 +154,38 @@
           <button class="button button-primary mt-5 w-full" type="button" data-profile-action-button data-action="decision-engine">
             Run Decision Engine
           </button>
+          <div class="mt-4 rounded-[1.15rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <p class="panel-kicker">Decision Dry Run</p>
+                <p class="mt-2 text-sm font-medium">Preview before requesting</p>
+              </div>
+              <span class="status-pill {{ 'status-warn' if decision_preview_task.get('status') == 'running' else 'status-good' if decision_preview_task.get('status') == 'success' else 'status-bad' if decision_preview_task.get('status') == 'error' else 'status-neutral' }}" data-preview-task-badge>{{ decision_preview_task.get("status", "idle") }}</span>
+            </div>
+            <p class="mt-3 min-h-[2.5rem] text-sm leading-6 text-[var(--text-soft)]" data-preview-task-summary>{{ decision_preview_task.get("summary", "No dry-run review has been captured yet.") }}</p>
+            <p class="mt-2 mono text-xs text-[var(--text-dim)]" data-preview-task-current-label>{{ decision_preview_task.get("current_label", "Ready") }}</p>
+            <p class="mt-2 mono text-xs text-[var(--text-dim)]" data-preview-task-timestamp>
+              Last run: {{ decision_preview_task.get("finished_at") or decision_preview_task.get("started_at") or "Never" }}
+            </p>
+            <div class="mt-4">
+              <div class="flex items-center justify-between gap-4 text-sm">
+                <span class="text-[var(--text-soft)]" data-preview-task-progress-copy>
+                  {% if decision_preview_task.get("progress_total", 0) > 0 %}
+                  {{ decision_preview_task.get("progress_current", 0) }} / {{ decision_preview_task.get("progress_total", 0) }} steps
+                  {% else %}
+                  Waiting to start
+                  {% endif %}
+                </span>
+                <span class="mono text-[var(--text-dim)]" data-preview-task-percent>{{ "%.1f"|format(decision_preview_task.get("percent", 0.0)) }}%</span>
+              </div>
+              <div class="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+                <div class="h-full rounded-full bg-[var(--amber)] transition-all duration-300" style="width: {{ decision_preview_task.get('percent', 0.0) }}%;" data-preview-task-bar></div>
+              </div>
+            </div>
+            <button class="button button-ghost mt-5 w-full" type="button" data-profile-action-button data-action="decision-preview">
+              Run Dry Run
+            </button>
+          </div>
         </article>
 
         <article class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 p-4" data-profile-task-card data-engine="suggested_for_you">
@@ -337,24 +370,19 @@
 
   <section class="surface rounded-[1.45rem] overflow-hidden">
     <div class="border-b border-white/5 px-5 py-4">
-      <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <p class="panel-kicker">Decision Sandbox</p>
-          <h2 class="mt-2 panel-title">Top candidate review</h2>
-          <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
-            Run a dry-run shortlist against the current profile to see exactly what Vanguarr would favor before it sends anything to Seer.
-          </p>
-        </div>
-        <form method="get" action="/manifest" class="flex flex-col gap-3 sm:flex-row">
-          <input type="hidden" name="username" value="{{ selected_user }}" />
-          <input type="hidden" name="review" value="1" />
-          <button class="button button-amber" type="submit">{{ "Refresh Dry Run" if review_requested else "Run Dry Run Review" }}</button>
-        </form>
-      </div>
+      <p class="panel-kicker">Decision Sandbox</p>
+      <h2 class="mt-2 panel-title">Latest dry-run candidate review</h2>
+      <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+        Review the latest dry-run shortlist and score breakdown here after you launch it from the Decision Engine card above.
+      </p>
     </div>
     <div class="space-y-4 px-5 py-5">
       {% if decision_preview_error %}
       <div class="rounded-2xl border border-[rgba(255,127,127,0.18)] bg-[rgba(255,127,127,0.08)] px-4 py-3 text-sm text-[var(--red)]">{{ decision_preview_error }}</div>
+      {% elif decision_preview_task.get("status") == "running" %}
+      <div class="rounded-[1.3rem] border border-[rgba(246,189,103,0.18)] bg-[rgba(246,189,103,0.08)] px-4 py-4 text-sm leading-6 text-[var(--amber)]">
+        {{ decision_preview_task.get("summary", "Dry run is running in the background.") }}
+      </div>
       {% elif decision_preview %}
       <div class="rounded-[1.3rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4 text-sm leading-6 text-[var(--text-soft)]">
         {{ decision_preview.get("summary", "Dry-run complete.") }}
@@ -401,7 +429,6 @@
             <input type="hidden" name="title" value="{{ item.title }}" />
             <input type="hidden" name="media_type" value="{{ item.media_type }}" />
             <input type="hidden" name="genres" value="{{ item.genres|join(',') }}" />
-            <input type="hidden" name="review" value="{{ '1' if review_requested else '' }}" />
             <button class="button button-primary" type="submit" name="action" value="like">Like</button>
             <button class="button button-ghost" type="submit" name="action" value="dislike">Dislike</button>
             <button class="button button-ghost" type="submit" name="action" value="more_like_this">More Like This</button>
@@ -454,7 +481,6 @@
         <form method="post" action="/manifest/actions/request-outcome" class="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
           <input type="hidden" name="username" value="{{ selected_user }}" />
           <input type="hidden" name="requested_media_id" value="{{ item.id }}" />
-          <input type="hidden" name="review" value="{{ '1' if review_requested else '' }}" />
           <button class="button button-ghost" type="submit" name="outcome" value="approved">Approved</button>
           <button class="button button-ghost" type="submit" name="outcome" value="denied">Denied</button>
           <button class="button button-ghost" type="submit" name="outcome" value="ignored">Ignored</button>
@@ -580,11 +606,23 @@
   const profileActionStatus = document.querySelector("[data-profile-action-status]");
   const profileTaskCards = Array.from(document.querySelectorAll("[data-profile-task-card]"));
   const profileActionButtons = Array.from(document.querySelectorAll("[data-profile-action-button]"));
+  let currentDecisionPreviewStatus = {{ (decision_preview_task.get("status", "idle") if decision_preview_task else "idle")|tojson }};
+  const decisionPreviewElements = {
+    badge: document.querySelector("[data-preview-task-badge]"),
+    summary: document.querySelector("[data-preview-task-summary]"),
+    currentLabel: document.querySelector("[data-preview-task-current-label]"),
+    timestamp: document.querySelector("[data-preview-task-timestamp]"),
+    progressCopy: document.querySelector("[data-preview-task-progress-copy]"),
+    percent: document.querySelector("[data-preview-task-percent]"),
+    bar: document.querySelector("[data-preview-task-bar]"),
+    button: document.querySelector('[data-profile-action-button][data-action="decision-preview"]'),
+  };
   let profileTaskPollTimer = null;
 
   const engineActionMap = {
     profile_architect: "profile-architect",
     decision_engine: "decision-engine",
+    decision_preview: "decision-preview",
     suggested_for_you: "suggested-for-you",
   };
 
@@ -610,25 +648,14 @@
     return "status-neutral";
   }
 
-  function renderProfileTaskCard(card, task, activeTask, isRunningElsewhere) {
-    const badge = card.querySelector("[data-task-badge]");
-    const summary = card.querySelector("[data-task-summary]");
-    const currentLabel = card.querySelector("[data-task-current-label]");
-    const timestamp = card.querySelector("[data-task-timestamp]");
-    const progressCopy = card.querySelector("[data-task-progress-copy]");
-    const percent = card.querySelector("[data-task-percent]");
-    const bar = card.querySelector("[data-task-bar]");
-    const button = card.querySelector("[data-profile-action-button]");
-    const engine = card.dataset.engine;
-
-    let displayTask = task || {};
-    let effectiveStatus = String(displayTask.status || "idle").toLowerCase();
-    let effectiveSummary = displayTask.summary || "No runs yet.";
-    let effectiveLabel = displayTask.current_label || "Ready";
-    let effectivePercent = Number(displayTask.percent || 0);
-    let effectiveCurrent = Number(displayTask.progress_current || 0);
-    let effectiveTotal = Number(displayTask.progress_total || 0);
-    let effectiveTimestamp = displayTask.finished_at || displayTask.started_at || "Never";
+  function summarizeTaskState(task, activeTask, isRunningElsewhere, idleSummary, idleLabel) {
+    let effectiveStatus = String(task?.status || "idle").toLowerCase();
+    let effectiveSummary = task?.summary || idleSummary;
+    let effectiveLabel = task?.current_label || idleLabel;
+    let effectivePercent = Number(task?.percent || 0);
+    let effectiveCurrent = Number(task?.progress_current || 0);
+    let effectiveTotal = Number(task?.progress_total || 0);
+    let effectiveTimestamp = task?.finished_at || task?.started_at || "Never";
 
     if (effectiveStatus === "idle" && isRunningElsewhere && activeTask && String(activeTask.status || "").toLowerCase() === "running") {
       effectiveStatus = "busy";
@@ -642,29 +669,85 @@
       effectiveTimestamp = activeTask.started_at || effectiveTimestamp;
     }
 
+    return {
+      status: effectiveStatus,
+      summary: effectiveSummary,
+      label: effectiveLabel,
+      percent: effectivePercent,
+      current: effectiveCurrent,
+      total: effectiveTotal,
+      timestamp: effectiveTimestamp,
+    };
+  }
+
+  function renderProfileTaskCard(card, task, activeTask, isRunningElsewhere) {
+    const badge = card.querySelector("[data-task-badge]");
+    const summary = card.querySelector("[data-task-summary]");
+    const currentLabel = card.querySelector("[data-task-current-label]");
+    const timestamp = card.querySelector("[data-task-timestamp]");
+    const progressCopy = card.querySelector("[data-task-progress-copy]");
+    const percent = card.querySelector("[data-task-percent]");
+    const bar = card.querySelector("[data-task-bar]");
+    const button = card.querySelector("[data-profile-action-button]");
+    const display = summarizeTaskState(task, activeTask, isRunningElsewhere, "No runs yet.", "Ready");
+
     if (badge) {
-      badge.className = `status-pill ${taskBadgeTone(effectiveStatus)}`;
-      badge.textContent = effectiveStatus;
+      badge.className = `status-pill ${taskBadgeTone(display.status)}`;
+      badge.textContent = display.status;
     }
-    if (summary) summary.textContent = effectiveSummary;
-    if (currentLabel) currentLabel.textContent = effectiveLabel;
-    if (timestamp) timestamp.textContent = `Last run: ${effectiveTimestamp}`;
+    if (summary) summary.textContent = display.summary;
+    if (currentLabel) currentLabel.textContent = display.label;
+    if (timestamp) timestamp.textContent = `Last run: ${display.timestamp}`;
 
     if (progressCopy) {
-      progressCopy.textContent = effectiveTotal > 0
-        ? `${effectiveCurrent} / ${effectiveTotal} steps`
-        : effectiveStatus === "running" || effectiveStatus === "busy"
+      progressCopy.textContent = display.total > 0
+        ? `${display.current} / ${display.total} steps`
+        : display.status === "running" || display.status === "busy"
           ? "Working..."
           : "Waiting to start";
     }
-    if (percent) percent.textContent = `${effectivePercent.toFixed(1)}%`;
+    if (percent) percent.textContent = `${display.percent.toFixed(1)}%`;
     if (bar) {
-      const width = effectivePercent > 0 ? effectivePercent : (effectiveStatus === "running" || effectiveStatus === "busy" ? 18 : 0);
+      const width = display.percent > 0 ? display.percent : (display.status === "running" || display.status === "busy" ? 18 : 0);
       bar.style.width = `${width}%`;
-      bar.classList.toggle("animate-pulse", effectiveStatus === "running" || effectiveStatus === "busy");
+      bar.classList.toggle("animate-pulse", display.status === "running" || display.status === "busy");
     }
     if (button) {
-      button.disabled = !selectedProfileUsername || effectiveStatus === "running" || isRunningElsewhere;
+      button.disabled = !selectedProfileUsername || display.status === "running" || isRunningElsewhere;
+    }
+  }
+
+  function renderDecisionPreviewTask(task, activeTask, isRunningElsewhere) {
+    if (!decisionPreviewElements.badge) return;
+
+    const display = summarizeTaskState(
+      task,
+      activeTask,
+      isRunningElsewhere,
+      "No dry-run review has been captured yet.",
+      "Ready"
+    );
+
+    decisionPreviewElements.badge.className = `status-pill ${taskBadgeTone(display.status)}`;
+    decisionPreviewElements.badge.textContent = display.status;
+    if (decisionPreviewElements.summary) decisionPreviewElements.summary.textContent = display.summary;
+    if (decisionPreviewElements.currentLabel) decisionPreviewElements.currentLabel.textContent = display.label;
+    if (decisionPreviewElements.timestamp) decisionPreviewElements.timestamp.textContent = `Last run: ${display.timestamp}`;
+    if (decisionPreviewElements.progressCopy) {
+      decisionPreviewElements.progressCopy.textContent = display.total > 0
+        ? `${display.current} / ${display.total} steps`
+        : display.status === "running" || display.status === "busy"
+          ? "Working..."
+          : "Waiting to start";
+    }
+    if (decisionPreviewElements.percent) decisionPreviewElements.percent.textContent = `${display.percent.toFixed(1)}%`;
+    if (decisionPreviewElements.bar) {
+      const width = display.percent > 0 ? display.percent : (display.status === "running" || display.status === "busy" ? 18 : 0);
+      decisionPreviewElements.bar.style.width = `${width}%`;
+      decisionPreviewElements.bar.classList.toggle("animate-pulse", display.status === "running" || display.status === "busy");
+    }
+    if (decisionPreviewElements.button) {
+      decisionPreviewElements.button.disabled = !selectedProfileUsername || display.status === "running" || isRunningElsewhere;
     }
   }
 
@@ -699,7 +782,24 @@
       }
     }
 
+    const previewTask = tasks.decision_preview || {};
+    const previewActiveTask = activeTasks.decision_preview || {};
+    const previewRunningElsewhere = Boolean(globalRunning.decision_preview) && String(previewTask.status || "idle").toLowerCase() !== "running";
+    renderDecisionPreviewTask(previewTask, previewActiveTask, previewRunningElsewhere);
+    const nextPreviewStatus = String(previewTask.status || "idle").toLowerCase();
+    const previewJustFinished = currentDecisionPreviewStatus === "running" && nextPreviewStatus !== "running";
+    currentDecisionPreviewStatus = nextPreviewStatus;
+    if (nextPreviewStatus === "running" || Boolean(globalRunning.decision_preview)) {
+      shouldPoll = true;
+    }
+
     syncProfileTaskButtons(globalRunning);
+
+    if (previewJustFinished && selectedProfileUsername) {
+      const targetUrl = `/manifest?username=${encodeURIComponent(selectedProfileUsername)}`;
+      window.location.assign(targetUrl);
+      return;
+    }
 
     if (shouldPoll && !profileTaskPollTimer) {
       profileTaskPollTimer = window.setInterval(refreshProfileTaskStatus, 2000);

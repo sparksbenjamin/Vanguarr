@@ -65,6 +65,16 @@ class EngineScheduler:
                 coalesce=True,
                 max_instances=1,
             )
+        if settings.request_status_sync_enabled:
+            scheduler.add_job(
+                self.runner.launch_request_status_sync_async,
+                trigger=CronTrigger.from_crontab(settings.request_status_sync_cron, timezone=timezone),
+                id="request_status_sync",
+                name="Request Status Sync",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
         scheduler.start()
         self._scheduler = scheduler
 
