@@ -29,7 +29,6 @@
             Start from a saved manifest in the dropdown, or type a custom username if you want to open a fresh scaffold.
           </p>
         </div>
-        <a class="button button-ghost" href="/settings/general">Open Settings</a>
       </div>
     </div>
     <div class="grid gap-4 px-5 py-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
@@ -307,28 +306,64 @@
       <section class="surface rounded-[1.45rem] overflow-hidden">
         <div class="border-b border-white/5 px-5 py-4">
           <p class="panel-kicker">Human Guidance</p>
-          <h2 class="mt-2 panel-title">Likes, dislikes, and hard blocks</h2>
+          <h2 class="mt-2 panel-title">Likes, dislikes, hard blocks, and notes</h2>
         </div>
-        <div class="space-y-4 px-5 py-5 text-sm leading-6 text-[var(--text-soft)]">
-          <div>
-            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Liked Titles</p>
-            <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("liked_titles", [])|join(", ") or "None yet." }}</p>
-          </div>
-          <div>
-            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Disliked Titles</p>
-            <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("disliked_titles", [])|join(", ") or "None yet." }}</p>
-          </div>
-          <div>
-            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Liked Genres</p>
-            <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("liked_genres", [])|join(", ") or "None yet." }}</p>
-          </div>
-          <div>
-            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Disliked Genres</p>
-            <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("disliked_genres", [])|join(", ") or "None yet." }}</p>
-          </div>
-          <div>
-            <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Never Again</p>
-            <p class="mt-2">{{ profile_payload_live.get("blocked_titles", [])|join(", ") or "No hard-blocked titles." }}</p>
+        <div class="space-y-5 px-5 py-5">
+          <form method="post" action="/manifest/actions/profile-guidance" class="space-y-4">
+            <input type="hidden" name="username" value="{{ selected_user }}" />
+            <input type="hidden" name="review" value="1" />
+            <div class="grid gap-4 lg:grid-cols-2">
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="guidance-liked-titles">Liked titles</label>
+                <input id="guidance-liked-titles" name="liked_titles" class="field-input text-sm" value="{{ profile_payload_live.get('explicit_feedback', {}).get('liked_titles', [])|join(', ') }}" placeholder="Arrival, Severance" />
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="guidance-disliked-titles">Disliked titles</label>
+                <input id="guidance-disliked-titles" name="disliked_titles" class="field-input text-sm" value="{{ profile_payload_live.get('explicit_feedback', {}).get('disliked_titles', [])|join(', ') }}" placeholder="Anime Trap, Random Slasher" />
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="guidance-liked-genres">Liked genres</label>
+                <input id="guidance-liked-genres" name="liked_genres" class="field-input text-sm" value="{{ profile_payload_live.get('explicit_feedback', {}).get('liked_genres', [])|join(', ') }}" placeholder="Sci-Fi, Drama" />
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="guidance-disliked-genres">Disliked genres</label>
+                <input id="guidance-disliked-genres" name="disliked_genres" class="field-input text-sm" value="{{ profile_payload_live.get('explicit_feedback', {}).get('disliked_genres', [])|join(', ') }}" placeholder="Reality, Anime" />
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="guidance-blocked-titles">Never again</label>
+                <input id="guidance-blocked-titles" name="blocked_titles" class="field-input text-sm" value="{{ profile_payload_live.get('blocked_titles', [])|join(', ') }}" placeholder="Hard-block exact titles" />
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-medium" for="guidance-exclusions">Profile exclusions</label>
+                <input id="guidance-exclusions" name="profile_exclusions" class="field-input text-sm" value="{{ profile_payload_live.get('profile_exclusions', [])|join(', ') }}" placeholder="Franchises, topics, studios" />
+              </div>
+            </div>
+            <div>
+              <label class="mb-2 block text-sm font-medium" for="guidance-operator-notes">Operator notes</label>
+              <textarea id="guidance-operator-notes" name="operator_notes" rows="4" class="field-input text-sm">{{ profile_payload_live.get("operator_notes", "") }}</textarea>
+            </div>
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p class="text-sm leading-6 text-[var(--text-soft)]">Comma-separated values update the live manifest immediately and will be respected on the next rebuild too.</p>
+              <button class="button button-primary sm:min-w-[180px]" type="submit">Save Guidance</button>
+            </div>
+          </form>
+          <div class="grid gap-4 text-sm leading-6 text-[var(--text-soft)] lg:grid-cols-2">
+            <div>
+              <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Current liked titles</p>
+              <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("liked_titles", [])|join(", ") or "None yet." }}</p>
+            </div>
+            <div>
+              <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Current disliked titles</p>
+              <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("disliked_titles", [])|join(", ") or "None yet." }}</p>
+            </div>
+            <div>
+              <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Current liked genres</p>
+              <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("liked_genres", [])|join(", ") or "None yet." }}</p>
+            </div>
+            <div>
+              <p class="mono text-[0.72rem] uppercase tracking-[0.18em] text-[var(--text-dim)]">Current disliked genres</p>
+              <p class="mt-2">{{ profile_payload_live.get("explicit_feedback", {}).get("disliked_genres", [])|join(", ") or "None yet." }}</p>
+            </div>
           </div>
         </div>
       </section>
@@ -460,8 +495,13 @@
             <p class="panel-kicker">{{ item.media_type }}</p>
             <h3 class="mt-2 text-lg font-semibold">{{ item.media_title }}</h3>
             <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
-              Requested {{ item.created_at or "unknown" }}{% if item.genres %} / {{ item.genres|join(", ") }}{% endif %}
+              Requested {{ item.created_at or "unknown" }} by {{ item.requested_by or item.username }}{% if item.genres %} / {{ item.genres|join(", ") }}{% endif %}
             </p>
+            {% if item.shared_with %}
+            <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">Shared with {{ item.shared_with|join(", ") }}.</p>
+            {% elif item.is_supporting %}
+            <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">This profile is attached as a supporter on another user's request.</p>
+            {% endif %}
           </div>
           <span class="status-pill {{ 'status-good' if item.latest_outcome in ['approved', 'downloaded', 'watched'] else 'status-bad' if item.latest_outcome in ['denied', 'ignored', 'unavailable'] else 'status-neutral' }}">
             {{ item.latest_outcome }}

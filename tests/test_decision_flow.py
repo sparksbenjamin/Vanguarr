@@ -9,7 +9,15 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api.seer import SeerRequestResult
 from app.core.db import Base
-from app.core.models import DecisionLog, LibraryMedia, RequestOutcomeEvent, RequestedMedia, SuggestedMedia, TaskRun
+from app.core.models import (
+    DecisionLog,
+    LibraryMedia,
+    RequestOutcomeEvent,
+    RequestedMedia,
+    RequestedMediaSupporter,
+    SuggestedMedia,
+    TaskRun,
+)
 from app.core.prompts import build_decision_messages, build_profile_enrichment_messages, build_suggestion_messages
 from app.core.settings import Settings
 from app.core.services import ProfileStore, VanguarrService, normalize_jellyfin_user_id
@@ -2203,6 +2211,93 @@ def test_prepare_decision_candidates_skips_global_requests_and_exact_favorites(t
     assert [candidate["title"] for candidate in prepared["shortlisted_candidates"]] == ["Fresh Orbit"]
     assert prepared["skip_reasons"]["already_requested"] == 1
     assert prepared["skip_reasons"]["already_favorited"] == 1
+    assert prepared["shared_request_matches"][0]["owner_username"] == "bob"
+
+
+def test_shared_request_supporters_appear_in_history_and_share_request_level_outcomes(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    service.profile_store.write_payload("alice", {"username": "alice", "profile_state": "ready", "summary_block": "summary"})
+    service.profile_store.write_payload("bob", {"username": "bob", "profile_state": "ready", "summary_block": "summary"})
+
+    with session_factory() as session:
+        session.add(
+            RequestedMedia(
+                id=1,
+                username="alice",
+                media_type="movie",
+                media_id=329865,
+                media_title="Arrival",
+                source="recommended:Interstellar",
+                seer_request_id=90,
+            )
+        )
+        session.commit()
+
+    support_result = service.add_request_supporter(
+        requested_media_id=1,
+        username="bob",
+        source="decision_engine",
+    )
+    bob_history = service.get_request_history("bob")
+    shared_result = service.record_request_outcome(
+        username="bob",
+        requested_media_id=1,
+        outcome="downloaded",
+        source="manifest",
+    )
+    watched_result = service.record_request_outcome(
+        username="bob",
+        requested_media_id=1,
+        outcome="watched",
+        source="profile_architect",
+    )
+
+    with session_factory() as session:
+        supporter_rows = list(session.scalars(select(RequestedMediaSupporter)))
+        bob_events = list(
+            session.scalars(
+                select(RequestOutcomeEvent)
+                .where(RequestOutcomeEvent.username == "bob")
+                .order_by(RequestOutcomeEvent.created_at.asc())
+            )
+        )
+        alice_events = list(
+            session.scalars(
+                select(RequestOutcomeEvent)
+                .where(RequestOutcomeEvent.username == "alice")
+                .order_by(RequestOutcomeEvent.created_at.asc())
+            )
+        )
+
+    assert support_result["created"] is True
+    assert len(bob_history) == 1
+    assert bob_history[0]["requested_by"] == "alice"
+    assert bob_history[0]["is_supporting"] is True
+    assert bob_history[0]["shared_with"] == ["alice"]
+    assert shared_result["outcome"] == "downloaded"
+    assert watched_result["outcome"] == "watched"
+    assert len(supporter_rows) == 1
+    assert supporter_rows[0].username == "bob"
+    assert [event.outcome for event in alice_events] == ["downloaded"]
+    assert [event.outcome for event in bob_events] == ["downloaded", "watched"]
 
 
 def test_run_profile_architect_writes_operation_log(tmp_path) -> None:

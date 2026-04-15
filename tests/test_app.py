@@ -377,6 +377,9 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
     assert "What happened after requests" in response.text
     assert "Anime Trap" in response.text
     assert 'id="manifest-user-select"' in response.text
+    assert 'name="liked_titles"' in response.text
+    assert "Save Guidance" in response.text
+    assert "Open Settings" not in response.text
 
 
 def test_manifest_page_renders_decision_sandbox_preview(monkeypatch) -> None:
@@ -466,6 +469,47 @@ def test_manifest_profile_feedback_action_redirects_back_to_manifest(monkeypatch
         "title": "Arrival",
         "genres": ["Sci-Fi", "Drama"],
         "media_type": "movie",
+        "source": "manifest",
+    }
+
+
+def test_manifest_profile_guidance_action_redirects_back_to_manifest(monkeypatch) -> None:
+    with TestClient(app) as client:
+        received: dict[str, object] = {}
+
+        def fake_update_profile_guidance(**kwargs):
+            received.update(kwargs)
+            return {}
+
+        monkeypatch.setattr(client.app.state.vanguarr, "update_profile_guidance", fake_update_profile_guidance)
+
+        response = client.post(
+            "/manifest/actions/profile-guidance",
+            data={
+                "username": "alice",
+                "liked_titles": "Arrival, Dune",
+                "disliked_titles": "Anime Trap",
+                "liked_genres": "Sci-Fi,Drama",
+                "disliked_genres": "Reality",
+                "blocked_titles": "Nope",
+                "profile_exclusions": "Kids",
+                "operator_notes": "Keep this profile grounded in prestige sci-fi.",
+                "review": "1",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/manifest?username=alice&review=1&toast=Saved+editable+guidance+for+alice."
+    assert received == {
+        "username": "alice",
+        "liked_titles": ["Arrival", "Dune"],
+        "disliked_titles": ["Anime Trap"],
+        "liked_genres": ["Sci-Fi", "Drama"],
+        "disliked_genres": ["Reality"],
+        "blocked_titles": ["Nope"],
+        "profile_exclusions": ["Kids"],
+        "operator_notes": "Keep this profile grounded in prestige sci-fi.",
         "source": "manifest",
     }
 

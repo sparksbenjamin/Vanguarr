@@ -832,6 +832,45 @@ async def manifest_action_profile_feedback(
     )
 
 
+@app.post("/manifest/actions/profile-guidance")
+async def manifest_action_profile_guidance(
+    request: Request,
+    username: str = Form(""),
+    liked_titles: str = Form(""),
+    disliked_titles: str = Form(""),
+    liked_genres: str = Form(""),
+    disliked_genres: str = Form(""),
+    blocked_titles: str = Form(""),
+    profile_exclusions: str = Form(""),
+    operator_notes: str = Form(""),
+    review: str = Form(""),
+) -> RedirectResponse:
+    cleaned_username = username.strip()
+    if not cleaned_username:
+        return redirect_to_manifest("Select a profile before updating guidance.")
+
+    try:
+        request.app.state.vanguarr.update_profile_guidance(
+            username=cleaned_username,
+            liked_titles=parse_csv_values(liked_titles),
+            disliked_titles=parse_csv_values(disliked_titles),
+            liked_genres=parse_csv_values(liked_genres),
+            disliked_genres=parse_csv_values(disliked_genres),
+            blocked_titles=parse_csv_values(blocked_titles),
+            profile_exclusions=parse_csv_values(profile_exclusions),
+            operator_notes=operator_notes,
+            source="manifest",
+        )
+    except ValueError as exc:
+        return redirect_to_manifest(str(exc), username=cleaned_username, review=review)
+
+    return redirect_to_manifest(
+        f"Saved editable guidance for {cleaned_username}.",
+        username=cleaned_username,
+        review=review,
+    )
+
+
 @app.post("/manifest/actions/request-outcome")
 async def manifest_action_request_outcome(
     request: Request,

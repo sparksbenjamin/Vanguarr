@@ -27,6 +27,7 @@ from app.core.models import (
     LibraryMedia,
     RequestOutcomeEvent,
     RequestedMedia,
+    RequestedMediaSupporter,
     SeerWebhookEvent,
     SuggestedMedia,
     TaskRun,
@@ -534,13 +535,123 @@ class VanguarrService:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    @staticmethod
+    def _request_supporter_lookup(
+        session: Session,
+        requested_media_ids: list[int] | set[int],
+    ) -> dict[int, list[str]]:
+        ids = sorted({int(value) for value in requested_media_ids if int(value or 0) > 0})
+        if not ids:
+            return {}
+
+        supporters: dict[int, list[str]] = {}
+        rows = session.scalars(
+            select(RequestedMediaSupporter)
+            .where(RequestedMediaSupporter.requested_media_id.in_(ids))
+            .order_by(RequestedMediaSupporter.created_at.asc())
+        )
+        for row in rows:
+            username = str(row.username or "").strip()
+            if not username:
+                continue
+            supporters.setdefault(int(row.requested_media_id), []).append(username)
+        return supporters
+
+    @staticmethod
+    def _request_audience_usernames(
+        session: Session,
+        requested_row: RequestedMedia,
+    ) -> list[str]:
+        usernames: list[str] = []
+        owner = str(requested_row.username or "").strip()
+        if owner:
+            usernames.append(owner)
+
+        supporters = VanguarrService._request_supporter_lookup(session, [int(requested_row.id or 0)]).get(
+            int(requested_row.id or 0),
+            [],
+        )
+        for username in supporters:
+            if username.lower() not in {value.lower() for value in usernames}:
+                usernames.append(username)
+        return usernames
+
+    def add_request_supporter(
+        self,
+        *,
+        requested_media_id: int,
+        username: str,
+        source: str = "manual",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        cleaned_username = str(username or "").strip()
+        if not cleaned_username:
+            raise ValueError("Username is required to support a shared request.")
+
+        with self.session_scope() as session:
+            requested_row = session.get(RequestedMedia, requested_media_id)
+            if requested_row is None:
+                raise ValueError("Shared request was not found.")
+            if str(requested_row.username or "").strip().lower() == cleaned_username.lower():
+                return {
+                    "created": False,
+                    "requested_media_id": requested_row.id,
+                    "media_title": requested_row.media_title,
+                    "owner_username": requested_row.username,
+                }
+
+            existing = session.scalar(
+                select(RequestedMediaSupporter).where(
+                    RequestedMediaSupporter.requested_media_id == requested_row.id,
+                    RequestedMediaSupporter.username == cleaned_username,
+                )
+            )
+            if existing is None:
+                session.add(
+                    RequestedMediaSupporter(
+                        requested_media_id=requested_row.id,
+                        username=cleaned_username,
+                        source=source,
+                    )
+                )
+                created = True
+            else:
+                created = False
+
+            media_title = requested_row.media_title
+            media_type = requested_row.media_type
+            owner_username = requested_row.username
+
+        if created:
+            self.record_operation_event(
+                engine="request_support",
+                username=cleaned_username,
+                media_type=media_type,
+                media_title=media_title,
+                source=source,
+                decision="SUPPORT",
+                reasoning=reason or f"Attached {cleaned_username} as a supporter on shared request {media_title}.",
+                detail_payload={
+                    "requested_media_id": requested_media_id,
+                    "owner_username": owner_username,
+                },
+            )
+        live_payload = self._with_live_profile_context(cleaned_username, self.profile_store.read_payload(cleaned_username))
+        self.profile_store.write_payload(cleaned_username, live_payload)
+        return {
+            "created": created,
+            "requested_media_id": requested_media_id,
+            "media_title": media_title,
+            "owner_username": owner_username,
+        }
+
     def get_request_history(self, username: str, limit: int = 10) -> list[dict[str, Any]]:
         cleaned_username = str(username or "").strip()
         if not cleaned_username:
             return []
 
         with self.session_scope() as session:
-            requested_rows = list(
+            owned_rows = list(
                 session.scalars(
                     select(RequestedMedia)
                     .where(RequestedMedia.username == cleaned_username)
@@ -548,6 +659,27 @@ class VanguarrService:
                     .limit(limit)
                 )
             )
+            supporter_rows = list(
+                session.scalars(
+                    select(RequestedMediaSupporter)
+                    .where(RequestedMediaSupporter.username == cleaned_username)
+                    .order_by(desc(RequestedMediaSupporter.created_at))
+                    .limit(limit)
+                )
+            )
+            supported_ids = {int(row.requested_media_id) for row in supporter_rows if int(row.requested_media_id or 0) > 0}
+            supported_requested_rows = list(
+                session.scalars(
+                    select(RequestedMedia)
+                    .where(RequestedMedia.id.in_(supported_ids))
+                    .order_by(desc(RequestedMedia.created_at))
+                )
+            ) if supported_ids else []
+            requested_rows = sorted(
+                {row.id: row for row in [*owned_rows, *supported_requested_rows]}.values(),
+                key=lambda row: row.created_at or datetime.min,
+                reverse=True,
+            )[:limit]
             if not requested_rows:
                 return []
 
@@ -571,6 +703,7 @@ class VanguarrService:
                 row.id: self._requested_media_payload(session, row)
                 for row in requested_rows
             }
+            supporter_lookup = self._request_supporter_lookup(session, requested_ids)
 
         history: list[dict[str, Any]] = []
         for row in requested_rows:
@@ -599,11 +732,20 @@ class VanguarrService:
             ]
             latest = timeline[0] if timeline else None
             payload = payload_cache.get(row.id, {})
+            supporters = supporter_lookup.get(int(row.id), [])
+            audience = [row.username, *supporters]
+            shared_with = [value for value in audience if value.lower() != cleaned_username.lower()]
             history.append(
                 {
                     "id": row.id,
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "username": row.username,
+                    "requested_by": row.username,
+                    "supporters": supporters,
+                    "audience": audience,
+                    "shared_with": shared_with,
+                    "is_owner": row.username == cleaned_username,
+                    "is_supporting": cleaned_username in supporters,
                     "media_type": row.media_type,
                     "media_id": row.media_id,
                     "media_title": row.media_title,
@@ -708,6 +850,63 @@ class VanguarrService:
         )
         return normalized
 
+    def update_profile_guidance(
+        self,
+        *,
+        username: str,
+        liked_titles: list[str] | None = None,
+        disliked_titles: list[str] | None = None,
+        liked_genres: list[str] | None = None,
+        disliked_genres: list[str] | None = None,
+        blocked_titles: list[str] | None = None,
+        profile_exclusions: list[str] | None = None,
+        operator_notes: str = "",
+        source: str = "manual",
+    ) -> dict[str, Any]:
+        cleaned_username = str(username or "").strip()
+        if not cleaned_username:
+            raise ValueError("A username is required before saving profile guidance.")
+
+        payload = self.profile_store.read_payload(cleaned_username)
+        payload["explicit_feedback"] = self._normalize_explicit_feedback(
+            {
+                "liked_titles": liked_titles or [],
+                "disliked_titles": disliked_titles or [],
+                "liked_genres": liked_genres or [],
+                "disliked_genres": disliked_genres or [],
+            }
+        )
+        payload["blocked_titles"] = self._normalize_string_list(blocked_titles or [], limit=12)
+        payload["profile_exclusions"] = self._normalize_string_list(profile_exclusions or [], limit=8)
+        payload["operator_notes"] = str(operator_notes or "").strip()
+
+        normalized = self._normalize_saved_profile_payload(cleaned_username, payload)
+        normalized["request_outcome_insights"] = self._normalize_request_outcome_insights(
+            payload.get("request_outcome_insights", {})
+        )
+        normalized["profile_review"] = self._build_profile_review(normalized)
+        self.profile_store.write_payload(cleaned_username, normalized)
+
+        self.record_operation_event(
+            engine="profile_feedback",
+            username=cleaned_username,
+            media_type="profile",
+            media_title=f"Guidance updated for {cleaned_username}",
+            source=source,
+            decision="GUIDANCE",
+            reasoning="Updated editable profile guidance for likes, dislikes, exclusions, and operator notes.",
+            detail_payload={
+                "liked_titles": normalized["explicit_feedback"]["liked_titles"],
+                "disliked_titles": normalized["explicit_feedback"]["disliked_titles"],
+                "liked_genres": normalized["explicit_feedback"]["liked_genres"],
+                "disliked_genres": normalized["explicit_feedback"]["disliked_genres"],
+                "blocked_titles": normalized.get("blocked_titles", []),
+                "profile_exclusions": normalized.get("profile_exclusions", []),
+                "operator_notes": normalized.get("operator_notes", ""),
+            },
+        )
+        return normalized
+
     def record_request_outcome(
         self,
         *,
@@ -722,42 +921,56 @@ class VanguarrService:
         if normalized_outcome not in {"approved", "denied", "ignored", "unavailable", "downloaded", "watched"}:
             raise ValueError("Unsupported request outcome.")
 
+        affected_usernames: list[str] = []
         with self.session_scope() as session:
             requested_row = session.get(RequestedMedia, requested_media_id)
-            if requested_row is None or requested_row.username != cleaned_username:
+            if requested_row is None:
+                raise ValueError("Requested media entry was not found for that user.")
+
+            audience = self._request_audience_usernames(session, requested_row)
+            if cleaned_username.lower() not in {value.lower() for value in audience}:
                 raise ValueError("Requested media entry was not found for that user.")
 
             payload = self._requested_media_payload(session, requested_row)
-            event = RequestOutcomeEvent(
-                requested_media_id=requested_row.id,
-                username=requested_row.username,
-                media_type=requested_row.media_type,
-                media_id=requested_row.media_id,
-                media_title=requested_row.media_title,
-                request_id=requested_row.seer_request_id,
-                outcome=normalized_outcome,
-                source=source,
-                detail=str(detail or "").strip(),
-                payload_json=json.dumps(payload, ensure_ascii=True),
-            )
-            session.add(event)
+            target_usernames = [cleaned_username] if normalized_outcome == "watched" else audience
+            for target_username in target_usernames:
+                session.add(
+                    RequestOutcomeEvent(
+                        requested_media_id=requested_row.id,
+                        username=target_username,
+                        media_type=requested_row.media_type,
+                        media_id=requested_row.media_id,
+                        media_title=requested_row.media_title,
+                        request_id=requested_row.seer_request_id,
+                        outcome=normalized_outcome,
+                        source=source,
+                        detail=str(detail or "").strip(),
+                        payload_json=json.dumps(payload, ensure_ascii=True),
+                    )
+                )
+            affected_usernames = list(dict.fromkeys(target_usernames))
 
-        self.record_operation_event(
-            engine="request_outcome",
-            username=cleaned_username,
-            media_type=requested_row.media_type,
-            media_title=requested_row.media_title,
-            source=source,
-            decision=normalized_outcome.upper(),
-            reasoning=f"Recorded request outcome {normalized_outcome} for {requested_row.media_title}.",
-            detail_payload={
-                "requested_media_id": requested_media_id,
-                "request_id": requested_row.seer_request_id,
-                "outcome": normalized_outcome,
-            },
-        )
-        live_payload = self._with_live_profile_context(cleaned_username, self.profile_store.read_payload(cleaned_username))
-        self.profile_store.write_payload(cleaned_username, live_payload)
+        for target_username in affected_usernames:
+            self.record_operation_event(
+                engine="request_outcome",
+                username=target_username,
+                media_type=requested_row.media_type,
+                media_title=requested_row.media_title,
+                source=source,
+                decision=normalized_outcome.upper(),
+                reasoning=(
+                    f"Recorded request outcome {normalized_outcome} for {requested_row.media_title}."
+                    + (" Shared request audience was updated." if len(affected_usernames) > 1 else "")
+                ),
+                detail_payload={
+                    "requested_media_id": requested_media_id,
+                    "request_id": requested_row.seer_request_id,
+                    "outcome": normalized_outcome,
+                    "affected_usernames": affected_usernames,
+                },
+            )
+            live_payload = self._with_live_profile_context(target_username, self.profile_store.read_payload(target_username))
+            self.profile_store.write_payload(target_username, live_payload)
         return {
             "requested_media_id": requested_media_id,
             "outcome": normalized_outcome,
@@ -877,12 +1090,30 @@ class VanguarrService:
 
         updates: list[dict[str, Any]] = []
         with self.session_scope() as session:
-            requested_rows = list(
+            owned_rows = list(
                 session.scalars(
                     select(RequestedMedia)
                     .where(RequestedMedia.username == cleaned_username)
                     .order_by(desc(RequestedMedia.created_at))
                 )
+            )
+            support_rows = list(
+                session.scalars(
+                    select(RequestedMediaSupporter)
+                    .where(RequestedMediaSupporter.username == cleaned_username)
+                    .order_by(desc(RequestedMediaSupporter.created_at))
+                )
+            )
+            supported_ids = {int(row.requested_media_id) for row in support_rows if int(row.requested_media_id or 0) > 0}
+            supported_requested_rows = list(
+                session.scalars(
+                    select(RequestedMedia)
+                    .where(RequestedMedia.id.in_(supported_ids))
+                    .order_by(desc(RequestedMedia.created_at))
+                )
+            ) if supported_ids else []
+            requested_rows = list(
+                {row.id: row for row in [*owned_rows, *supported_requested_rows]}.values()
             )
             if not requested_rows:
                 return {"count": 0, "titles": []}
@@ -1598,6 +1829,20 @@ class VanguarrService:
                     viewing_history = prepared["viewing_history"]
                     candidates = prepared["shortlisted_candidates"]
                     requested_media_keys = set(prepared["requested_media_keys"])
+                    for shared_match in prepared.get("shared_request_matches", []):
+                        try:
+                            self.add_request_supporter(
+                                requested_media_id=int(shared_match.get("requested_media_id") or 0),
+                                username=str(current_username),
+                                source="decision_engine",
+                                reason=(
+                                    f"Decision Engine matched {current_username} to already-requested title "
+                                    f"{shared_match.get('media_title') or 'Unknown'} owned by "
+                                    f"{shared_match.get('owner_username') or 'another user'}."
+                                ),
+                            )
+                        except ValueError:
+                            continue
                     scored += int(prepared["scored"] or 0)
                     skipped += int(prepared["skipped"] or 0)
                     completed_steps += 1
@@ -2920,6 +3165,75 @@ class VanguarrService:
             return f"Seer sync observed media status {media_status}."
         return "Updated from Seer request status sync."
 
+    def _record_request_outcome_for_audience(
+        self,
+        *,
+        session: Session,
+        requested_row: RequestedMedia | None,
+        usernames: list[str],
+        outcome: str,
+        source: str,
+        detail: str,
+        payload: dict[str, Any],
+        suppress_positive_regression: bool = False,
+    ) -> list[str]:
+        normalized_outcome = self._normalize_request_outcome_label(outcome)
+        positive_rank = {"approved": 1, "downloaded": 2, "watched": 3}
+        recorded: list[str] = []
+
+        requested_media_id = int(requested_row.id) if requested_row is not None else None
+        request_id = requested_row.seer_request_id if requested_row is not None else self._coerce_int(payload.get("request_id"))
+        media_type = requested_row.media_type if requested_row is not None else str(payload.get("media_type") or "unknown").strip()
+        media_id = requested_row.media_id if requested_row is not None else int(self._coerce_int(payload.get("media_id")) or 0)
+        media_title = requested_row.media_title if requested_row is not None else str(payload.get("subject") or "Unknown").strip() or "Unknown"
+
+        for target_username in usernames:
+            lookup_conditions: list[Any] = []
+            if requested_media_id is not None:
+                lookup_conditions.append(RequestOutcomeEvent.requested_media_id == requested_media_id)
+            if request_id is not None:
+                lookup_conditions.append(RequestOutcomeEvent.request_id == request_id)
+            matching_events = list(
+                session.scalars(
+                    select(RequestOutcomeEvent)
+                    .where(
+                        RequestOutcomeEvent.username == target_username,
+                        or_(*lookup_conditions),
+                    )
+                    .order_by(desc(RequestOutcomeEvent.created_at))
+                )
+            ) if lookup_conditions else []
+            if any(
+                self._normalize_request_outcome_label(event.outcome) == normalized_outcome
+                for event in matching_events
+            ):
+                continue
+
+            latest_outcome = (
+                self._normalize_request_outcome_label(matching_events[0].outcome)
+                if matching_events
+                else ""
+            )
+            if suppress_positive_regression and positive_rank.get(latest_outcome, 0) > positive_rank.get(normalized_outcome, 0) > 0:
+                continue
+
+            session.add(
+                RequestOutcomeEvent(
+                    requested_media_id=requested_media_id,
+                    username=target_username,
+                    media_type=media_type,
+                    media_id=media_id,
+                    media_title=media_title,
+                    request_id=request_id,
+                    outcome=normalized_outcome,
+                    source=source,
+                    detail=detail,
+                    payload_json=json.dumps(payload, ensure_ascii=True),
+                )
+            )
+            recorded.append(target_username)
+        return recorded
+
     def _record_request_outcome_from_seer_sync(
         self,
         *,
@@ -2929,79 +3243,52 @@ class VanguarrService:
         trigger_source: str,
     ) -> bool:
         normalized_outcome = self._normalize_request_outcome_label(outcome)
-        positive_rank = {"approved": 1, "downloaded": 2, "watched": 3}
         detail = self._describe_seer_request_sync(payload)
 
+        affected_usernames: list[str] = []
         with self.session_scope() as session:
             requested_row = session.get(RequestedMedia, requested_media_id)
             if requested_row is None:
                 return False
 
-            matching_events = list(
-                session.scalars(
-                    select(RequestOutcomeEvent)
-                    .where(
-                        or_(
-                            RequestOutcomeEvent.requested_media_id == requested_row.id,
-                            RequestOutcomeEvent.request_id == requested_row.seer_request_id,
-                        )
-                    )
-                    .order_by(desc(RequestOutcomeEvent.created_at))
-                )
+            affected_usernames = self._record_request_outcome_for_audience(
+                session=session,
+                requested_row=requested_row,
+                usernames=self._request_audience_usernames(session, requested_row),
+                outcome=normalized_outcome,
+                source="seer_sync",
+                detail=detail,
+                payload=payload,
+                suppress_positive_regression=True,
             )
-
-            if any(
-                self._normalize_request_outcome_label(event.outcome) == normalized_outcome
-                for event in matching_events
-            ):
-                return False
-
-            latest_outcome = (
-                self._normalize_request_outcome_label(matching_events[0].outcome)
-                if matching_events
-                else ""
-            )
-            if positive_rank.get(latest_outcome, 0) > positive_rank.get(normalized_outcome, 0) > 0:
-                return False
-
-            session.add(
-                RequestOutcomeEvent(
-                    requested_media_id=requested_row.id,
-                    username=requested_row.username,
-                    media_type=requested_row.media_type,
-                    media_id=requested_row.media_id,
-                    media_title=requested_row.media_title,
-                    request_id=requested_row.seer_request_id,
-                    outcome=normalized_outcome,
-                    source="seer_sync",
-                    detail=detail,
-                    payload_json=json.dumps(payload, ensure_ascii=True),
-                )
-            )
-            resolved_username = requested_row.username
             resolved_media_type = requested_row.media_type
             resolved_media_id = requested_row.media_id
             resolved_title = requested_row.media_title
             resolved_request_id = requested_row.seer_request_id
 
-        self.record_operation_event(
-            engine="request_outcome",
-            username=resolved_username,
-            media_type=resolved_media_type,
-            media_title=resolved_title,
-            source="seer_sync",
-            decision=normalized_outcome.upper(),
-            reasoning=f"Seer request sync recorded request outcome {normalized_outcome} for {resolved_title}.",
-            detail_payload={
-                "requested_media_id": requested_media_id,
-                "request_id": resolved_request_id,
-                "media_id": resolved_media_id,
-                "outcome": normalized_outcome,
-                "trigger": trigger_source,
-            },
-        )
-        live_payload = self._with_live_profile_context(resolved_username, self.profile_store.read_payload(resolved_username))
-        self.profile_store.write_payload(resolved_username, live_payload)
+        if not affected_usernames:
+            return False
+
+        for resolved_username in affected_usernames:
+            self.record_operation_event(
+                engine="request_outcome",
+                username=resolved_username,
+                media_type=resolved_media_type,
+                media_title=resolved_title,
+                source="seer_sync",
+                decision=normalized_outcome.upper(),
+                reasoning=f"Seer request sync recorded request outcome {normalized_outcome} for {resolved_title}.",
+                detail_payload={
+                    "requested_media_id": requested_media_id,
+                    "request_id": resolved_request_id,
+                    "media_id": resolved_media_id,
+                    "outcome": normalized_outcome,
+                    "trigger": trigger_source,
+                    "affected_usernames": affected_usernames,
+                },
+            )
+            live_payload = self._with_live_profile_context(resolved_username, self.profile_store.read_payload(resolved_username))
+            self.profile_store.write_payload(resolved_username, live_payload)
         return True
 
     async def ingest_seer_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -3148,6 +3435,8 @@ class VanguarrService:
         resolved_media_type = str(media_type or "unknown").strip().lower() or "unknown"
         resolved_media_id = int(media_id or 0)
         resolved_title = str(media_title or "").strip() or "Unknown"
+        affected_usernames: list[str] = [cleaned_username]
+        recorded_usernames: list[str] = []
 
         with self.session_scope() as session:
             requested_row = None
@@ -3178,39 +3467,43 @@ class VanguarrService:
                 resolved_media_type = requested_row.media_type
                 resolved_media_id = requested_row.media_id
                 resolved_title = requested_row.media_title
+                affected_usernames = self._request_audience_usernames(session, requested_row)
 
-            session.add(
-                RequestOutcomeEvent(
-                    requested_media_id=requested_row_id,
-                    username=cleaned_username,
-                    media_type=resolved_media_type,
-                    media_id=resolved_media_id,
-                    media_title=resolved_title,
-                    request_id=request_id,
-                    outcome=outcome,
-                    source=source,
-                    detail=str(payload.get("subject") or payload.get("event") or payload.get("media_status") or "").strip(),
-                    payload_json=json.dumps(payload, ensure_ascii=True),
-                )
+            recorded_usernames = self._record_request_outcome_for_audience(
+                session=session,
+                requested_row=requested_row,
+                usernames=affected_usernames,
+                outcome=outcome,
+                source=source,
+                detail=str(payload.get("subject") or payload.get("event") or payload.get("media_status") or "").strip(),
+                payload=payload,
+                suppress_positive_regression=False,
             )
+            if recorded_usernames:
+                affected_usernames = recorded_usernames
 
-        self.record_operation_event(
-            engine="request_outcome",
-            username=cleaned_username,
-            media_type=resolved_media_type,
-            media_title=resolved_title,
-            source=source,
-            decision=outcome.upper(),
-            reasoning=f"Seer webhook recorded request outcome {outcome} for {resolved_title}.",
-            detail_payload={
-                "request_id": request_id,
-                "media_id": resolved_media_id,
-                "webhook_source": source,
-                "outcome": outcome,
-            },
-        )
-        live_payload = self._with_live_profile_context(cleaned_username, self.profile_store.read_payload(cleaned_username))
-        self.profile_store.write_payload(cleaned_username, live_payload)
+        if not recorded_usernames:
+            return outcome
+
+        for target_username in affected_usernames:
+            self.record_operation_event(
+                engine="request_outcome",
+                username=target_username,
+                media_type=resolved_media_type,
+                media_title=resolved_title,
+                source=source,
+                decision=outcome.upper(),
+                reasoning=f"Seer webhook recorded request outcome {outcome} for {resolved_title}.",
+                detail_payload={
+                    "request_id": request_id,
+                    "media_id": resolved_media_id,
+                    "webhook_source": source,
+                    "outcome": outcome,
+                    "affected_usernames": affected_usernames,
+                },
+            )
+            live_payload = self._with_live_profile_context(target_username, self.profile_store.read_payload(target_username))
+            self.profile_store.write_payload(target_username, live_payload)
         return outcome
 
     def _jellyfin_client(self) -> JellyfinClient:
@@ -6359,11 +6652,28 @@ class VanguarrService:
             profile_summary=profile_payload,
         )
         with self.session_scope() as session:
+            requested_rows = list(
+                session.scalars(
+                    select(RequestedMedia).order_by(
+                        RequestedMedia.seer_request_id.is_(None).asc(),
+                        desc(RequestedMedia.created_at),
+                    )
+                )
+            )
             requested_media_keys = self._requested_media_keys(session)
             requested_title_keys = self._requested_title_keys(session)
             library_context = self._build_library_match_context(session)
+            request_supporters = self._request_supporter_lookup(session, [row.id for row in requested_rows])
+        requested_by_key: dict[tuple[str, int], RequestedMedia] = {}
+        requested_by_title: dict[tuple[str, str], RequestedMedia] = {}
+        for row in requested_rows:
+            requested_by_key.setdefault((row.media_type, row.media_id), row)
+            title_key = (str(row.media_type or "").strip(), str(row.media_title or "").strip().lower())
+            if title_key[0] and title_key[1]:
+                requested_by_title.setdefault(title_key, row)
 
         filtered_candidates: list[dict[str, Any]] = []
+        shared_request_matches: list[dict[str, Any]] = []
         skip_reasons: Counter[str] = Counter()
         scored = 0
         skipped = 0
@@ -6386,6 +6696,25 @@ class VanguarrService:
             if skip_reason is not None:
                 skipped += 1
                 skip_reasons[skip_reason] += 1
+                if skip_reason == "already_requested":
+                    matching_request = requested_by_key.get(self._candidate_key(candidate))
+                    if matching_request is None:
+                        matching_request = requested_by_title.get(
+                            (str(candidate.get("media_type") or "").strip(), self._candidate_title_key(candidate))
+                        )
+                    if matching_request is not None:
+                        supporter_usernames = request_supporters.get(int(matching_request.id), [])
+                        if (
+                            str(matching_request.username or "").strip().lower() != current_username.lower()
+                            and current_username.lower() not in {value.lower() for value in supporter_usernames}
+                        ):
+                            shared_request_matches.append(
+                                {
+                                    "requested_media_id": int(matching_request.id),
+                                    "owner_username": str(matching_request.username or ""),
+                                    "media_title": str(matching_request.media_title or ""),
+                                }
+                            )
                 continue
             filtered_candidates.append(candidate)
 
@@ -6413,6 +6742,7 @@ class VanguarrService:
             "shortlisted_candidates": shortlisted_candidates,
             "requested_media_keys": requested_media_keys,
             "watched_media_keys": watched_context["media_keys"],
+            "shared_request_matches": shared_request_matches,
             "scored": scored,
             "skipped": skipped,
             "skip_reasons": dict(skip_reasons),

@@ -45,6 +45,19 @@ class RequestedMedia(Base):
     seer_request_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class RequestedMediaSupporter(Base):
+    __tablename__ = "requested_media_supporters"
+    __table_args__ = (
+        UniqueConstraint("requested_media_id", "username", name="uq_requested_media_supporter"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    requested_media_id: Mapped[int] = mapped_column(Integer, index=True)
+    username: Mapped[str] = mapped_column(String(255), index=True)
+    source: Mapped[str] = mapped_column(String(64), default="manual", index=True)
+
+
 class RequestOutcomeEvent(Base):
     __tablename__ = "request_outcome_events"
 
