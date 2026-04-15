@@ -289,6 +289,8 @@ def test_manifest_page_shows_profiles_under_settings_group() -> None:
     assert "Suggested For You Preview" in response.text
     assert "/api/manifest/task-status" in response.text
     assert "Load a profile first to run Profile Architect" in response.text
+    assert "Profile Selector" in response.text
+    assert 'id="manifest-user-select"' in response.text
 
 
 def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch) -> None:
@@ -367,6 +369,7 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
     assert "Health, freshness, and drift" in response.text
     assert "What happened after requests" in response.text
     assert "Anime Trap" in response.text
+    assert 'id="manifest-user-select"' in response.text
 
 
 def test_manifest_page_renders_decision_sandbox_preview(monkeypatch) -> None:

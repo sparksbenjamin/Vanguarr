@@ -21,6 +21,53 @@
 
   <section class="surface rounded-[1.45rem] overflow-hidden">
     <div class="border-b border-white/5 px-5 py-4">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p class="panel-kicker">Profile Selector</p>
+          <h2 class="mt-2 panel-title">Choose the profile to review</h2>
+          <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+            Start from a saved manifest in the dropdown, or type a custom username if you want to open a fresh scaffold.
+          </p>
+        </div>
+        <a class="button button-ghost" href="/settings/general">Open Settings</a>
+      </div>
+    </div>
+    <div class="grid gap-4 px-5 py-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+      <form class="grid gap-4 lg:grid-cols-[minmax(250px,1fr)_minmax(240px,0.95fr)_auto]" method="get" action="/manifest">
+        <div>
+          <label class="mb-2 block text-sm font-medium" for="manifest-user-select">Saved profile</label>
+          <select id="manifest-user-select" name="username" class="field-input text-sm">
+            <option value="">{% if profiles %}Choose a profile{% else %}No saved profiles yet{% endif %}</option>
+            {% if selected_user and selected_user not in profiles %}
+            <option value="{{ selected_user }}" selected>{{ selected_user }} (custom)</option>
+            {% endif %}
+            {% for profile in profiles %}
+            <option value="{{ profile }}" {% if profile == selected_user %}selected{% endif %}>{{ profile }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="mb-2 block text-sm font-medium" for="manifest-custom-user">Or custom username</label>
+          <input
+            id="manifest-custom-user"
+            name="custom_username"
+            value="{{ selected_user if selected_user and selected_user not in profiles else '' }}"
+            placeholder="Optional new username"
+            class="field-input text-sm"
+          />
+        </div>
+        <div class="flex items-end">
+          <button class="button button-primary w-full lg:min-w-[180px]" type="submit">Load Profile</button>
+        </div>
+      </form>
+      <div class="rounded-[1.25rem] border border-[rgba(160,182,207,0.08)] bg-white/5 px-4 py-4 text-sm leading-6 text-[var(--text-soft)]">
+        The rest of this page updates around the selected profile, including live task status, request outcome learning, dry-run candidate review, and the raw manifest editor.
+      </div>
+    </div>
+  </section>
+
+  <section class="surface rounded-[1.45rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
       <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p class="panel-kicker">Profile Actions</p>
@@ -424,57 +471,7 @@
   </section>
   {% endif %}
 
-  <div class="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
-    <aside class="space-y-5 xl:sticky xl:top-24 xl:self-start">
-      <section class="surface rounded-[1.45rem] overflow-hidden">
-        <div class="border-b border-white/5 px-5 py-4">
-          <p class="panel-kicker">Profile Loader</p>
-          <h2 class="mt-2 panel-title">Open or create a profile</h2>
-        </div>
-        <div class="px-5 py-5">
-          <form class="space-y-3" method="get" action="/manifest">
-            <div>
-              <label class="mb-2 block text-sm font-medium" for="manifest-user">Username</label>
-              <input id="manifest-user" name="username" value="{{ selected_user }}" placeholder="username" class="field-input text-sm" />
-            </div>
-            <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-              <button class="button button-primary w-full" type="submit">Load Profile</button>
-              <a class="button button-ghost w-full" href="/settings/general">Open Settings</a>
-            </div>
-          </form>
-          <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">
-            Use an existing media-server username to inspect a live profile, or enter a new one to create a fresh scaffold.
-          </p>
-        </div>
-      </section>
-
-      <section class="surface rounded-[1.45rem] overflow-hidden">
-        <div class="border-b border-white/5 px-5 py-4">
-          <p class="panel-kicker">Profile Files</p>
-          <h2 class="mt-2 panel-title">Available manifests</h2>
-        </div>
-        <div class="max-h-[620px] overflow-y-auto px-4 py-4">
-          <div class="space-y-2">
-            {% for profile in profiles %}
-            <a
-              href="/manifest?username={{ profile }}"
-              class="flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm transition {{ 'border-[rgba(84,180,255,0.3)] bg-[var(--accent-soft)] text-white' if profile == selected_user else 'border-[rgba(160,182,207,0.08)] bg-white/5 text-[var(--text-soft)] hover:border-[rgba(84,180,255,0.16)] hover:bg-white/[0.08] hover:text-white' }}"
-            >
-              <span>{{ profile }}</span>
-              {% if profile == selected_user %}
-              <span class="status-pill status-good">Open</span>
-              {% else %}
-              <span class="mono text-xs text-[var(--text-dim)]">profile</span>
-              {% endif %}
-            </a>
-            {% else %}
-            <div class="empty-state">No profile files have been generated yet.</div>
-            {% endfor %}
-          </div>
-        </div>
-      </section>
-    </aside>
-
+  <div class="grid gap-5">
     <section class="surface rounded-[1.45rem] overflow-hidden">
       <div class="border-b border-white/5 px-5 py-4">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">

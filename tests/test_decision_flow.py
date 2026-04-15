@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from types import SimpleNamespace
 import asyncio
@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api.seer import SeerRequestResult
 from app.core.db import Base
-from app.core.models import DecisionLog, LibraryMedia, RequestedMedia, SuggestedMedia, TaskRun
+from app.core.models import DecisionLog, LibraryMedia, RequestOutcomeEvent, RequestedMedia, SuggestedMedia, TaskRun
 from app.core.prompts import build_decision_messages, build_profile_enrichment_messages, build_suggestion_messages
 from app.core.settings import Settings
 from app.core.services import ProfileStore, VanguarrService, normalize_jellyfin_user_id
@@ -2055,6 +2055,99 @@ def test_record_request_outcome_updates_request_history_and_live_profile_context
     assert history[0]["latest_outcome"] == "watched"
     assert live_payload["request_outcome_insights"]["counts"]["watched"] == 1
     assert "Past request outcomes are being tracked" in " ".join(live_payload["profile_review"]["strengths"])
+
+
+def test_sync_watched_request_outcomes_from_history_infers_only_new_post_request_watches(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+    service.profile_store.write_payload(
+        "alice",
+        {
+            "username": "alice",
+            "profile_state": "ready",
+            "history_count": 12,
+            "unique_titles": 8,
+            "primary_genres": ["Sci-Fi"],
+            "recent_momentum": [{"title": "Arrival", "play_count": 1}],
+            "summary_block": "summary",
+        },
+    )
+
+    request_time = datetime.utcnow() - timedelta(days=2)
+    old_request_time = datetime.utcnow() - timedelta(hours=2)
+    with session_factory() as session:
+        session.add(
+            RequestedMedia(
+                id=1,
+                created_at=request_time,
+                username="alice",
+                media_type="movie",
+                media_id=329865,
+                media_title="Arrival",
+                source="recommended:Interstellar",
+                seer_request_id=90,
+            )
+        )
+        session.add(
+            RequestedMedia(
+                id=2,
+                created_at=old_request_time,
+                username="alice",
+                media_type="movie",
+                media_id=157336,
+                media_title="Interstellar",
+                source="recommended:Arrival",
+                seer_request_id=91,
+            )
+        )
+        session.commit()
+
+    history = [
+        {
+            "Name": "Arrival",
+            "Type": "Movie",
+            "Genres": ["Sci-Fi", "Drama"],
+            "ProviderIds": {"Tmdb": "329865"},
+            "UserData": {"LastPlayedDate": (datetime.utcnow() - timedelta(days=1)).replace(microsecond=0).isoformat() + "Z"},
+        },
+        {
+            "Name": "Interstellar",
+            "Type": "Movie",
+            "Genres": ["Sci-Fi"],
+            "ProviderIds": {"Tmdb": "157336"},
+            "UserData": {"LastPlayedDate": (datetime.utcnow() - timedelta(days=10)).replace(microsecond=0).isoformat() + "Z"},
+        },
+    ]
+
+    first_sync = service.sync_watched_request_outcomes_from_history(username="alice", history=history, source="profile_architect")
+    second_sync = service.sync_watched_request_outcomes_from_history(username="alice", history=history, source="profile_architect")
+
+    with session_factory() as session:
+        outcomes = list(session.scalars(select(RequestOutcomeEvent).order_by(RequestOutcomeEvent.id.asc())))
+
+    assert first_sync["count"] == 1
+    assert first_sync["titles"] == ["Arrival"]
+    assert second_sync["count"] == 0
+    assert len(outcomes) == 1
+    assert outcomes[0].media_title == "Arrival"
+    assert outcomes[0].outcome == "watched"
+    assert outcomes[0].source == "profile_architect"
 
 
 def test_preview_decision_candidates_returns_review_cards(tmp_path) -> None:

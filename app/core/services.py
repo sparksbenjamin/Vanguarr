@@ -8,7 +8,7 @@ import uuid
 from collections import Counter
 from collections.abc import Callable
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
@@ -840,6 +840,154 @@ class VanguarrService:
             }
         )
 
+    def sync_watched_request_outcomes_from_history(
+        self,
+        *,
+        username: str,
+        history: list[dict[str, Any]],
+        source: str = "profile_architect",
+    ) -> dict[str, Any]:
+        cleaned_username = str(username or "").strip()
+        if not cleaned_username or not history:
+            return {"count": 0, "titles": []}
+
+        watch_timestamps = self._build_history_watch_timestamps(history)
+        if not watch_timestamps["media_keys"] and not watch_timestamps["title_keys"]:
+            return {"count": 0, "titles": []}
+
+        updates: list[dict[str, Any]] = []
+        with self.session_scope() as session:
+            requested_rows = list(
+                session.scalars(
+                    select(RequestedMedia)
+                    .where(RequestedMedia.username == cleaned_username)
+                    .order_by(desc(RequestedMedia.created_at))
+                )
+            )
+            if not requested_rows:
+                return {"count": 0, "titles": []}
+
+            watched_events = list(
+                session.scalars(
+                    select(RequestOutcomeEvent).where(
+                        RequestOutcomeEvent.username == cleaned_username,
+                        RequestOutcomeEvent.outcome == "watched",
+                    )
+                )
+            )
+            watched_requested_ids = {
+                int(event.requested_media_id)
+                for event in watched_events
+                if event.requested_media_id is not None
+            }
+            watched_request_ids = {
+                int(event.request_id)
+                for event in watched_events
+                if event.request_id is not None
+            }
+            watched_media_keys = {
+                (str(event.media_type or ""), int(event.media_id or 0))
+                for event in watched_events
+                if int(event.media_id or 0) > 0
+            }
+            watched_title_keys = {
+                (str(event.media_type or ""), str(event.media_title or "").strip().lower())
+                for event in watched_events
+                if str(event.media_title or "").strip()
+            }
+
+            for row in requested_rows:
+                if row.id in watched_requested_ids:
+                    continue
+                if row.seer_request_id is not None and int(row.seer_request_id) in watched_request_ids:
+                    continue
+                row_media_key = (str(row.media_type or ""), int(row.media_id or 0))
+                row_title_key = (str(row.media_type or ""), str(row.media_title or "").strip().lower())
+                if row_media_key in watched_media_keys or row_title_key in watched_title_keys:
+                    continue
+
+                playback_ts = max(
+                    float(watch_timestamps["media_keys"].get(row_media_key, 0.0)),
+                    float(watch_timestamps["title_keys"].get(row_title_key, 0.0)),
+                )
+                if playback_ts <= 0:
+                    continue
+
+                request_ts = (
+                    row.created_at.replace(tzinfo=timezone.utc).timestamp()
+                    if row.created_at
+                    else 0.0
+                )
+                if request_ts and playback_ts < request_ts:
+                    continue
+
+                payload = self._requested_media_payload(session, row)
+                detail = "Inferred watched from playback history during Profile Architect."
+                if playback_ts > 0:
+                    detail = (
+                        "Inferred watched from playback history during Profile Architect after playback at "
+                        f"{datetime.utcfromtimestamp(playback_ts).replace(microsecond=0).isoformat()}Z."
+                    )
+                session.add(
+                    RequestOutcomeEvent(
+                        requested_media_id=row.id,
+                        username=row.username,
+                        media_type=row.media_type,
+                        media_id=row.media_id,
+                        media_title=row.media_title,
+                        request_id=row.seer_request_id,
+                        outcome="watched",
+                        source=source,
+                        detail=detail,
+                        payload_json=json.dumps(payload, ensure_ascii=True),
+                    )
+                )
+                updates.append(
+                    {
+                        "requested_media_id": row.id,
+                        "request_id": row.seer_request_id,
+                        "media_type": row.media_type,
+                        "media_id": row.media_id,
+                        "media_title": row.media_title,
+                        "playback_ts": playback_ts,
+                    }
+                )
+
+        for update in updates:
+            detail_payload = {
+                "requested_media_id": update["requested_media_id"],
+                "request_id": update["request_id"],
+                "media_id": update["media_id"],
+                "source": source,
+                "playback_at": (
+                    datetime.utcfromtimestamp(float(update["playback_ts"])).replace(microsecond=0).isoformat() + "Z"
+                    if float(update["playback_ts"] or 0.0) > 0
+                    else None
+                ),
+            }
+            self.record_operation_event(
+                engine="request_outcome",
+                username=cleaned_username,
+                media_type=str(update["media_type"] or "unknown"),
+                media_title=str(update["media_title"] or "Unknown"),
+                source=source,
+                decision="WATCHED",
+                reasoning=(
+                    f"Inferred watched from playback history during Profile Architect for "
+                    f"{update['media_title']}."
+                ),
+                detail_payload=detail_payload,
+            )
+
+        if updates:
+            live_payload = self._with_live_profile_context(cleaned_username, self.profile_store.read_payload(cleaned_username))
+            self.profile_store.write_payload(cleaned_username, live_payload)
+
+        return {
+            "count": len(updates),
+            "titles": [str(item["media_title"] or "") for item in updates if str(item["media_title"] or "").strip()],
+        }
+
     def get_suggestions(
         self,
         *,
@@ -1042,6 +1190,7 @@ class VanguarrService:
         updated_users: list[str] = []
         processed_usernames: list[str] = []
         suggestion_refreshes = 0
+        watched_request_updates = 0
         suggestion_targets: list[dict[str, Any]] = []
         errors: list[str] = []
         rebuilt_payloads: dict[str, dict[str, Any]] = {}
@@ -1067,6 +1216,7 @@ class VanguarrService:
                     "processed_usernames": list(processed_usernames),
                     "updated_users": list(updated_users),
                     "suggestion_refreshes": suggestion_refreshes,
+                    "watched_request_updates": watched_request_updates,
                     "profile_steps_per_user": profile_steps_per_user,
                     "suggestion_steps_per_user": suggestion_steps_per_user,
                     "errors": list(errors),
@@ -1129,6 +1279,12 @@ class VanguarrService:
                         user["Id"],
                         self._playback_history_limit(),
                     )
+                    watch_sync = self.sync_watched_request_outcomes_from_history(
+                        username=current_username,
+                        history=history,
+                        source=trigger_source,
+                    )
+                    watched_request_updates += int(watch_sync.get("count") or 0)
                     completed_steps = user_base_step + 1
                     stored_payload = self.profile_store.read_payload(current_username)
                     profile_payload, _recommendation_seeds = await self._compose_profile_payload(
@@ -1235,13 +1391,15 @@ class VanguarrService:
                 status = "partial"
                 summary = (
                     f"Updated {len(updated_users)} profile(s), refreshed {suggestion_refreshes} "
-                    f"suggestion snapshot(s), with {len(errors)} error(s)."
+                    f"suggestion snapshot(s), inferred {watched_request_updates} watched request(s), "
+                    f"with {len(errors)} error(s)."
                 )
             else:
                 status = "success"
                 summary = (
-                    f"Updated {len(updated_users)} profile(s) and refreshed "
-                    f"{suggestion_refreshes} suggestion snapshot(s)."
+                    f"Updated {len(updated_users)} profile(s), refreshed "
+                    f"{suggestion_refreshes} suggestion snapshot(s), and inferred "
+                    f"{watched_request_updates} watched request(s)."
                 )
         except Exception as exc:
             status = "error"
@@ -1265,6 +1423,7 @@ class VanguarrService:
                     "processed_usernames": list(processed_usernames),
                     "updated_users": list(updated_users),
                     "suggestion_refreshes": suggestion_refreshes,
+                    "watched_request_updates": watched_request_updates,
                     "profile_steps_per_user": profile_steps_per_user,
                     "suggestion_steps_per_user": suggestion_steps_per_user,
                     "errors": list(errors),
@@ -1292,6 +1451,7 @@ class VanguarrService:
                 "updated_users": list(updated_users),
                 "processed_usernames": list(processed_usernames),
                 "suggestion_refreshes": suggestion_refreshes,
+                "watched_request_updates": watched_request_updates,
                 "status": status,
             },
         )
@@ -1304,6 +1464,7 @@ class VanguarrService:
             "summary": summary,
             "updated_users": updated_users,
             "suggestion_refreshes": suggestion_refreshes,
+            "watched_request_updates": watched_request_updates,
             "errors": errors,
         }
 
@@ -3497,6 +3658,37 @@ class VanguarrService:
                 continue
             watched.add((media_type, tmdb_id))
         return watched
+
+    @classmethod
+    def _build_history_watch_timestamps(
+        cls,
+        history: list[dict[str, Any]],
+    ) -> dict[str, dict[tuple[str, Any], float]]:
+        media_keys: dict[tuple[str, int], float] = {}
+        title_keys: dict[tuple[str, str], float] = {}
+
+        for item in history:
+            media_type = cls._map_history_media_type(item.get("Type"))
+            if media_type not in {"movie", "tv"}:
+                continue
+
+            last_played_ts = cls._to_timestamp(item.get("UserData", {}).get("LastPlayedDate"))
+            if last_played_ts <= 0:
+                last_played_ts = cls._to_timestamp(item.get("DatePlayed"))
+
+            tmdb_id = cls._extract_tmdb_id(item)
+            if tmdb_id is not None:
+                media_key = (media_type, tmdb_id)
+                media_keys[media_key] = max(media_keys.get(media_key, 0.0), last_played_ts)
+
+            title_key = cls._history_title_key(item)
+            if title_key is not None:
+                title_keys[title_key] = max(title_keys.get(title_key, 0.0), last_played_ts)
+
+        return {
+            "media_keys": media_keys,
+            "title_keys": title_keys,
+        }
 
     @classmethod
     def _rank_candidate_pool(

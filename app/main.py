@@ -680,11 +680,11 @@ async def library_sync_status(request: Request) -> JSONResponse:
 
 
 @app.get("/manifest", response_class=HTMLResponse)
-async def manifest(request: Request, username: str = "", review: str = "") -> HTMLResponse:
+async def manifest(request: Request, username: str = "", custom_username: str = "", review: str = "") -> HTMLResponse:
     service: VanguarrService = request.app.state.vanguarr
     settings = current_settings(request.app, force=True)
     profiles = service.list_profiles()
-    selected_user = username or (profiles[0] if profiles else "")
+    selected_user = custom_username.strip() or username or (profiles[0] if profiles else "")
     profile_content = service.read_profile(selected_user) if selected_user else ""
     profile_summary = service.read_profile_summary(selected_user) if selected_user else ""
     profile_payload_live = service.get_profile_payload_with_live_context(selected_user) if selected_user else {}
