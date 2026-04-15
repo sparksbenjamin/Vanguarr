@@ -30,13 +30,24 @@ Instead of a black box, Vanguarr is **explainable AI**. It ranks, scores, and ex
 
 Vanguarr sits between the media server your users watch and the request stack that grows your library.
 
-* It watches what people actually play.
-* It turns that behavior into durable user taste profiles.
-* It ranks both current-library suggestions and requestable content.
-* It explains why each recommendation earned its spot.
-* It can surface those picks natively inside Jellyfin.
+* It builds layered user profiles from playback history, Jellyfin favorites, Seer neighborhoods, similar local users, TMDb metadata, and controlled LLM synthesis.
+* It ranks both requestable media and in-library Jellyfin suggestions with deterministic scoring, AI blending, and hard duplicate guardrails.
+* It blocks titles that are already in the library, already requested, already watched, or already favorited for that profile.
+* It learns from real outcomes by syncing Seer status changes, inferring watched requests from playback history, and feeding approvals, downloads, and watches back into the profile.
+* It supports shared requests across multiple local users, so one Seer request can still belong to more than one Vanguarr profile.
+* It explains the whole process in the dashboard, manifest editor, dry-run review, and War Room.
 
 In plain English: Vanguarr watches, learns, scouts, scores, and reports back before anything gets added to the stack.
+
+## 🧩 Feature Highlights
+
+* **Layered Profile Builder:** `Profile Architect` now builds profiles from personal playback first, then Jellyfin favorites, Seer recommendation neighborhoods, local similar-user lift, TMDb enrichment, and finally LLM adjacent-lane synthesis.
+* **Profile Review And Guidance:** Every profile has a health review, freshness warnings, rebuild diff, editable human guidance, hard blocks, and operator notes.
+* **Decision Sandbox:** `Decision Dry Run` lets you review candidates, score breakdowns, and reasoning before making live requests.
+* **Outcome Learning:** Seer webhook sync, scheduled Seer request-status sync, manual outcome controls, and watched-from-history inference all feed back into future ranking.
+* **Shared Request Awareness:** Vanguarr can attach multiple local users to the same Seer request and keep shared request history visible per profile.
+* **Jellyfin-Native Suggestions:** `Suggested For You` writes personalized `Suggested Movies` and `Suggested Shows` back into Jellyfin through the companion plugin.
+* **War Room Logging:** The War Room is meant to show the full operational trail, including rebuilds, syncs, requests, skips, dry runs, and request outcomes.
 
 ## 🚀 Quick Start
 
@@ -243,6 +254,109 @@ Use the front page for the pitch. Use the docs below for the technical detail.
 * [Release Notes](CHANGELOG.md)
 * [Configuration Reference](docs/configuration.md)
 * [How Vanguarr Works](docs/how-it-works.md)
+
+<details>
+<summary><strong>All settings at a glance</strong></summary>
+
+Vanguarr has two kinds of configuration:
+
+* **Runtime settings:** Managed from `/settings` and stored by the app.
+* **Bootstrap-only settings:** Best set through `.env`, container environment variables, or deployment manifests before startup.
+
+### General
+
+* `App Name`: Display name shown throughout the UI.
+* `Timezone`: Used for the scheduler and time-based displays. `TZ` is accepted as an alias.
+* `Log Level`: Application logging threshold.
+* `Health Cache Seconds`: How long health checks are cached before refreshing.
+
+### Integrations
+
+* `Media Server Provider`: Choose whether Vanguarr reads history from Jellyfin or Plex.
+* `Jellyfin Base URL`: Base Jellyfin URL when Jellyfin is active.
+* `Jellyfin API Key`: API key used for Jellyfin access.
+* `Plex Base URL`: Base Plex Media Server URL when Plex is active.
+* `Plex API Token`: Plex token used for history and metadata requests.
+* `Plex Client Identifier`: Stable identifier sent with Plex API requests.
+* `Seer Base URL`: Base URL for Jellyseerr, Overseerr, or another Seer-compatible API.
+* `Seer API Key`: API key used for discovery and request creation.
+* `Seer Request User ID`: Optional request owner override when you want Seer requests attributed to a specific Seer user.
+* `Seer Webhook Token`: Bearer token expected on Seer webhook deliveries.
+* `Suggestions API Key`: Bearer token used by the Jellyfin Vanguarr plugin when it fetches per-user suggestions.
+
+### TMDb
+
+* `TMDb Base URL`: TMDb API base URL.
+* `TMDb Read Token`: Preferred TMDb authentication method.
+* `TMDb API Key`: Alternative TMDb authentication method.
+* `TMDb Language`: Language used for TMDb metadata lookups.
+* `TMDb Watch Region`: Region used for watch-provider and certification lookups.
+
+### Scheduling
+
+* `Scheduler Enabled`: Turns the built-in scheduler on or off immediately.
+* `Profile Cron`: Cron expression for `Profile Architect`.
+* `Decision Cron`: Cron expression for `Decision Engine`.
+* `Library Sync Enabled`: Keeps the indexed Jellyfin library catalog refreshed for `Suggested For You`.
+* `Library Sync Cron`: Cron expression for the Jellyfin library index refresh.
+* `Request Status Sync Enabled`: Polls Seer for status changes on tracked requests so profiles reflect approvals, denials, and availability.
+* `Request Status Sync Cron`: Cron expression for the Seer request-status sync.
+
+### Tuning
+
+* `Global Exclusions`: Comma-separated guardrails applied to every decision.
+* `Request Threshold`: Minimum final blended score required before Vanguarr creates a request.
+* `AI Decision Weight`: How much the final request score leans on the LLM versus the code-driven score.
+* `Use Full Playback History`: Ignore the history limit and fetch the full available playback history for rebuilds, decisions, and suggestion refreshes.
+* `Profile History Limit`: Playback event limit when full-history mode is off.
+* `Recent Momentum Weight`: How strongly recent viewing boosts profile genre ranking relative to long-term history.
+* `Profile Architect Max Output Tokens`: Maximum tokens used for profile architect prompts.
+* `Profile Top Titles Limit`: Maximum top titles retained from history.
+* `Profile Recent Momentum Limit`: How many recent momentum items are retained.
+* `Profile LLM Enrichment Enabled`: Toggle profile-side adjacent-lane enrichment.
+* `Candidate Limit`: Maximum blended recommendation pool size.
+* `Genre Candidate Limit`: Maximum candidates pulled from Seer genre discovery across primary, recent, and adjacent genres.
+* `Trending Candidate Limit`: Maximum trending titles mixed into the request pool.
+* `Decision Shortlist Limit`: Diversified shortlist size before final voting.
+* `Recommendation Seed Limit`: Maximum watch-history seeds per user.
+* `TMDb Seed Enrichment Limit`: How many watched seeds receive TMDb enrichment.
+* `TMDb Candidate Enrichment Limit`: How many ranked candidates receive TMDb enrichment.
+* `Decision Page Size`: Maximum decision rows shown in the War Room.
+* `Suggested For You Enabled`: Toggle per-user suggestion generation for Jellyfin.
+* `Suggested For You Limit`: How many ranked available titles are stored per user for the Jellyfin plugin.
+* `Suggestion AI Threshold`: Minimum shelf score required for `Suggested For You`.
+* `Suggestion AI Candidate Limit`: Maximum number of available titles per user that can receive the AI suggestion vote.
+* `Suggestion Recent Cooldown Days`: Hide titles from `Suggested For You` for this many days after the user watches them.
+* `Suggestion Repeat Watch Cutoff`: Treat titles watched at least this many times as rewatch territory and exclude them from suggestions.
+
+### LLM
+
+* `LLM Temperature`: Fallback temperature used across LLM providers.
+* `LLM Timeout Seconds`: Global timeout fallback when a provider timeout is blank.
+* `LLM Providers`: Managed from `/settings/llm-providers`. Each provider row can define the provider type, model, priority, base URL, API key, timeout, max output tokens, and whether it is allowed for decision voting, profile enrichment, or both.
+
+### Bootstrap-only settings
+
+These settings are not managed from the standard runtime forms and are best provided before startup:
+
+* `APP_ENV`: Runtime environment label.
+* `APP_HOST`: Host/interface the web server binds to.
+* `APP_PORT`: HTTP port the app listens on.
+* `DATA_DIR`: Root persistent data directory.
+* `DATABASE_URL`: SQLAlchemy database URL.
+* `PROFILES_DIR`: Directory where JSON manifests and summary files are written.
+* `LOGS_DIR`: Directory where application logs are stored.
+* `LOG_FILE`: Path to the primary application log file.
+* `LLM_PROVIDER`: Legacy single-provider default if you are not using multi-provider config.
+* `LLM_MODEL`: Legacy default model for the single-provider path.
+* `OLLAMA_API_BASE`: Legacy Ollama base URL.
+* `OPENAI_API_KEY` and `OPENAI_API_BASE`: Legacy OpenAI credentials and optional base URL.
+* `ANTHROPIC_API_KEY` and `ANTHROPIC_API_BASE`: Legacy Anthropic credentials and optional base URL.
+* `LLM_PROVIDERS`: Serialized multi-provider bootstrap config if you prefer to seed providers outside the UI.
+
+Most operators can leave bootstrap-only settings alone after first deploy and manage the rest from `/settings`.
+
+</details>
 
 <details>
 <summary><strong>Need the technical setup path?</strong></summary>
