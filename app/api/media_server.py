@@ -18,6 +18,8 @@ class MediaServerClientProtocol(Protocol):
 
     async def get_playback_history(self, user_id: str, limit: int | None = None) -> list[dict[str, Any]]: ...
 
+    async def get_favorite_items(self, user_id: str, limit: int | None = None) -> list[dict[str, Any]]: ...
+
 
 class MediaServerClient:
     def __init__(self, settings: Settings) -> None:
@@ -52,3 +54,6 @@ class MediaServerClient:
 
     async def get_playback_history(self, user_id: str, limit: int | None = None) -> list[dict[str, Any]]:
         return await self._active_client().get_playback_history(user_id, limit)
+
+    async def get_favorite_items(self, user_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        return await self._active_client().get_favorite_items(user_id, limit)

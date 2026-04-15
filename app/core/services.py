@@ -141,6 +141,9 @@ class ProfileStore:
             "recent_genres": [],
             "recent_momentum": [],
             "repeat_titles": [],
+            "favorite_titles": [],
+            "favorite_genres": [],
+            "favorite_signal_count": 0,
             "format_preference": {"preferred": "balanced", "movie_plays": 0, "tv_plays": 0},
             "release_year_preference": {"bias": "balanced", "average_year": None},
             "average_top_rating": None,
@@ -205,7 +208,7 @@ class ProfileStore:
     def is_structured_payload(payload: dict[str, Any]) -> bool:
         if str(payload.get("profile_state") or "") in {"default", "legacy_text"}:
             return False
-        return int(payload.get("history_count") or 0) > 0
+        return int(payload.get("history_count") or 0) > 0 or bool(payload.get("favorite_titles"))
 
     @staticmethod
     def default_block(username: str) -> str:
@@ -840,6 +843,22 @@ class VanguarrService:
             }
         )
 
+    async def _load_user_favorite_items(
+        self,
+        user_id: str,
+        *,
+        username: str,
+    ) -> list[dict[str, Any]]:
+        get_favorite_items = getattr(self.media_server, "get_favorite_items", None)
+        if not callable(get_favorite_items):
+            return []
+        try:
+            favorite_items = await get_favorite_items(user_id)
+        except Exception as exc:
+            logger.warning("Favorite-item enrichment skipped user=%s reason=%s", username, exc)
+            return []
+        return favorite_items if isinstance(favorite_items, list) else []
+
     def sync_watched_request_outcomes_from_history(
         self,
         *,
@@ -1279,6 +1298,7 @@ class VanguarrService:
                         user["Id"],
                         self._playback_history_limit(),
                     )
+                    favorite_items = await self._load_user_favorite_items(str(user["Id"] or ""), username=current_username)
                     watch_sync = self.sync_watched_request_outcomes_from_history(
                         username=current_username,
                         history=history,
@@ -1289,8 +1309,9 @@ class VanguarrService:
                     stored_payload = self.profile_store.read_payload(current_username)
                     profile_payload, _recommendation_seeds = await self._compose_profile_payload(
                         current_username,
-                        existing_payload=stored_payload,
                         history=history,
+                        favorite_items=favorite_items,
+                        existing_payload=stored_payload,
                         peer_payload_overrides=rebuilt_payloads,
                         progress_callback=lambda label, step, phase: emit_task_progress(
                             label,
@@ -1312,7 +1333,7 @@ class VanguarrService:
                         decision="REBUILD",
                         reasoning=(
                             "Profile Architect rebuilt this manifest from the latest playback history "
-                            "plus Seer neighborhoods, local similar-user lift, TMDb metadata, "
+                            "plus Jellyfin favorites, Seer neighborhoods, local similar-user lift, TMDb metadata, "
                             "and LLM adjacent-lane synthesis."
                         ),
                         detail_payload={
@@ -2690,10 +2711,12 @@ class VanguarrService:
             jellyfin_user_id,
             self._playback_history_limit(),
         )
+        favorite_items = await self._load_user_favorite_items(jellyfin_user_id, username=current_username)
         stored_profile = self.profile_store.read_payload(current_username)
         profile_payload, recommendation_seeds, should_persist = await self._prepare_runtime_profile_payload(
             current_username,
             history,
+            favorite_items=favorite_items,
             existing_payload=stored_profile,
         )
         if should_persist:
@@ -3171,6 +3194,7 @@ class VanguarrService:
         cls,
         history: list[dict[str, Any]],
         *,
+        favorite_items: list[dict[str, Any]] | None = None,
         top_limit: int = 8,
         recent_limit: int = 5,
         recent_window: int = 12,
@@ -3253,6 +3277,7 @@ class VanguarrService:
         genre_title_counts: Counter[str] = Counter()
         recent_genre_counts: Counter[str] = Counter()
         recent_genre_title_counts: Counter[str] = Counter()
+        favorite_genre_counts: Counter[str] = Counter()
 
         for entry in grouped.values():
             entry_genres = cls._normalize_genres(entry.get("genres", []), limit=6)
@@ -3280,9 +3305,67 @@ class VanguarrService:
                 recent_genre_counts[genre] += 1
                 recent_genre_title_counts[genre] += 1
 
+        favorite_grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in favorite_items or []:
+            media_type = cls._map_history_media_type(item.get("Type")) or "other"
+            if media_type not in {"movie", "tv"}:
+                continue
+
+            title = cls._seed_title(item, media_type)
+            genres = cls._normalize_genres(item.get("Genres", []), limit=6)
+            key = (title, media_type)
+            favorite_entry = favorite_grouped.setdefault(
+                key,
+                {
+                    "title": title,
+                    "media_type": media_type,
+                    "play_count": 0,
+                    "genres": [],
+                    "community_rating": item.get("CommunityRating"),
+                    "last_played": None,
+                    "_last_played_score": 0.0,
+                    "release_year": None,
+                },
+            )
+            favorite_entry["genres"] = cls._merge_unique_strings(favorite_entry["genres"], genres[:4])
+
+            if favorite_entry.get("community_rating") is None and item.get("CommunityRating") is not None:
+                favorite_entry["community_rating"] = item.get("CommunityRating")
+
+            last_played = item.get("UserData", {}).get("LastPlayedDate")
+            last_played_score = cls._to_timestamp(last_played)
+            if last_played_score >= favorite_entry["_last_played_score"]:
+                favorite_entry["last_played"] = last_played
+                favorite_entry["_last_played_score"] = last_played_score
+
+            release_year = cls._extract_history_release_year(item)
+            if release_year is not None and favorite_entry.get("release_year") is None:
+                favorite_entry["release_year"] = release_year
+
+        for key, entry in favorite_grouped.items():
+            entry_genres = cls._normalize_genres(entry.get("genres", []), limit=6)
+            if not entry_genres:
+                continue
+
+            watched_already = key in grouped
+            signal_weight = 0.45 if watched_already else 0.85
+            for genre in entry_genres:
+                genre_counts[genre] += signal_weight
+                favorite_genre_counts[genre] += 1
+                if not watched_already:
+                    genre_title_counts[genre] += 1
+
+            for source_genre in entry_genres:
+                for target_genre in entry_genres:
+                    if source_genre != target_genre:
+                        genre_pairs[(source_genre, target_genre)] += signal_weight
+
+        favorite_titles = cls._sort_profile_entries(list(favorite_grouped.values()))
+
         normalized_top_titles = [cls._clean_profile_entry(item) for item in top_titles[:top_limit]]
         normalized_recent_momentum = [cls._clean_profile_entry(item) for item in recent_momentum[:recent_limit]]
         repeat_titles = [cls._clean_profile_entry(item) for item in top_titles if int(item.get("play_count") or 0) > 1][:5]
+        normalized_favorite_titles = [cls._clean_profile_entry(item) for item in favorite_titles[:6]]
         ranked_genres = cls._rank_genres(
             genre_counts,
             recent_genre_counts,
@@ -3317,6 +3400,9 @@ class VanguarrService:
             "recent_genres": recent_genres,
             "recent_momentum": normalized_recent_momentum,
             "repeat_titles": repeat_titles,
+            "favorite_titles": normalized_favorite_titles,
+            "favorite_genres": [genre for genre, _count in favorite_genre_counts.most_common(6)],
+            "favorite_signal_count": len(favorite_grouped),
             "format_preference": cls._determine_format_preference(media_type_counts),
             "release_year_preference": cls._build_release_year_preference(release_years),
             "average_top_rating": cls._average_rating(normalized_top_titles),
@@ -3405,10 +3491,38 @@ class VanguarrService:
         cls,
         history: list[dict[str, Any]],
         *,
+        favorite_items: list[dict[str, Any]] | None = None,
         profile_summary: dict[str, Any],
         limit: int,
     ) -> list[dict[str, Any]]:
         seeds = cls._collect_recommendation_seed_candidates(history)
+        favorite_lookup: set[tuple[str, int]] = set()
+        if favorite_items:
+            merged_by_key: dict[tuple[str, int], dict[str, Any]] = {
+                (str(seed.get("media_type") or ""), int(seed.get("media_id") or 0)): dict(seed)
+                for seed in seeds
+            }
+            favorite_entries = cls._collect_recommendation_seed_candidates(favorite_items)
+            for favorite_seed in favorite_entries:
+                key = (str(favorite_seed.get("media_type") or ""), int(favorite_seed.get("media_id") or 0))
+                favorite_lookup.add(key)
+                existing = merged_by_key.get(key)
+                if existing is None:
+                    enriched = dict(favorite_seed)
+                    enriched["favorite_seed"] = True
+                    merged_by_key[key] = enriched
+                    continue
+
+                existing["favorite_seed"] = True
+                existing["genres"] = cls._merge_unique_strings(existing.get("genres", []), favorite_seed.get("genres", []))
+                if existing.get("overview") in {"", None} and favorite_seed.get("overview"):
+                    existing["overview"] = favorite_seed.get("overview")
+                if existing.get("community_rating") is None and favorite_seed.get("community_rating") is not None:
+                    existing["community_rating"] = favorite_seed.get("community_rating")
+                if float(favorite_seed.get("_last_played_score") or 0.0) > float(existing.get("_last_played_score") or 0.0):
+                    existing["last_played"] = favorite_seed.get("last_played")
+                    existing["_last_played_score"] = favorite_seed.get("_last_played_score")
+            seeds = list(merged_by_key.values())
         if not seeds or limit <= 0:
             return []
 
@@ -3441,6 +3555,7 @@ class VanguarrService:
                 seed,
                 top_lookup=top_lookup,
                 recent_lookup=recent_lookup,
+                favorite_lookup=favorite_lookup,
                 primary_genres=primary_genres,
                 recent_genres=recent_genres,
             )
@@ -3535,6 +3650,7 @@ class VanguarrService:
         *,
         top_lookup: set[tuple[str, int]],
         recent_lookup: set[tuple[str, int]],
+        favorite_lookup: set[tuple[str, int]],
         primary_genres: list[str],
         recent_genres: list[str],
     ) -> list[str]:
@@ -3548,6 +3664,8 @@ class VanguarrService:
             lanes.append("repeat_watch_seed")
         if key in recent_lookup:
             lanes.append("recent_seed")
+        if key in favorite_lookup or bool(seed.get("favorite_seed")):
+            lanes.append("favorite_seed")
         if cls._intersect_strings(seed_genres, primary_genres) or cls._intersect_strings(seed_genres, recent_genres):
             lanes.append("genre_anchor_seed")
 
@@ -3584,12 +3702,14 @@ class VanguarrService:
             "history_count": summary.get("history_count", len(history)),
             "top_content": recommendation_seeds,
             "top_titles": summary.get("top_titles", [])[:5],
+            "favorite_titles": summary.get("favorite_titles", [])[:5],
             "top_genres": summary.get("top_genres", []),
             "ranked_genres": summary.get("ranked_genres", [])[:5],
             "primary_genres": summary.get("primary_genres", []),
             "secondary_genres": summary.get("secondary_genres", []),
             "repeat_titles": summary.get("repeat_titles", [])[:3],
             "recent_momentum": summary.get("recent_momentum", [])[:5],
+            "favorite_genres": summary.get("favorite_genres", [])[:5],
             "format_preference": summary.get("format_preference", {}),
             "release_year_preference": summary.get("release_year_preference", {}),
             "discovery_lanes": summary.get("discovery_lanes", []),
@@ -4437,10 +4557,13 @@ class VanguarrService:
         payload["top_titles"] = cls._normalize_profile_entries(payload.get("top_titles", []), limit=8)
         payload["repeat_titles"] = cls._normalize_profile_entries(payload.get("repeat_titles", []), limit=5)
         payload["recent_momentum"] = cls._normalize_profile_entries(payload.get("recent_momentum", []), limit=5)
+        payload["favorite_titles"] = cls._normalize_profile_entries(payload.get("favorite_titles", []), limit=6)
         payload["top_genres"] = cls._normalize_string_list(payload.get("top_genres", []), limit=8)
         payload["primary_genres"] = cls._normalize_string_list(payload.get("primary_genres", []), limit=4)
         payload["secondary_genres"] = cls._normalize_string_list(payload.get("secondary_genres", []), limit=4)
         payload["recent_genres"] = cls._normalize_string_list(payload.get("recent_genres", []), limit=4)
+        payload["favorite_genres"] = cls._normalize_string_list(payload.get("favorite_genres", []), limit=6)
+        payload["favorite_signal_count"] = max(0, int(payload.get("favorite_signal_count") or 0))
         payload["ranked_genres"] = cls._normalize_ranked_genres(payload.get("ranked_genres", []), limit=8)
         payload["discovery_lanes"] = cls._normalize_string_list(payload.get("discovery_lanes", []), limit=4)
         payload["top_keywords"] = cls._normalize_string_list(payload.get("top_keywords", []), limit=8)
@@ -4503,10 +4626,13 @@ class VanguarrService:
         normalized["top_titles"] = cls._normalize_profile_entries(normalized.get("top_titles", []), limit=8)
         normalized["repeat_titles"] = cls._normalize_profile_entries(normalized.get("repeat_titles", []), limit=5)
         normalized["recent_momentum"] = cls._normalize_profile_entries(normalized.get("recent_momentum", []), limit=5)
+        normalized["favorite_titles"] = cls._normalize_profile_entries(normalized.get("favorite_titles", []), limit=6)
         normalized["top_genres"] = cls._normalize_string_list(normalized.get("top_genres", []), limit=8)
         normalized["primary_genres"] = cls._normalize_string_list(normalized.get("primary_genres", []), limit=4)
         normalized["secondary_genres"] = cls._normalize_string_list(normalized.get("secondary_genres", []), limit=4)
         normalized["recent_genres"] = cls._normalize_string_list(normalized.get("recent_genres", []), limit=4)
+        normalized["favorite_genres"] = cls._normalize_string_list(normalized.get("favorite_genres", []), limit=6)
+        normalized["favorite_signal_count"] = max(0, int(normalized.get("favorite_signal_count") or 0))
         normalized["ranked_genres"] = cls._normalize_ranked_genres(normalized.get("ranked_genres", []), limit=8)
         normalized["discovery_lanes"] = cls._normalize_string_list(normalized.get("discovery_lanes", []), limit=4)
         normalized["top_keywords"] = cls._normalize_string_list(normalized.get("top_keywords", []), limit=8)
@@ -4626,6 +4752,8 @@ class VanguarrService:
             lanes.append("repeat_watch_seed")
         if profile_summary.get("recent_momentum"):
             lanes.append("recent_seed")
+        if profile_summary.get("favorite_titles"):
+            lanes.append("favorite_seed")
         if profile_summary.get("primary_genres") or profile_summary.get("recent_genres"):
             lanes.append("genre_anchor_seed")
         return lanes
@@ -4824,7 +4952,9 @@ class VanguarrService:
             ("Seer lift", cls._normalize_string_list(previous_payload.get("seer_adjacent_genres", []), limit=6), cls._normalize_string_list(current_payload.get("seer_adjacent_genres", []), limit=6)),
             ("Similar-user lift", cls._normalize_string_list(previous_payload.get("similar_user_genres", []), limit=6), cls._normalize_string_list(current_payload.get("similar_user_genres", []), limit=6)),
             ("Top titles", cls._profile_diff_titles(previous_payload.get("top_titles", []), limit=5), cls._profile_diff_titles(current_payload.get("top_titles", []), limit=5)),
+            ("Favorite titles", cls._profile_diff_titles(previous_payload.get("favorite_titles", []), limit=5), cls._profile_diff_titles(current_payload.get("favorite_titles", []), limit=5)),
             ("Recent momentum", cls._profile_diff_titles(previous_payload.get("recent_momentum", []), limit=5), cls._profile_diff_titles(current_payload.get("recent_momentum", []), limit=5)),
+            ("Favorite genres", cls._normalize_string_list(previous_payload.get("favorite_genres", []), limit=6), cls._normalize_string_list(current_payload.get("favorite_genres", []), limit=6)),
             ("TMDb keywords", cls._normalize_string_list(previous_payload.get("top_keywords", []), limit=6), cls._normalize_string_list(current_payload.get("top_keywords", []), limit=6)),
             ("Favorite people", cls._normalize_string_list(previous_payload.get("favorite_people", []), limit=6), cls._normalize_string_list(current_payload.get("favorite_people", []), limit=6)),
         )
@@ -4870,6 +5000,7 @@ class VanguarrService:
     ) -> dict[str, Any]:
         history_count = max(0, int(payload.get("history_count") or 0))
         unique_titles = max(0, int(payload.get("unique_titles") or 0))
+        favorite_signal_count = max(0, int(payload.get("favorite_signal_count") or 0))
         tmdb_signal_count = sum(
             1
             for key in ("top_keywords", "favorite_people", "preferred_brands", "favorite_collections")
@@ -4886,6 +5017,8 @@ class VanguarrService:
         score = 0
         score += min(34, history_count * 2)
         score += min(18, unique_titles * 2)
+        if favorite_signal_count:
+            score += min(8, favorite_signal_count * 2)
         if payload.get("primary_genres"):
             score += 10
         if payload.get("recent_momentum"):
@@ -4928,7 +5061,10 @@ class VanguarrService:
 
         warnings: list[str] = []
         if history_count == 0:
-            warnings.append("No playback history has been captured for this profile yet.")
+            if favorite_signal_count:
+                warnings.append("No playback history has been captured yet, so the profile is leaning on Jellyfin favorites until viewing data grows.")
+            else:
+                warnings.append("No playback history has been captured for this profile yet.")
         elif history_count < 10:
             warnings.append("This profile is still sparse and may overreact to a small sample.")
         if unique_titles < 5 and history_count > 0:
@@ -4947,6 +5083,8 @@ class VanguarrService:
         strengths: list[str] = []
         if history_count >= 20:
             strengths.append("Durable playback history gives this profile a solid long-term base.")
+        if favorite_signal_count:
+            strengths.append("Jellyfin favorites are reinforcing durable preference signals.")
         if payload.get("recent_momentum"):
             strengths.append("Recent momentum is captured, so current taste still has a live voice.")
         if tmdb_signal_count:
@@ -4981,6 +5119,7 @@ class VanguarrService:
                 "evidence": {
                     "history_items": history_count,
                     "unique_titles": unique_titles,
+                    "favorite_signals": favorite_signal_count,
                     "tmdb_signals": tmdb_signal_count,
                     "seer_signals": seer_signal_count,
                     "similar_users": similar_signal_count,
@@ -5006,7 +5145,9 @@ class VanguarrService:
             (
                 int(payload.get("history_count") or 0) > 0,
                 bool(payload.get("top_titles")),
+                bool(payload.get("favorite_titles")),
                 bool(payload.get("primary_genres")),
+                bool(payload.get("favorite_genres")),
                 bool(payload.get("ranked_genres")),
             )
         )
@@ -5019,7 +5160,7 @@ class VanguarrService:
         *,
         enrichment: dict[str, list[str]] | None = None,
     ) -> str:
-        if int(history_summary.get("history_count") or 0) == 0:
+        if not cls._has_profile_signal(history_summary):
             return ProfileStore.default_block(username)
 
         adjacent_genres = cls._merge_unique_strings(
@@ -5071,9 +5212,12 @@ class VanguarrService:
         format_preference = history_summary.get("format_preference", {})
         release_year_preference = history_summary.get("release_year_preference", {})
         top_titles = history_summary.get("top_titles", [])
+        favorite_titles = history_summary.get("favorite_titles", [])
+        favorite_genres = cls._normalize_string_list(history_summary.get("favorite_genres", []), limit=4)
         favorite_collections = history_summary.get("favorite_collections", [])
         history_count = int(history_summary.get("history_count") or 0)
         unique_titles = int(history_summary.get("unique_titles") or 0)
+        favorite_signal_count = int(history_summary.get("favorite_signal_count") or 0)
         preferred = str(format_preference.get("preferred") or "balanced")
         movie_plays = int(format_preference.get("movie_plays") or 0)
         tv_plays = int(format_preference.get("tv_plays") or 0)
@@ -5113,8 +5257,14 @@ class VanguarrService:
 
         if top_titles:
             lines.append(f"Anchor titles: {cls._format_title_entries(top_titles[:3])}.")
+        if favorite_titles:
+            lines.append(f"Jellyfin favorites reinforce titles like {cls._format_title_entries(favorite_titles[:3])}.")
+        if favorite_genres:
+            lines.append(f"Favorite-tagged genre pull leans toward {cls._human_join(favorite_genres[:3])}.")
         if favorite_collections:
             lines.append(f"Recurring franchise pull: {cls._human_join(favorite_collections[:2])}.")
+        if history_count == 0 and favorite_signal_count > 0:
+            lines.append(f"Current core is favorite-led, using {favorite_signal_count} Jellyfin favorite title signals before playback history grows.")
 
         return lines
 
@@ -5148,6 +5298,8 @@ class VanguarrService:
         explicit_feedback = history_summary.get("explicit_feedback", {})
         liked_titles = cls._normalize_string_list(explicit_feedback.get("liked_titles", []), limit=2)
         liked_genres = cls._normalize_string_list(explicit_feedback.get("liked_genres", []), limit=3)
+        favorite_titles = cls._normalize_profile_entries(history_summary.get("favorite_titles", []), limit=3)
+        favorite_genres = cls._normalize_string_list(history_summary.get("favorite_genres", []), limit=3)
         top_keywords = cls._normalize_string_list(history_summary.get("top_keywords", []), limit=4)
         favorite_people = cls._normalize_string_list(history_summary.get("favorite_people", []), limit=3)
         preferred_brands = cls._normalize_string_list(history_summary.get("preferred_brands", []), limit=3)
@@ -5183,6 +5335,14 @@ class VanguarrService:
             if liked_genres:
                 feedback_parts.append(f"keep leaning into {cls._human_join(liked_genres)}")
             lines.append(f"Explicit positive feedback says to {cls._human_join(feedback_parts)}.")
+
+        if favorite_titles or favorite_genres:
+            favorite_parts: list[str] = []
+            if favorite_titles:
+                favorite_parts.append(f"Jellyfin favorites include {cls._format_title_entries(favorite_titles[:2])}")
+            if favorite_genres:
+                favorite_parts.append(f"those favorites cluster around {cls._human_join(favorite_genres)}")
+            lines.append(f"{' and '.join(favorite_parts)}.")
 
         if seer_adjacent_titles:
             lines.append(f"Seer recommendation neighborhoods keep clustering around {cls._human_join(seer_adjacent_titles)}.")
@@ -5261,6 +5421,7 @@ class VanguarrService:
         operator_notes = str(history_summary.get("operator_notes") or "").strip()
         top_keywords = cls._normalize_string_list(history_summary.get("top_keywords", []), limit=3)
         favorite_people = cls._normalize_string_list(history_summary.get("favorite_people", []), limit=2)
+        favorite_titles = cls._normalize_profile_entries(history_summary.get("favorite_titles", []), limit=2)
         seer_adjacent_genres = cls._normalize_string_list(history_summary.get("seer_adjacent_genres", []), limit=3)
         similar_users = cls._normalize_string_list(history_summary.get("similar_users", []), limit=2)
         similar_user_genres = cls._normalize_string_list(history_summary.get("similar_user_genres", []), limit=3)
@@ -5270,6 +5431,10 @@ class VanguarrService:
         if primary_genres:
             lines.append(
                 f"Favor candidates that match {cls._human_join(primary_genres[:3])} and connect to anchor titles or repeat-watch neighborhoods."
+            )
+        if favorite_titles:
+            lines.append(
+                f"Treat Jellyfin favorites like {cls._format_title_entries(favorite_titles)} as durable positive evidence after watch history."
             )
 
         if preferred == "tv":
@@ -5311,6 +5476,7 @@ class VanguarrService:
     def _describe_engagement_style(cls, history_summary: dict[str, Any]) -> str:
         repeat_titles = history_summary.get("repeat_titles", [])
         top_titles = history_summary.get("top_titles", [])
+        favorite_titles = history_summary.get("favorite_titles", [])
         history_count = int(history_summary.get("history_count") or 0)
         unique_titles = int(history_summary.get("unique_titles") or 0)
 
@@ -5325,6 +5491,9 @@ class VanguarrService:
 
         if top_titles:
             return f"Balanced; keeps a stable core anchored by {cls._format_title_entries(top_titles[:2])} while still exploring."
+
+        if favorite_titles:
+            return f"Favorite-led; Jellyfin favorites cluster around {cls._format_title_entries(favorite_titles[:2])}."
 
         return "Balanced; keeps a stable core while still exploring."
 
@@ -5363,6 +5532,7 @@ class VanguarrService:
         username: str,
         history: list[dict[str, Any]],
         *,
+        favorite_items: list[dict[str, Any]] | None = None,
         existing_payload: dict[str, Any] | None = None,
         peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
         include_llm_enrichment: bool = True,
@@ -5376,6 +5546,7 @@ class VanguarrService:
         emit_progress(f"Building core playback profile for {username}.", 1, "profile_history")
         history_summary = self._build_profile_history_context(
             history,
+            favorite_items=favorite_items,
             top_limit=self.settings.profile_architect_top_titles_limit,
             recent_limit=self.settings.profile_architect_recent_momentum_limit,
             recent_weight_percent=self.settings.profile_recent_signal_weight_percent,
@@ -5383,6 +5554,7 @@ class VanguarrService:
         history_summary = self._apply_existing_profile_guidance(history_summary, stored_payload)
         recommendation_seeds = self._build_recommendation_seed_pool(
             history,
+            favorite_items=favorite_items,
             profile_summary=history_summary,
             limit=self.settings.recommendation_seed_limit,
         )
@@ -5427,6 +5599,7 @@ class VanguarrService:
         username: str,
         history: list[dict[str, Any]],
         *,
+        favorite_items: list[dict[str, Any]] | None = None,
         existing_payload: dict[str, Any] | None = None,
         peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
@@ -5434,21 +5607,28 @@ class VanguarrService:
         if ProfileStore.is_structured_payload(stored_payload):
             history_summary = self._build_profile_history_context(
                 history,
+                favorite_items=favorite_items,
                 top_limit=self.settings.profile_architect_top_titles_limit,
                 recent_limit=self.settings.profile_architect_recent_momentum_limit,
                 recent_weight_percent=self.settings.profile_recent_signal_weight_percent,
             )
             recommendation_seeds = self._build_recommendation_seed_pool(
                 history,
+                favorite_items=favorite_items,
                 profile_summary=history_summary,
                 limit=self.settings.recommendation_seed_limit,
             )
-            live_payload = self._with_live_profile_context(username, stored_payload)
+            live_payload = dict(stored_payload)
+            for key in ("favorite_titles", "favorite_genres", "favorite_signal_count"):
+                if key in history_summary:
+                    live_payload[key] = history_summary[key]
+            live_payload = self._with_live_profile_context(username, live_payload)
             return live_payload, self._resolve_tv_seed_media_ids_from_library_index(recommendation_seeds), False
 
         profile_payload, recommendation_seeds = await self._compose_profile_payload(
             username,
             history,
+            favorite_items=favorite_items,
             existing_payload=stored_payload,
             peer_payload_overrides=peer_payload_overrides,
             include_llm_enrichment=False,
@@ -5510,10 +5690,12 @@ class VanguarrService:
             str(user.get("Id") or ""),
             self._playback_history_limit(),
         )
+        favorite_items = await self._load_user_favorite_items(str(user.get("Id") or ""), username=current_username)
         stored_profile = existing_payload if isinstance(existing_payload, dict) else self.profile_store.read_payload(current_username)
         profile_payload, recommendation_seeds, should_persist = await self._prepare_runtime_profile_payload(
             current_username,
             history,
+            favorite_items=favorite_items,
             existing_payload=stored_profile,
         )
         if should_persist:
@@ -6027,6 +6209,8 @@ class VanguarrService:
         if "top_seed" in lane_lookup:
             score += 0.06
         if "recent_seed" in lane_lookup:
+            score += 0.06
+        if "favorite_seed" in lane_lookup:
             score += 0.06
         if "genre_anchor_seed" in lane_lookup:
             score += 0.04

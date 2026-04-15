@@ -264,6 +264,81 @@ def test_profile_history_context_compacts_repeated_titles() -> None:
     assert "recent_plays" not in summary
 
 
+def test_profile_history_context_blends_jellyfin_favorites_into_profile_signals() -> None:
+    history = [
+        {
+            "Name": "Courtroom One",
+            "Type": "Movie",
+            "Genres": ["Drama", "Crime"],
+            "CommunityRating": 8.2,
+            "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+        }
+    ]
+    favorite_items = [
+        {
+            "Name": "Galaxy Quest",
+            "Type": "Movie",
+            "Genres": ["Sci-Fi", "Adventure"],
+            "CommunityRating": 7.9,
+            "ProviderIds": {"Tmdb": "926"},
+            "UserData": {"IsFavorite": True},
+        }
+    ]
+
+    summary = VanguarrService._build_profile_history_context(
+        history,
+        favorite_items=favorite_items,
+        top_limit=5,
+        recent_limit=3,
+        recent_window=3,
+    )
+
+    assert summary["history_count"] == 1
+    assert summary["favorite_signal_count"] == 1
+    assert summary["favorite_titles"][0]["title"] == "Galaxy Quest"
+    assert "Sci-Fi" in summary["favorite_genres"]
+    assert "Drama" in summary["primary_genres"]
+    assert "Sci-Fi" in summary["top_genres"]
+
+
+def test_recommendation_seed_pool_includes_jellyfin_favorite_seeds() -> None:
+    history = [
+        {
+            "Name": "Courtroom One",
+            "Type": "Movie",
+            "Genres": ["Drama", "Crime"],
+            "CommunityRating": 8.2,
+            "Overview": "Legal drama.",
+            "ProviderIds": {"Tmdb": "1001"},
+            "UserData": {"LastPlayedDate": "2026-04-08T10:00:00Z"},
+        }
+    ]
+    favorite_items = [
+        {
+            "Name": "Galaxy Quest",
+            "Type": "Movie",
+            "Genres": ["Sci-Fi", "Adventure"],
+            "CommunityRating": 7.9,
+            "Overview": "Space comedy.",
+            "ProviderIds": {"Tmdb": "926"},
+            "UserData": {"IsFavorite": True},
+        }
+    ]
+    summary = VanguarrService._build_profile_history_context(history, favorite_items=favorite_items)
+
+    seeds = VanguarrService._build_recommendation_seed_pool(
+        history,
+        favorite_items=favorite_items,
+        profile_summary=summary,
+        limit=4,
+    )
+
+    seed_lookup = {seed["title"]: seed for seed in seeds}
+    assert "Courtroom One" in seed_lookup
+    assert "Galaxy Quest" in seed_lookup
+    assert "favorite_seed" in seed_lookup["Galaxy Quest"]["seed_lanes"]
+
+
 def test_profile_enrichment_prompt_uses_viewing_summary() -> None:
     messages = build_profile_enrichment_messages(
         "alice",
@@ -1503,6 +1578,7 @@ def test_run_profile_architect_progress_matches_layered_rebuild_flow(tmp_path) -
         username: str,
         history: list[dict],
         *,
+        favorite_items: list[dict] | None = None,
         existing_payload: dict | None = None,
         peer_payload_overrides: dict[str, dict[str, Any]] | None = None,
         include_llm_enrichment: bool = True,
@@ -1911,12 +1987,12 @@ def test_run_profile_architect_writes_operation_log(tmp_path) -> None:
     async def fake_refresh(_user: dict, progress_callback=None) -> dict:
         return {"stored": 0, "scored": 0, "ai_scored": 0, "ai_reused": 0}
 
-    service._build_profile_history_context = lambda history, top_limit, recent_limit, recent_weight_percent=75: {  # type: ignore[method-assign]
+    service._build_profile_history_context = lambda history, favorite_items=None, top_limit=8, recent_limit=5, recent_weight_percent=75: {  # type: ignore[method-assign]
         "history_count": 0,
         "top_titles": [],
         "recent_momentum": [],
     }
-    service._build_recommendation_seed_pool = lambda history, profile_summary, limit: []  # type: ignore[method-assign]
+    service._build_recommendation_seed_pool = lambda history, favorite_items=None, profile_summary=None, limit=0: []  # type: ignore[method-assign]
     service._enrich_profile_summary_with_tmdb = passthrough_profile_summary  # type: ignore[method-assign]
     service._suggest_profile_enrichment = fake_enrichment  # type: ignore[method-assign]
     service._build_profile_payload = lambda current_username, compact_history, enrichment, existing_payload: {  # type: ignore[method-assign]

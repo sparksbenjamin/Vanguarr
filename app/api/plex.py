@@ -142,6 +142,9 @@ class PlexClient(BaseAPIClient):
                 normalized.append(normalized_item)
         return normalized
 
+    async def get_favorite_items(self, user_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        return []
+
     async def _get_history_items(
         self,
         *,

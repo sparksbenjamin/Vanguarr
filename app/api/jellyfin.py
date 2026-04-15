@@ -171,6 +171,55 @@ class JellyfinClient(BaseAPIClient):
         )
         return payload.get("Items", []) if isinstance(payload, dict) else []
 
+    async def get_favorite_items(self, user_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        settings = self._refresh_connection()
+        if not settings.jellyfin_api_key:
+            raise ClientConfigError("JELLYFIN_API_KEY is required to query favorite items.")
+
+        page_size = min(limit or 150, 150)
+        items: list[dict[str, Any]] = []
+        start_index = 0
+
+        while True:
+            payload = await self._request(
+                "GET",
+                "/Items",
+                params={
+                    "userId": user_id,
+                    "limit": page_size,
+                    "startIndex": start_index,
+                    "recursive": "true",
+                    "includeItemTypes": "Movie,Series",
+                    "filters": "IsFavorite",
+                    "sortBy": "SortName",
+                    "sortOrder": "Ascending",
+                    "fields": (
+                        "Overview,Genres,CommunityRating,ProviderIds,ProductionYear,"
+                        "PremiereDate,SeriesName,SeriesId,Taglines,UserData"
+                    ),
+                },
+            )
+            batch = payload.get("Items", []) if isinstance(payload, dict) else []
+            items.extend(batch)
+
+            total_record_count = int(payload.get("TotalRecordCount") or 0) if isinstance(payload, dict) else 0
+            if not batch:
+                break
+            if limit is not None and len(items) >= limit:
+                break
+
+            start_index += len(batch)
+            if total_record_count:
+                if len(items) >= total_record_count:
+                    break
+                continue
+            if len(batch) < page_size:
+                break
+
+        if limit is not None:
+            return items[:limit]
+        return items
+
     async def get_library_items(
         self,
         *,
