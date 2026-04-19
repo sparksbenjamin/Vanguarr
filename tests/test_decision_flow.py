@@ -144,6 +144,38 @@ def test_task_snapshot_for_target_matches_global_run_without_explicit_user_list(
     assert snapshot["summary"] == "Updated 3 profile(s)."
 
 
+def test_update_profile_guidance_persists_enabled_flag(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+    service = VanguarrService(
+        settings=settings,
+        media_server=SimpleNamespace(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=testing_session,
+    )
+
+    updated = service.update_profile_guidance(
+        username="alice",
+        enabled=False,
+        liked_titles=["Arrival"],
+        source="test",
+    )
+
+    assert updated["enabled"] is False
+    assert service.is_profile_enabled("alice") is False
+    assert service.profile_store.read_payload("alice")["enabled"] is False
+
+
 def test_decision_prompt_includes_viewing_history_block() -> None:
     messages = build_decision_messages(
         username="alice",
@@ -2064,6 +2096,71 @@ def test_run_decision_engine_tracks_existing_seer_request_without_recreating_it(
     assert logs[0].requested is False
     assert logs[0].request_id == 88
     assert "Request outcome: Request already exists." in logs[0].reasoning
+
+
+def test_run_decision_engine_only_processes_enabled_profiles(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+    )
+
+    class FakeMediaServer:
+        async def list_users(self) -> list[dict]:
+            return [
+                {"Id": "user-1", "Name": "alice"},
+                {"Id": "user-2", "Name": "bob"},
+            ]
+
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=SimpleNamespace(),
+        tmdb=SimpleNamespace(),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    service.profile_store.write_payload("alice", {"username": "alice", "enabled": False, "summary_block": "disabled"})
+    service.profile_store.write_payload("bob", {"username": "bob", "enabled": True, "summary_block": "enabled"})
+
+    prepared_calls: list[str] = []
+
+    async def fake_prepare(user: dict[str, Any], *, shortlist_limit: int | None = None, existing_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        prepared_calls.append(str(user.get("Name")))
+        return {
+            "profile_payload": {"username": str(user.get("Name")), "enabled": True},
+            "viewing_history": {},
+            "shortlisted_candidates": [],
+            "requested_media_keys": set(),
+            "shared_request_matches": [],
+            "scored": 0,
+            "skipped": 0,
+        }
+
+    service._prepare_decision_candidates_for_user = fake_prepare  # type: ignore[method-assign]
+
+    result = asyncio.run(service.run_decision_engine())
+
+    with session_factory() as session:
+        logs = list(
+            session.scalars(
+                select(DecisionLog).where(
+                    DecisionLog.engine == "decision_engine",
+                    DecisionLog.decision == "SKIP",
+                )
+            )
+        )
+
+    assert result["status"] == "success"
+    assert prepared_calls == ["bob"]
+    assert "Disabled profiles skipped: 1." in result["summary"]
+    assert any(log.username == "alice" and "disabled" in log.reasoning.lower() for log in logs)
 
 
 def test_prepare_decision_candidates_skips_global_requests_and_exact_favorites(tmp_path) -> None:

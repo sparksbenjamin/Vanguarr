@@ -836,6 +836,7 @@ async def manifest_action_profile_feedback(
 async def manifest_action_profile_guidance(
     request: Request,
     username: str = Form(""),
+    profile_enabled: str | None = Form(None),
     liked_titles: str = Form(""),
     disliked_titles: str = Form(""),
     liked_genres: str = Form(""),
@@ -852,6 +853,7 @@ async def manifest_action_profile_guidance(
     try:
         request.app.state.vanguarr.update_profile_guidance(
             username=cleaned_username,
+            enabled=profile_enabled is not None,
             liked_titles=parse_csv_values(liked_titles),
             disliked_titles=parse_csv_values(disliked_titles),
             liked_genres=parse_csv_values(liked_genres),

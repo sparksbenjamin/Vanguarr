@@ -75,8 +75,17 @@
             Run the profile-specific engines from here and watch their progress live without leaving the page.
           </p>
         </div>
-        <div class="max-w-md rounded-2xl border border-[rgba(160,182,207,0.1)] bg-white/5 px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
-          Profile Architect rebuilds the manifest, Decision Engine scouts requests, and Suggested For You refreshes the Jellyfin-facing snapshot for this profile only.
+        <div class="max-w-md space-y-3">
+          {% if selected_user %}
+          <div class="flex flex-wrap gap-2">
+            <span class="status-pill {{ 'status-good' if profile_payload_live.get('enabled', True) else 'status-neutral' }}">
+              {{ "requests enabled" if profile_payload_live.get("enabled", True) else "requests disabled" }}
+            </span>
+          </div>
+          {% endif %}
+          <div class="rounded-2xl border border-[rgba(160,182,207,0.1)] bg-white/5 px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
+            Profile Architect rebuilds the manifest, Decision Engine scouts requests, and Suggested For You refreshes the Jellyfin-facing snapshot for this profile only.
+          </div>
         </div>
       </div>
     </div>
@@ -150,8 +159,13 @@
               <div class="h-full rounded-full bg-[var(--amber)] transition-all duration-300" style="width: {{ decision_engine_task.get('percent', 0.0) }}%;" data-task-bar></div>
             </div>
           </div>
-          <button class="button button-primary mt-5 w-full" type="button" data-profile-action-button data-action="decision-engine">
-            Run Decision Engine
+          {% if not profile_payload_live.get("enabled", True) %}
+          <div class="mt-5 rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
+            This profile is disabled for live requests. Re-enable it below before running the real Decision Engine.
+          </div>
+          {% endif %}
+          <button class="button button-primary mt-5 w-full" type="button" data-profile-action-button data-action="decision-engine" data-requires-enabled-profile="true" {% if not profile_payload_live.get("enabled", True) %}disabled{% endif %}>
+            {{ "Decision Engine Disabled" if not profile_payload_live.get("enabled", True) else "Run Decision Engine" }}
           </button>
           <div class="mt-4 rounded-[1.15rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
             <div class="flex items-start justify-between gap-4">
@@ -312,6 +326,17 @@
           <form method="post" action="/manifest/actions/profile-guidance" class="space-y-4">
             <input type="hidden" name="username" value="{{ selected_user }}" />
             <input type="hidden" name="review" value="1" />
+            <div class="rounded-[1.2rem] border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-4">
+              <label class="flex items-start gap-3" for="guidance-profile-enabled">
+                <input id="guidance-profile-enabled" name="profile_enabled" type="checkbox" value="true" class="mt-1 h-4 w-4 rounded border-white/20 bg-transparent text-[var(--accent)]" {% if profile_payload_live.get("enabled", True) %}checked{% endif %} />
+                <span>
+                  <span class="block text-sm font-medium text-white">Enable this profile for live requests</span>
+                  <span class="mt-1 block text-sm leading-6 text-[var(--text-soft)]">
+                    When this is off, all-user Decision Engine runs skip this profile and the live request button stays disabled. Profile rebuilds, suggestion refreshes, and dry runs can still run.
+                  </span>
+                </span>
+              </label>
+            </div>
             <div class="grid gap-4 lg:grid-cols-2">
               <div>
                 <label class="mb-2 block text-sm font-medium" for="guidance-liked-titles">Liked titles</label>
@@ -643,6 +668,7 @@
 {% block scripts %}
 <script>
   const selectedProfileUsername = {{ selected_user|tojson }};
+  const selectedProfileEnabled = {{ (profile_payload_live.get("enabled", True) if selected_user else True)|tojson }};
   const profileActionStatus = document.querySelector("[data-profile-action-status]");
   const profileTaskCards = Array.from(document.querySelectorAll("[data-profile-task-card]"));
   const profileActionButtons = Array.from(document.querySelectorAll("[data-profile-action-button]"));
@@ -753,7 +779,8 @@
       bar.classList.toggle("animate-pulse", display.status === "running" || display.status === "busy");
     }
     if (button) {
-      button.disabled = !selectedProfileUsername || display.status === "running" || isRunningElsewhere;
+      const requiresEnabledProfile = button.dataset.requiresEnabledProfile === "true";
+      button.disabled = !selectedProfileUsername || display.status === "running" || isRunningElsewhere || (requiresEnabledProfile && !selectedProfileEnabled);
     }
   }
 
@@ -801,7 +828,8 @@
         continue;
       }
       const isRunning = Boolean(globalRunning && globalRunning[engine]);
-      button.disabled = isRunning;
+      const requiresEnabledProfile = button.dataset.requiresEnabledProfile === "true";
+      button.disabled = isRunning || (requiresEnabledProfile && !selectedProfileEnabled);
     }
   }
 

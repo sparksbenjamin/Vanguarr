@@ -130,6 +130,7 @@ class ProfileStore:
         return {
             "profile_version": "v5",
             "profile_state": "default",
+            "enabled": True,
             "username": username,
             "generated_at": None,
             "history_count": 0,
@@ -266,6 +267,13 @@ class VanguarrService:
 
     def list_profiles(self) -> list[str]:
         return self.profile_store.list_profiles()
+
+    def is_profile_enabled(self, username: str) -> bool:
+        cleaned_username = str(username or "").strip()
+        if not cleaned_username:
+            return True
+        payload = self.profile_store.read_payload(cleaned_username)
+        return self._normalize_profile_enabled(payload.get("enabled", True))
 
     def read_profile(self, username: str) -> str:
         return self.profile_store.read_payload_text(username)
@@ -854,6 +862,7 @@ class VanguarrService:
         self,
         *,
         username: str,
+        enabled: bool | None = None,
         liked_titles: list[str] | None = None,
         disliked_titles: list[str] | None = None,
         liked_genres: list[str] | None = None,
@@ -868,6 +877,8 @@ class VanguarrService:
             raise ValueError("A username is required before saving profile guidance.")
 
         payload = self.profile_store.read_payload(cleaned_username)
+        if enabled is not None:
+            payload["enabled"] = bool(enabled)
         payload["explicit_feedback"] = self._normalize_explicit_feedback(
             {
                 "liked_titles": liked_titles or [],
@@ -894,8 +905,9 @@ class VanguarrService:
             media_title=f"Guidance updated for {cleaned_username}",
             source=source,
             decision="GUIDANCE",
-            reasoning="Updated editable profile guidance for likes, dislikes, exclusions, and operator notes.",
+            reasoning="Updated editable profile guidance, request eligibility, exclusions, and operator notes.",
             detail_payload={
+                "enabled": normalized.get("enabled", True),
                 "liked_titles": normalized["explicit_feedback"]["liked_titles"],
                 "disliked_titles": normalized["explicit_feedback"]["disliked_titles"],
                 "liked_genres": normalized["explicit_feedback"]["liked_genres"],
@@ -1767,17 +1779,48 @@ class VanguarrService:
         exclusions = self._parse_global_exclusions()
         total_steps = 0
         completed_steps = 0
+        matched_users: list[dict[str, Any]] = []
+        users: list[dict[str, Any]] = []
+        disabled_usernames: list[str] = []
 
         try:
-            users = await self.media_server.list_users()
+            matched_users = await self.media_server.list_users()
             if username:
-                users = [user for user in users if user.get("Name") == username]
+                matched_users = [user for user in matched_users if user.get("Name") == username]
+
+            for user in matched_users:
+                current_username = str(user.get("Name") or "").strip()
+                if not current_username:
+                    continue
+                if self.is_profile_enabled(current_username):
+                    users.append(user)
+                    continue
+                disabled_usernames.append(current_username)
+                self.record_operation_event(
+                    engine="decision_engine",
+                    username=current_username,
+                    media_type="profile",
+                    media_title=f"Decision Engine skipped for {current_username}",
+                    source="profile-toggle",
+                    decision="SKIP",
+                    reasoning=(
+                        f"Decision Engine skipped {current_username} because that profile is disabled "
+                        "for live requests."
+                    ),
+                    detail_payload={
+                        "target_username": target_username or "all-users",
+                        "profile_enabled": False,
+                    },
+                )
 
             total_steps = max(1, len(users) * 3)
             self._update_task(
                 task.id,
                 status="running",
                 summary=(
+                    f"Decision Engine is disabled for {target_username}."
+                    if target_username and not users and bool(disabled_usernames)
+                    else
                     f"Preparing Decision Engine for {target_username}."
                     if target_username
                     else f"Preparing Decision Engine for {len(users)} user(s)."
@@ -1790,6 +1833,7 @@ class VanguarrService:
                     "processed_users": 0,
                     "total_users": len(users),
                     "processed_usernames": [],
+                    "disabled_usernames": list(disabled_usernames),
                     "scored": 0,
                     "shortlisted": 0,
                     "evaluated": 0,
@@ -1816,6 +1860,7 @@ class VanguarrService:
                             "processed_users": max(0, completed_steps // 3),
                             "total_users": len(users),
                             "processed_usernames": list(processed_usernames),
+                            "disabled_usernames": list(disabled_usernames),
                             "scored": scored,
                             "shortlisted": shortlisted,
                             "evaluated": evaluated,
@@ -1858,6 +1903,7 @@ class VanguarrService:
                             "processed_users": max(0, completed_steps // 3),
                             "total_users": len(users),
                             "processed_usernames": list(processed_usernames),
+                            "disabled_usernames": list(disabled_usernames),
                             "scored": scored,
                             "shortlisted": shortlisted,
                             "evaluated": evaluated,
@@ -1883,6 +1929,7 @@ class VanguarrService:
                             "processed_users": max(0, completed_steps // 3),
                             "total_users": len(users),
                             "processed_usernames": list(processed_usernames),
+                            "disabled_usernames": list(disabled_usernames),
                             "scored": scored,
                             "shortlisted": shortlisted,
                             "evaluated": evaluated,
@@ -2072,6 +2119,7 @@ class VanguarrService:
                                     "processed_users": max(0, completed_steps // 3),
                                     "total_users": len(users),
                                     "processed_usernames": list(processed_usernames),
+                                    "disabled_usernames": list(disabled_usernames),
                                     "scored": scored,
                                     "shortlisted": shortlisted,
                                     "evaluated": evaluated,
@@ -2092,20 +2140,40 @@ class VanguarrService:
                     errors.append(f"{current_username}: {exc}")
                     logger.exception("Decision Engine failed while preparing user=%s", current_username)
 
-            if not users:
+            disabled_summary = (
+                f" Disabled profiles skipped: {len(disabled_usernames)}."
+                if disabled_usernames
+                else ""
+            )
+            if target_username and not matched_users:
+                status = "error"
+                summary = f"No {self.settings.media_server_label} users matched the requested target."
+            elif target_username and not users and disabled_usernames:
+                status = "success"
+                summary = (
+                    f"Decision Engine did not run for {target_username} because that profile is disabled "
+                    "for live requests."
+                )
+            elif not users and disabled_usernames:
+                status = "success"
+                summary = (
+                    f"Skipped {len(disabled_usernames)} disabled profile(s); "
+                    "no enabled profiles were available for Decision Engine."
+                )
+            elif not users:
                 status = "error"
                 summary = f"No {self.settings.media_server_label} users matched the requested target."
             elif errors:
                 status = "partial"
                 summary = (
                     f"Scored {scored} candidates, shortlisted {shortlisted}, evaluated {evaluated}, requested {requested}, "
-                    f"skipped {skipped}, errors {len(errors)}."
+                    f"skipped {skipped}, errors {len(errors)}.{disabled_summary}"
                 )
             else:
                 status = "success"
                 summary = (
                     f"Scored {scored} candidates, shortlisted {shortlisted}, "
-                    f"evaluated {evaluated}, requested {requested}, skipped {skipped}."
+                    f"evaluated {evaluated}, requested {requested}, skipped {skipped}.{disabled_summary}"
                 )
         except Exception as exc:
             status = "error"
@@ -2124,6 +2192,7 @@ class VanguarrService:
                 "processed_users": len(users) if 'users' in locals() else 0,
                 "total_users": len(users) if 'users' in locals() else 0,
                 "processed_usernames": list(processed_usernames),
+                "disabled_usernames": list(disabled_usernames),
                 "scored": scored,
                 "shortlisted": shortlisted,
                 "evaluated": evaluated,
@@ -5502,6 +5571,7 @@ class VanguarrService:
         payload["blocked_titles"] = cls._normalize_string_list(existing.get("blocked_titles", []), limit=12)
         payload["profile_exclusions"] = cls._normalize_string_list(existing.get("profile_exclusions", []), limit=8)
         payload["operator_notes"] = str(existing.get("operator_notes") or "").strip()
+        payload["enabled"] = cls._normalize_profile_enabled(existing.get("enabled", True))
         payload["summary_block"] = (
             cls._limit_words(cls._render_profile_block(username, payload), max_words=500)
             if cls._has_profile_signal(payload)
@@ -5525,6 +5595,7 @@ class VanguarrService:
         normalized["generated_at"] = str(normalized.get("generated_at") or "").strip() or (
             datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         )
+        normalized["enabled"] = cls._normalize_profile_enabled(normalized.get("enabled", True))
         normalized["history_count"] = max(0, int(normalized.get("history_count") or 0))
         normalized["unique_titles"] = max(0, int(normalized.get("unique_titles") or 0))
         normalized["average_top_rating"] = cls._coerce_optional_number(normalized.get("average_top_rating"))
@@ -5577,6 +5648,19 @@ class VanguarrService:
         )
         normalized["profile_review"] = cls._normalize_profile_review(normalized.get("profile_review", {}))
         return normalized
+
+    @staticmethod
+    def _normalize_profile_enabled(raw_value: Any) -> bool:
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, (int, float)):
+            return bool(raw_value)
+        normalized = str(raw_value or "").strip().lower()
+        if normalized in {"false", "0", "off", "no", "disabled"}:
+            return False
+        if normalized in {"true", "1", "on", "yes", "enabled"}:
+            return True
+        return True
 
     @classmethod
     def _normalize_profile_entries(cls, raw_items: Any, *, limit: int) -> list[dict[str, Any]]:

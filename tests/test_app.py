@@ -307,6 +307,7 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
             client.app.state.vanguarr,
             "get_profile_payload_with_live_context",
             lambda username: {
+                "enabled": True,
                 "profile_review": {
                     "health_score": 78,
                     "health_status": "healthy",
@@ -378,7 +379,9 @@ def test_manifest_page_renders_suggestion_preview_for_selected_user(monkeypatch)
     assert "Anime Trap" in response.text
     assert 'id="manifest-user-select"' in response.text
     assert 'name="liked_titles"' in response.text
+    assert 'name="profile_enabled"' in response.text
     assert "Save Guidance" in response.text
+    assert "requests enabled" in response.text
     assert "Open Settings" not in response.text
 
 
@@ -487,6 +490,7 @@ def test_manifest_profile_guidance_action_redirects_back_to_manifest(monkeypatch
             "/manifest/actions/profile-guidance",
             data={
                 "username": "alice",
+                "profile_enabled": "true",
                 "liked_titles": "Arrival, Dune",
                 "disliked_titles": "Anime Trap",
                 "liked_genres": "Sci-Fi,Drama",
@@ -503,6 +507,7 @@ def test_manifest_profile_guidance_action_redirects_back_to_manifest(monkeypatch
     assert response.headers["location"] == "/manifest?username=alice&review=1&toast=Saved+editable+guidance+for+alice."
     assert received == {
         "username": "alice",
+        "enabled": True,
         "liked_titles": ["Arrival", "Dune"],
         "disliked_titles": ["Anime Trap"],
         "liked_genres": ["Sci-Fi", "Drama"],

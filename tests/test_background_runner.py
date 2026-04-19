@@ -12,6 +12,7 @@ class FakeService:
         self.request_sync_calls: list[str | None] = []
         self.profile_release = asyncio.Event()
         self.operation_events: list[dict[str, str]] = []
+        self.enabled_profiles: dict[str, bool] = {}
 
     async def run_profile_architect(self, username: str | None, *, trigger_source: str = "manual") -> dict[str, str]:
         self.profile_calls.append(username)
@@ -40,6 +41,9 @@ class FakeService:
 
     def record_operation_event(self, **payload: str) -> None:
         self.operation_events.append(payload)
+
+    def is_profile_enabled(self, username: str) -> bool:
+        return self.enabled_profiles.get(username, True)
 
 
 def test_background_runner_prevents_duplicate_profile_launches() -> None:
@@ -84,6 +88,24 @@ def test_background_runner_cleans_up_completed_decision_runs() -> None:
         await asyncio.sleep(0)
         assert service.decision_calls == [None]
         assert runner.is_running("decision_engine") is False
+
+    asyncio.run(scenario())
+
+
+def test_background_runner_skips_disabled_profile_decision_launch() -> None:
+    async def scenario() -> None:
+        service = FakeService()
+        service.enabled_profiles["alice"] = False
+        runner = BackgroundEngineRunner(service)
+
+        started, message = runner.launch_decision_engine("alice")
+
+        assert started is False
+        assert message == "Decision Engine is disabled for alice. Re-enable the profile to place requests."
+        assert service.decision_calls == []
+        assert runner.is_running("decision_engine") is False
+        assert service.operation_events[0]["decision"] == "SKIP"
+        assert service.operation_events[0]["username"] == "alice"
 
     asyncio.run(scenario())
 

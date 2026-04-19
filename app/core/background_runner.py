@@ -40,12 +40,35 @@ class BackgroundEngineRunner:
         *,
         source: str = "manual",
     ) -> tuple[bool, str]:
+        cleaned_username = str(username or "").strip() or None
+        if cleaned_username and not self.service.is_profile_enabled(cleaned_username):
+            logger.info("Decision Engine launch skipped because profile=%s is disabled.", cleaned_username)
+            self.service.record_operation_event(
+                engine="decision_engine",
+                username=cleaned_username,
+                media_type="profile",
+                media_title=f"Decision Engine launch skipped for {cleaned_username}",
+                source=source,
+                decision="SKIP",
+                reasoning=(
+                    f"Decision Engine did not start for {cleaned_username} because that profile is disabled "
+                    "for live requests."
+                ),
+                detail_payload={
+                    "event": "launch_skipped_disabled_profile",
+                    "trigger": source,
+                    "target": cleaned_username,
+                    "profile_enabled": False,
+                },
+            )
+            return False, f"Decision Engine is disabled for {cleaned_username}. Re-enable the profile to place requests."
+
         return self._launch(
             engine_name="decision_engine",
             label="Decision Engine",
-            target=username,
+            target=cleaned_username,
             source=source,
-            job_factory=lambda: self.service.run_decision_engine(username),
+            job_factory=lambda: self.service.run_decision_engine(cleaned_username),
         )
 
     async def launch_decision_engine_async(self, username: str | None = None) -> tuple[bool, str]:
