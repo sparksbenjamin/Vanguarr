@@ -465,6 +465,7 @@ class VanguarrService:
             "profile_feedback": "Profile Feedback",
             "request_outcome": "Request Outcome",
             "decision_preview": "Decision Dry Run",
+            "backtesting": "Backtesting",
         }
         normalized = str(engine or "").strip()
         return labels.get(normalized, normalized.replace("_", " ").title() or "System")
@@ -1468,6 +1469,478 @@ class VanguarrService:
             "recent_requests": self.get_recent_requests(limit=6),
             "profile_cards": self.get_profile_cards(limit=6),
         }
+
+    @staticmethod
+    def _history_item_played_timestamp(item: dict[str, Any]) -> float:
+        last_played_ts = VanguarrService._to_timestamp(item.get("UserData", {}).get("LastPlayedDate"))
+        if last_played_ts <= 0:
+            last_played_ts = VanguarrService._to_timestamp(item.get("DatePlayed"))
+        return last_played_ts
+
+    @classmethod
+    def _split_history_for_backtest(
+        cls,
+        history: list[dict[str, Any]],
+        *,
+        cutoff_ts: float,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        baseline: list[dict[str, Any]] = []
+        holdout: list[dict[str, Any]] = []
+        for item in history:
+            played_ts = cls._history_item_played_timestamp(item)
+            if played_ts <= 0:
+                baseline.append(item)
+                continue
+            if played_ts >= cutoff_ts:
+                holdout.append(item)
+            else:
+                baseline.append(item)
+        return baseline, holdout
+
+    @classmethod
+    def _backtest_candidate_skip_reason(
+        cls,
+        candidate: dict[str, Any],
+        *,
+        profile_summary: dict[str, Any],
+        prefilter_threshold: float,
+        watched_media_keys: set[tuple[str, int]],
+        watched_external_keys: set[tuple[str, str, str]],
+        watched_title_keys: set[tuple[str, str]],
+        requested_media_keys: set[tuple[str, int]],
+        requested_title_keys: set[tuple[str, str]],
+    ) -> str | None:
+        if (
+            cls._candidate_key(candidate) in watched_media_keys
+            or cls._candidate_matches_external_keys(candidate, watched_external_keys)
+            or cls._candidate_matches_title_keys(candidate, watched_title_keys)
+        ):
+            return "already_watched"
+        if (
+            cls._candidate_key(candidate) in requested_media_keys
+            or cls._candidate_matches_title_keys(candidate, requested_title_keys)
+        ):
+            return "already_requested"
+        block_reason = cls._candidate_feedback_block_reason(candidate, profile_summary)
+        if block_reason is not None:
+            return block_reason
+
+        deterministic_score = float(candidate.get("recommendation_features", {}).get("deterministic_score") or 0.0)
+        if deterministic_score < float(prefilter_threshold):
+            return "below_threshold"
+        return None
+
+    @classmethod
+    def _holdout_result_for_candidate(
+        cls,
+        candidate: dict[str, Any],
+        *,
+        holdout_context: dict[str, set[tuple[str, Any]]],
+        current_favorite_context: dict[str, set[tuple[str, Any]]],
+    ) -> tuple[str, str]:
+        if (
+            cls._candidate_key(candidate) in holdout_context["media_keys"]
+            or cls._candidate_matches_external_keys(candidate, holdout_context["external_keys"])
+            or cls._candidate_matches_title_keys(candidate, holdout_context["title_keys"])
+        ):
+            return "watched_later", "Matched this title in post-cutoff playback history."
+        if (
+            cls._candidate_matches_external_keys(candidate, current_favorite_context["external_keys"])
+            or cls._candidate_matches_title_keys(candidate, current_favorite_context["title_keys"])
+        ):
+            return "favorite_overlap", "Matches the user's current favorites (favorites do not expose timestamps)."
+        return "miss", "No watched-later or current-favorite overlap was found in the replay window."
+
+    async def build_backtest_report(
+        self,
+        *,
+        username: str | None = None,
+        days: int = 60,
+        shortlist_limit: int = 5,
+    ) -> dict[str, Any]:
+        normalized_username = str(username or "").strip()
+        normalized_days = max(14, min(365, int(days or 60)))
+        normalized_shortlist = max(1, min(12, int(shortlist_limit or self.settings.decision_shortlist_limit or 5)))
+        generated_at = datetime.utcnow().replace(microsecond=0)
+        cutoff_at = generated_at - timedelta(days=normalized_days)
+        cutoff_ts = cutoff_at.timestamp()
+        notes = [
+            "Replay profiles are rebuilt from watch history available before the cutoff date.",
+            "Current favorites are reported only as overlap signals because the media server does not expose favorite timestamps.",
+            "Replay scoring uses deterministic ranking only, so this page stays fast and avoids paid or variable LLM calls.",
+        ]
+
+        users = await self.media_server.list_users()
+        if normalized_username:
+            users = [user for user in users if str(user.get("Name") or "").strip() == normalized_username]
+
+        disabled_profiles: list[str] = []
+        selected_users: list[dict[str, Any]] = []
+        for user in users:
+            current_username = str(user.get("Name") or "").strip()
+            if not current_username:
+                continue
+            if normalized_username or self.is_profile_enabled(current_username):
+                selected_users.append(user)
+            else:
+                disabled_profiles.append(current_username)
+
+        if normalized_username and not selected_users:
+            raise ValueError(f"No {self.settings.media_server_label} user matched {normalized_username}.")
+
+        async def load_user_replay_context(user: dict[str, Any]) -> dict[str, Any]:
+            current_username = str(user.get("Name") or "").strip() or "unknown"
+            user_id = str(user.get("Id") or "")
+            history, favorite_items = await asyncio.gather(
+                self.media_server.get_playback_history(user_id, None),
+                self._load_user_favorite_items(user_id, username=current_username),
+            )
+            baseline_history, holdout_history = self._split_history_for_backtest(history, cutoff_ts=cutoff_ts)
+            return {
+                "user": user,
+                "username": current_username,
+                "history": history,
+                "baseline_history": baseline_history,
+                "holdout_history": holdout_history,
+                "favorite_items": favorite_items,
+                "stored_payload": self.profile_store.read_payload(current_username),
+            }
+
+        loaded_contexts = await asyncio.gather(*(load_user_replay_context(user) for user in selected_users))
+
+        replay_contexts: list[dict[str, Any]] = []
+        baseline_profile_payloads: dict[str, dict[str, Any]] = {}
+        for context in loaded_contexts:
+            current_username = str(context["username"])
+            baseline_history = list(context["baseline_history"])
+            stored_payload = context["stored_payload"]
+            if not baseline_history:
+                replay_contexts.append(
+                    {
+                        **context,
+                        "status": "insufficient_history",
+                        "status_detail": "No playback history exists before the selected cutoff.",
+                    }
+                )
+                continue
+
+            history_summary = self._build_profile_history_context(
+                baseline_history,
+                favorite_items=None,
+                top_limit=self.settings.profile_architect_top_titles_limit,
+                recent_limit=self.settings.profile_architect_recent_momentum_limit,
+                recent_weight_percent=self.settings.profile_recent_signal_weight_percent,
+            )
+            history_summary = self._apply_existing_profile_guidance(history_summary, stored_payload)
+            recommendation_seeds = self._build_recommendation_seed_pool(
+                baseline_history,
+                favorite_items=None,
+                profile_summary=history_summary,
+                limit=self.settings.recommendation_seed_limit,
+            )
+            recommendation_seeds = self._resolve_tv_seed_media_ids_from_library_index(recommendation_seeds)
+            history_summary = await self._enrich_profile_summary_with_seer(
+                history_summary,
+                recommendation_seeds=recommendation_seeds,
+            )
+            history_summary = await self._enrich_profile_summary_with_tmdb(
+                history_summary,
+                recommendation_seeds=recommendation_seeds,
+            )
+            preliminary_payload = self._build_profile_payload(
+                current_username,
+                history_summary,
+                enrichment=self._build_heuristic_profile_enrichment(history_summary),
+                existing_payload=stored_payload,
+            )
+            baseline_profile_payloads[current_username] = preliminary_payload
+            replay_contexts.append(
+                {
+                    **context,
+                    "status": "ready",
+                    "history_summary": history_summary,
+                    "recommendation_seeds": recommendation_seeds,
+                    "preliminary_payload": preliminary_payload,
+                }
+            )
+
+        with self.session_scope() as session:
+            requested_rows = list(
+                session.scalars(
+                    select(RequestedMedia).where(RequestedMedia.created_at <= cutoff_at)
+                )
+            )
+        requested_media_keys = {
+            (str(row.media_type or "").strip(), int(row.media_id or 0))
+            for row in requested_rows
+            if str(row.media_type or "").strip() and int(row.media_id or 0) > 0
+        }
+        requested_title_keys = {
+            (str(row.media_type or "").strip(), str(row.media_title or "").strip().lower())
+            for row in requested_rows
+            if str(row.media_type or "").strip() and str(row.media_title or "").strip()
+        }
+
+        user_reports: list[dict[str, Any]] = []
+        aggregate_skip_reasons: Counter[str] = Counter()
+        total_simulated = 0
+        total_hits = 0
+        total_favorite_overlaps = 0
+        total_misses = 0
+        profiles_with_hits = 0
+        insufficient_history_profiles: list[str] = []
+        errors: list[str] = []
+
+        for context in replay_contexts:
+            current_username = str(context["username"])
+            if context.get("status") != "ready":
+                insufficient_history_profiles.append(current_username)
+                user_reports.append(
+                    {
+                        "username": current_username,
+                        "profile_enabled": self.is_profile_enabled(current_username),
+                        "status": str(context.get("status") or "insufficient_history"),
+                        "status_detail": str(context.get("status_detail") or "Not enough baseline history to replay this user."),
+                        "baseline_history_count": len(context.get("baseline_history", [])),
+                        "holdout_history_count": len(context.get("holdout_history", [])),
+                        "simulated_requests": [],
+                        "skip_reasons": {},
+                        "scored": 0,
+                        "filtered_candidates": 0,
+                        "watched_hits": 0,
+                        "favorite_overlaps": 0,
+                        "misses": 0,
+                        "hit_rate": 0.0,
+                        "primary_genres": [],
+                        "recent_genres": [],
+                        "similar_users": [],
+                        "holdout_titles": [],
+                    }
+                )
+                continue
+
+            try:
+                history_summary = dict(context["history_summary"])
+                recommendation_seeds = list(context["recommendation_seeds"])
+                stored_payload = context["stored_payload"]
+                baseline_history = list(context["baseline_history"])
+                holdout_history = list(context["holdout_history"])
+                favorite_items = list(context["favorite_items"])
+
+                history_summary = self._enrich_profile_summary_with_similar_users(
+                    current_username,
+                    history_summary,
+                    peer_payload_overrides=baseline_profile_payloads,
+                )
+                profile_payload = self._build_profile_payload(
+                    current_username,
+                    history_summary,
+                    enrichment=self._build_heuristic_profile_enrichment(history_summary),
+                    existing_payload=stored_payload,
+                )
+                genre_seeds = self._build_genre_discovery_seeds(profile_payload)
+                candidate_pool = await self.seer.discover_candidates(
+                    recommendation_seeds,
+                    genre_seeds=genre_seeds,
+                    limit=self.settings.candidate_limit,
+                    genre_limit=self.settings.genre_candidate_limit,
+                    trending_limit=self.settings.trending_candidate_limit,
+                )
+                ranked_candidates = self._rank_candidate_pool(
+                    candidate_pool,
+                    profile_summary=profile_payload,
+                )
+                baseline_context = self._build_media_item_match_context(baseline_history)
+                holdout_context = self._build_media_item_match_context(holdout_history)
+                favorite_context = self._build_media_item_match_context(favorite_items)
+                filtered_candidates: list[dict[str, Any]] = []
+                skip_reasons: Counter[str] = Counter()
+                scored = 0
+                for candidate in ranked_candidates:
+                    scored += 1
+                    skip_reason = self._backtest_candidate_skip_reason(
+                        candidate,
+                        profile_summary=profile_payload,
+                        prefilter_threshold=self._decision_prefilter_threshold(),
+                        watched_media_keys=baseline_context["media_keys"],  # type: ignore[arg-type]
+                        watched_external_keys=baseline_context["external_keys"],  # type: ignore[arg-type]
+                        watched_title_keys=baseline_context["title_keys"],  # type: ignore[arg-type]
+                        requested_media_keys=requested_media_keys,
+                        requested_title_keys=requested_title_keys,
+                    )
+                    if skip_reason is not None:
+                        skip_reasons[skip_reason] += 1
+                        continue
+                    filtered_candidates.append(candidate)
+
+                filtered_candidates = await self._enrich_candidate_pool_with_tmdb(
+                    filtered_candidates,
+                    limit=self.settings.tmdb_candidate_enrichment_limit,
+                )
+                filtered_candidates = self._rank_candidate_pool(
+                    filtered_candidates,
+                    profile_summary=profile_payload,
+                )
+                shortlisted_candidates = self._diversify_candidates(
+                    filtered_candidates,
+                    limit=normalized_shortlist,
+                )
+
+                simulated_requests: list[dict[str, Any]] = []
+                watched_hits = 0
+                favorite_overlaps = 0
+                misses = 0
+                for candidate in shortlisted_candidates:
+                    deterministic_score = float(candidate.get("recommendation_features", {}).get("deterministic_score") or 0.0)
+                    if deterministic_score < float(self.settings.request_threshold):
+                        continue
+                    result, result_detail = self._holdout_result_for_candidate(
+                        candidate,
+                        holdout_context=holdout_context,
+                        current_favorite_context=favorite_context,
+                    )
+                    if result == "watched_later":
+                        watched_hits += 1
+                    elif result == "favorite_overlap":
+                        favorite_overlaps += 1
+                    else:
+                        misses += 1
+                    simulated_requests.append(
+                        {
+                            "title": str(candidate.get("title") or "Unknown"),
+                            "media_type": str(candidate.get("media_type") or "unknown"),
+                            "score": round(deterministic_score, 3),
+                            "result": result,
+                            "result_detail": result_detail,
+                            "genres": self._normalize_genres(candidate.get("genres", []), limit=5),
+                            "sources": self._normalize_string_list(candidate.get("sources", []), limit=4),
+                            "analysis_summary": str(
+                                candidate.get("recommendation_features", {}).get("analysis_summary") or ""
+                            ).strip(),
+                        }
+                    )
+
+                holdout_summary = self._build_profile_history_context(
+                    holdout_history,
+                    favorite_items=None,
+                    top_limit=4,
+                    recent_limit=3,
+                    recent_weight_percent=self.settings.profile_recent_signal_weight_percent,
+                ) if holdout_history else {"top_titles": []}
+                holdout_titles = [
+                    str(item.get("title") or "").strip()
+                    for item in holdout_summary.get("top_titles", [])
+                    if str(item.get("title") or "").strip()
+                ]
+                hit_rate = round((watched_hits / len(simulated_requests)) * 100, 1) if simulated_requests else 0.0
+                if watched_hits > 0:
+                    profiles_with_hits += 1
+
+                total_simulated += len(simulated_requests)
+                total_hits += watched_hits
+                total_favorite_overlaps += favorite_overlaps
+                total_misses += misses
+                aggregate_skip_reasons.update(skip_reasons)
+
+                user_reports.append(
+                    {
+                        "username": current_username,
+                        "profile_enabled": self.is_profile_enabled(current_username),
+                        "status": "ready",
+                        "status_detail": "",
+                        "baseline_history_count": len(baseline_history),
+                        "holdout_history_count": len(holdout_history),
+                        "scored": scored,
+                        "filtered_candidates": len(filtered_candidates),
+                        "simulated_requests": simulated_requests,
+                        "skip_reasons": dict(skip_reasons),
+                        "watched_hits": watched_hits,
+                        "favorite_overlaps": favorite_overlaps,
+                        "misses": misses,
+                        "hit_rate": hit_rate,
+                        "primary_genres": self._normalize_string_list(profile_payload.get("primary_genres", []), limit=4),
+                        "recent_genres": self._normalize_string_list(profile_payload.get("recent_genres", []), limit=4),
+                        "similar_users": self._normalize_string_list(profile_payload.get("similar_users", []), limit=3),
+                        "holdout_titles": holdout_titles,
+                    }
+                )
+            except Exception as exc:
+                errors.append(f"{current_username}: {exc}")
+                user_reports.append(
+                    {
+                        "username": current_username,
+                        "profile_enabled": self.is_profile_enabled(current_username),
+                        "status": "error",
+                        "status_detail": str(exc),
+                        "baseline_history_count": len(context.get("baseline_history", [])),
+                        "holdout_history_count": len(context.get("holdout_history", [])),
+                        "simulated_requests": [],
+                        "skip_reasons": {},
+                        "scored": 0,
+                        "filtered_candidates": 0,
+                        "watched_hits": 0,
+                        "favorite_overlaps": 0,
+                        "misses": 0,
+                        "hit_rate": 0.0,
+                        "primary_genres": [],
+                        "recent_genres": [],
+                        "similar_users": [],
+                        "holdout_titles": [],
+                    }
+                )
+
+        report = {
+            "generated_at": generated_at.isoformat(sep=" "),
+            "cutoff_at": cutoff_at.isoformat(sep=" "),
+            "days": normalized_days,
+            "shortlist_limit": normalized_shortlist,
+            "target_username": normalized_username,
+            "profiles_considered": len(selected_users),
+            "profiles_analyzed": sum(1 for row in user_reports if row.get("status") == "ready"),
+            "profiles_with_hits": profiles_with_hits,
+            "disabled_profiles_skipped": disabled_profiles,
+            "insufficient_history_profiles": insufficient_history_profiles,
+            "simulated_requests": total_simulated,
+            "watched_hits": total_hits,
+            "favorite_overlaps": total_favorite_overlaps,
+            "misses": total_misses,
+            "hit_rate": round((total_hits / total_simulated) * 100, 1) if total_simulated else 0.0,
+            "favorite_overlap_rate": round((total_favorite_overlaps / total_simulated) * 100, 1) if total_simulated else 0.0,
+            "skip_reasons": dict(aggregate_skip_reasons),
+            "users": user_reports,
+            "notes": notes,
+            "errors": errors,
+        }
+
+        self.record_operation_event(
+            engine="backtesting",
+            username=normalized_username or "system",
+            media_type="profile",
+            media_title=(
+                f"Backtesting scorecard for {normalized_username}"
+                if normalized_username
+                else "Backtesting scorecard for enabled profiles"
+            ),
+            source="ui",
+            decision="RUN" if not errors else "PARTIAL",
+            reasoning=(
+                f"Replay analyzed {report['profiles_analyzed']} profile(s), simulated {total_simulated} request(s), "
+                f"and found {total_hits} watched-later hit(s) across the last {normalized_days} day(s)."
+            ),
+            error="; ".join(errors) if errors else None,
+            detail_payload={
+                "days": normalized_days,
+                "target_username": normalized_username or "all-enabled",
+                "profiles_considered": report["profiles_considered"],
+                "profiles_analyzed": report["profiles_analyzed"],
+                "simulated_requests": total_simulated,
+                "watched_hits": total_hits,
+                "favorite_overlaps": total_favorite_overlaps,
+                "misses": total_misses,
+                "hit_rate": report["hit_rate"],
+            },
+        )
+        return report
 
     async def run_profile_architect(
         self,

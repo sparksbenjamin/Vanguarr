@@ -115,6 +115,77 @@ def test_logs_page_shows_filters_and_live_feed_controls() -> None:
     assert "Next" in response.text
 
 
+def test_backtesting_page_renders_report(monkeypatch) -> None:
+    with TestClient(app) as client:
+        monkeypatch.setattr(client.app.state.vanguarr, "list_profiles", lambda: ["alice"])
+        async def fake_build_backtest_report(**kwargs):
+            return {
+                "generated_at": "2026-04-19 11:00:00",
+                "cutoff_at": "2026-02-18 11:00:00",
+                "days": 60,
+                "shortlist_limit": 5,
+                "target_username": "alice",
+                "profiles_considered": 1,
+                "profiles_analyzed": 1,
+                "profiles_with_hits": 1,
+                "disabled_profiles_skipped": [],
+                "insufficient_history_profiles": [],
+                "simulated_requests": 2,
+                "watched_hits": 1,
+                "favorite_overlaps": 0,
+                "misses": 1,
+                "hit_rate": 50.0,
+                "favorite_overlap_rate": 0.0,
+                "skip_reasons": {"already_watched": 1},
+                "notes": ["Replay uses historical watch data."],
+                "errors": [],
+                "users": [
+                    {
+                        "username": "alice",
+                        "profile_enabled": True,
+                        "status": "ready",
+                        "status_detail": "",
+                        "baseline_history_count": 12,
+                        "holdout_history_count": 4,
+                        "scored": 20,
+                        "filtered_candidates": 6,
+                        "simulated_requests": [
+                            {
+                                "title": "Orbit Kids",
+                                "media_type": "tv",
+                                "score": 0.812,
+                                "result": "watched_later",
+                                "result_detail": "Matched later playback history.",
+                                "genres": ["Sci-Fi"],
+                                "sources": ["recommended:Anchor Show"],
+                                "analysis_summary": "Strong source and genre alignment.",
+                            }
+                        ],
+                        "skip_reasons": {"already_watched": 1},
+                        "watched_hits": 1,
+                        "favorite_overlaps": 0,
+                        "misses": 0,
+                        "hit_rate": 100.0,
+                        "primary_genres": ["Sci-Fi"],
+                        "recent_genres": ["Sci-Fi"],
+                        "similar_users": [],
+                        "holdout_titles": ["Orbit Kids"],
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(client.app.state.vanguarr, "build_backtest_report", fake_build_backtest_report)
+
+        response = client.get("/backtesting?run=1&username=alice&days=60&limit=5")
+
+    assert response.status_code == 200
+    assert "Backtesting" in response.text
+    assert "Replay the engine against real watch behavior." in response.text
+    assert "Orbit Kids" in response.text
+    assert "50.0%" in response.text
+    assert "All enabled profiles" in response.text
+
+
 def test_logs_api_returns_feed_payload(monkeypatch) -> None:
     with TestClient(app) as client:
         monkeypatch.setattr(

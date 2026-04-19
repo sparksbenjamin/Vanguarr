@@ -5,6 +5,7 @@ import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -474,6 +475,52 @@ async def logs(
             "sort_by": log_feed["sort_by"],
             "sort_direction": log_feed["sort_direction"],
             "current_page": log_feed["page"],
+        },
+    )
+
+
+@app.get("/backtesting", response_class=HTMLResponse)
+async def backtesting(
+    request: Request,
+    username: str = "",
+    custom_username: str = "",
+    days: int = 60,
+    limit: int | None = None,
+    run: int = 0,
+) -> HTMLResponse:
+    service: VanguarrService = request.app.state.vanguarr
+    settings = current_settings(request.app, force=True)
+    profiles = service.list_profiles()
+    selected_user = custom_username.strip() or username.strip()
+    normalized_days = max(14, min(365, int(days or 60)))
+    normalized_limit = max(1, min(12, int(limit or settings.decision_shortlist_limit or 5)))
+    report: dict[str, Any] | None = None
+    backtest_error = ""
+
+    if run:
+        try:
+            report = await service.build_backtest_report(
+                username=selected_user or None,
+                days=normalized_days,
+                shortlist_limit=normalized_limit,
+            )
+        except Exception as exc:
+            backtest_error = str(exc).strip() or "Backtesting failed."
+
+    return templates.TemplateResponse(
+        request=request,
+        name="backtesting.html",
+        context={
+            "request": request,
+            "page_title": "Vanguarr Backtesting Scorecard",
+            "toast": request.query_params.get("toast"),
+            "profiles": profiles,
+            "selected_user": selected_user,
+            "selected_days": normalized_days,
+            "selected_limit": normalized_limit,
+            "run_requested": bool(run),
+            "report": report,
+            "backtest_error": backtest_error,
         },
     )
 

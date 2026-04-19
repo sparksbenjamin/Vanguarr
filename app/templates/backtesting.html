@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="space-y-6">
+  <section class="surface page-hero rounded-[1.8rem] px-5 py-6 lg:px-7">
+    <div class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr] xl:items-stretch">
+      <div>
+        <p class="panel-kicker">Backtesting</p>
+        <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-[2.4rem]">Replay the engine against real watch behavior.</h1>
+        <p class="mt-4 max-w-3xl text-sm leading-7 text-[var(--text-soft)] sm:text-[0.98rem]">
+          This scorecard rebuilds each selected profile from watch history available before the cutoff date, simulates what the Decision Engine would have requested, and compares that against what the user actually watched later.
+        </p>
+        <div class="mt-5 flex flex-wrap gap-2">
+          <span class="signal-chip">Deterministic replay only</span>
+          <span class="signal-chip">Watch-history holdout</span>
+          <span class="signal-chip">Favorite overlap called out separately</span>
+        </div>
+      </div>
+
+      <form class="surface rounded-[1.4rem] bg-[rgba(255,255,255,0.03)] px-5 py-5" method="get" action="/backtesting">
+        <input type="hidden" name="run" value="1" />
+        <div class="grid gap-4">
+          <div>
+            <label class="mb-2 block text-sm font-medium" for="backtest-user-select">Saved profile</label>
+            <select id="backtest-user-select" name="username" class="field-input text-sm">
+              <option value="">All enabled profiles</option>
+              {% if selected_user and selected_user not in profiles %}
+              <option value="{{ selected_user }}" selected>{{ selected_user }} (custom)</option>
+              {% endif %}
+              {% for profile in profiles %}
+              <option value="{{ profile }}" {% if profile == selected_user %}selected{% endif %}>{{ profile }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="mb-2 block text-sm font-medium" for="backtest-custom-user">Or custom username</label>
+            <input
+              id="backtest-custom-user"
+              name="custom_username"
+              value="{{ selected_user if selected_user and selected_user not in profiles else '' }}"
+              placeholder="Optional specific username"
+              class="field-input text-sm"
+            />
+          </div>
+          <div class="grid gap-4 md:grid-cols-2">
+            <div>
+              <label class="mb-2 block text-sm font-medium" for="backtest-days">Replay window</label>
+              <select id="backtest-days" name="days" class="field-input text-sm">
+                {% for option in [30, 60, 90, 120] %}
+                <option value="{{ option }}" {% if option == selected_days %}selected{% endif %}>Last {{ option }} days</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="mb-2 block text-sm font-medium" for="backtest-limit">Simulated requests per user</label>
+              <select id="backtest-limit" name="limit" class="field-input text-sm">
+                {% for option in [3, 5, 8, 10] %}
+                <option value="{{ option }}" {% if option == selected_limit %}selected{% endif %}>Top {{ option }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <button class="button button-primary w-full" type="submit">Run Backtesting Scorecard</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  {% if backtest_error %}
+  <div class="surface rounded-[1.35rem] border border-[rgba(255,127,127,0.24)] bg-[rgba(255,127,127,0.08)] px-4 py-4 text-sm text-white">
+    {{ backtest_error }}
+  </div>
+  {% endif %}
+
+  {% if report %}
+  <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <article class="metric-card">
+      <p class="panel-kicker">Profiles</p>
+      <p class="mt-3 text-2xl font-semibold">{{ report.profiles_analyzed }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">{{ report.profiles_considered }} considered in this run.</p>
+    </article>
+    <article class="metric-card">
+      <p class="panel-kicker">Simulated Requests</p>
+      <p class="mt-3 text-2xl font-semibold">{{ report.simulated_requests }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">Top {{ report.shortlist_limit }} per user above the live threshold.</p>
+    </article>
+    <article class="metric-card">
+      <p class="panel-kicker">Watched-Later Hits</p>
+      <p class="mt-3 text-2xl font-semibold">{{ report.watched_hits }}</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">{{ report.profiles_with_hits }} profile(s) had at least one hit.</p>
+    </article>
+    <article class="metric-card">
+      <p class="panel-kicker">Hit Rate</p>
+      <p class="mt-3 text-2xl font-semibold">{{ "%.1f"|format(report.hit_rate) }}%</p>
+      <p class="mt-2 text-sm text-[var(--text-soft)]">{{ report.favorite_overlaps }} current favorite overlap(s) tracked separately.</p>
+    </article>
+  </div>
+
+  <section class="surface rounded-[1.5rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p class="panel-kicker">Run Summary</p>
+          <h2 class="mt-2 panel-title">Replay window and aggregate outcomes</h2>
+        </div>
+        <p class="mono text-xs text-[var(--text-dim)]">Generated {{ report.generated_at }}</p>
+      </div>
+    </div>
+    <div class="grid gap-4 px-5 py-5 xl:grid-cols-[1.1fr_0.9fr]">
+      <article class="insight-card">
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="label-pair">
+            <span class="label">Cutoff</span>
+            <span class="text-sm text-[var(--text-soft)]">{{ report.cutoff_at }}</span>
+          </div>
+          <div class="label-pair">
+            <span class="label">Replay Window</span>
+            <span class="text-sm text-[var(--text-soft)]">{{ report.days }} days</span>
+          </div>
+          <div class="label-pair">
+            <span class="label">Favorite Overlap Rate</span>
+            <span class="text-sm text-[var(--text-soft)]">{{ "%.1f"|format(report.favorite_overlap_rate) }}%</span>
+          </div>
+          <div class="label-pair">
+            <span class="label">Misses</span>
+            <span class="text-sm text-[var(--text-soft)]">{{ report.misses }}</span>
+          </div>
+        </div>
+        {% if report.disabled_profiles_skipped %}
+        <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">Disabled profiles skipped from all-profile replay: {{ report.disabled_profiles_skipped | join(", ") }}</p>
+        {% endif %}
+        {% if report.skip_reasons %}
+        <div class="mt-4 flex flex-wrap gap-2">
+          {% for reason, count in report.skip_reasons.items() %}
+          <span class="data-chip">{{ reason.replace("_", " ") }}: {{ count }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </article>
+
+      <article class="insight-card">
+        <p class="panel-kicker">Notes</p>
+        <div class="mt-4 space-y-3 text-sm leading-6 text-[var(--text-soft)]">
+          {% for note in report.notes %}
+          <p>{{ note }}</p>
+          {% endfor %}
+          {% if report.errors %}
+          <p class="text-[var(--amber)]">Errors: {{ report.errors | join("; ") }}</p>
+          {% endif %}
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="surface rounded-[1.5rem] overflow-hidden">
+    <div class="border-b border-white/5 px-5 py-4">
+      <p class="panel-kicker">Per Profile</p>
+      <h2 class="mt-2 panel-title">Who the replay matched well and where it drifted</h2>
+    </div>
+    <div class="space-y-4 px-5 py-5">
+      {% for user_report in report.users %}
+      <article class="insight-card">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div class="flex flex-wrap items-center gap-2">
+              <p class="text-lg font-semibold">{{ user_report.username }}</p>
+              <span class="status-pill {{ 'status-good' if user_report.status == 'ready' else 'status-warn' if user_report.status == 'insufficient_history' else 'status-bad' }}">{{ user_report.status.replace("_", " ") }}</span>
+              <span class="status-pill {{ 'status-good' if user_report.profile_enabled else 'status-neutral' }}">
+                {{ "requests enabled" if user_report.profile_enabled else "requests disabled" }}
+              </span>
+            </div>
+            <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">
+              {% if user_report.status == "ready" %}
+              {{ user_report.baseline_history_count }} baseline plays, {{ user_report.holdout_history_count }} holdout plays, {{ user_report.watched_hits }} watched-later hit(s), {{ user_report.favorite_overlaps }} favorite overlap(s), {{ user_report.misses }} miss(es).
+              {% else %}
+              {{ user_report.status_detail }}
+              {% endif %}
+            </p>
+          </div>
+          {% if user_report.status == "ready" %}
+          <div class="grid gap-3 sm:grid-cols-3">
+            <div class="rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-3">
+              <p class="panel-kicker">Hit Rate</p>
+              <p class="mt-2 text-xl font-semibold">{{ "%.1f"|format(user_report.hit_rate) }}%</p>
+            </div>
+            <div class="rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-3">
+              <p class="panel-kicker">Scored</p>
+              <p class="mt-2 text-xl font-semibold">{{ user_report.scored }}</p>
+            </div>
+            <div class="rounded-2xl border border-[rgba(160,182,207,0.08)] bg-black/10 px-4 py-3">
+              <p class="panel-kicker">Simulated</p>
+              <p class="mt-2 text-xl font-semibold">{{ user_report.simulated_requests | length }}</p>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if user_report.primary_genres or user_report.recent_genres or user_report.similar_users %}
+        <div class="mt-4 flex flex-wrap gap-2">
+          {% for genre in user_report.primary_genres %}
+          <span class="data-chip">{{ genre }}</span>
+          {% endfor %}
+          {% for genre in user_report.recent_genres %}
+          <span class="data-chip">{{ genre }} (recent)</span>
+          {% endfor %}
+          {% for peer in user_report.similar_users %}
+          <span class="data-chip">peer: {{ peer }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if user_report.holdout_titles %}
+        <p class="mt-4 text-sm leading-6 text-[var(--text-soft)]">Actually watched later: {{ user_report.holdout_titles | join(", ") }}</p>
+        {% endif %}
+
+        {% if user_report.skip_reasons %}
+        <div class="mt-4 flex flex-wrap gap-2">
+          {% for reason, count in user_report.skip_reasons.items() %}
+          <span class="data-chip">{{ reason.replace("_", " ") }}: {{ count }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if user_report.simulated_requests %}
+        <div class="mt-5 table-wrap overflow-x-auto">
+          <table class="data-table min-w-full">
+            <thead>
+              <tr>
+                <th>Candidate</th>
+                <th>Score</th>
+                <th>Result</th>
+                <th>Why It Ranked</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in user_report.simulated_requests %}
+              <tr>
+                <td>
+                  <p class="font-medium">{{ item.title }}</p>
+                  <p class="mt-1 text-xs text-[var(--text-dim)]">{{ item.media_type }}{% if item.genres %} / {{ item.genres | join(", ") }}{% endif %}</p>
+                </td>
+                <td class="mono text-sm text-[var(--text-soft)]">{{ "%.3f"|format(item.score) }}</td>
+                <td>
+                  <span class="status-pill {{ 'status-good' if item.result == 'watched_later' else 'status-warn' if item.result == 'favorite_overlap' else 'status-neutral' }}">
+                    {{ item.result.replace("_", " ") }}
+                  </span>
+                  <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">{{ item.result_detail }}</p>
+                </td>
+                <td>
+                  <p class="text-sm leading-6 text-[var(--text-soft)]">{{ item.analysis_summary or "Strong genre and source alignment during replay." }}</p>
+                  {% if item.sources %}
+                  <p class="mt-2 text-xs text-[var(--text-dim)]">{{ item.sources | join(", ") }}</p>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% elif user_report.status == "ready" %}
+        <div class="mt-4 empty-state">No simulated requests cleared the live threshold for this replay.</div>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% elif run_requested and not backtest_error %}
+  <div class="surface rounded-[1.35rem] px-5 py-5 text-sm leading-6 text-[var(--text-soft)]">
+    No replay data was returned for that selection.
+  </div>
+  {% else %}
+  <div class="surface rounded-[1.35rem] px-5 py-5 text-sm leading-6 text-[var(--text-soft)]">
+    Pick a replay window and run the scorecard to see hit rate, misses, and which simulated requests later showed up in real watch history.
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

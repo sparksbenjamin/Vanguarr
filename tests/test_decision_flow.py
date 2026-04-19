@@ -2311,6 +2311,105 @@ def test_prepare_decision_candidates_skips_global_requests_and_exact_favorites(t
     assert prepared["shared_request_matches"][0]["owner_username"] == "bob"
 
 
+def test_build_backtest_report_replays_watch_history_hits(tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    Base.metadata.create_all(bind=engine)
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        profiles_dir=tmp_path / "profiles",
+        logs_dir=tmp_path / "logs",
+        log_file=tmp_path / "logs" / "vanguarr.log",
+        request_threshold=0.2,
+        decision_shortlist_limit=5,
+        tmdb_candidate_enrichment_limit=0,
+    )
+
+    class FakeMediaServer:
+        async def list_users(self) -> list[dict[str, str]]:
+            return [{"Id": "user-1", "Name": "alice"}]
+
+        async def get_playback_history(self, user_id: str, limit: int | None) -> list[dict]:
+            assert user_id == "user-1"
+            assert limit is None
+            return [
+                {
+                    "Name": "Anchor Show",
+                    "Type": "Series",
+                    "Genres": ["Sci-Fi", "Adventure"],
+                    "ProviderIds": {"Tmdb": "501"},
+                    "CommunityRating": 8.4,
+                    "UserData": {"LastPlayedDate": "2026-01-10T12:00:00Z"},
+                },
+                {
+                    "Name": "Orbit Kids",
+                    "Type": "Series",
+                    "Genres": ["Sci-Fi", "Adventure"],
+                    "ProviderIds": {"Tmdb": "702"},
+                    "CommunityRating": 8.0,
+                    "UserData": {"LastPlayedDate": "2026-04-12T12:00:00Z"},
+                },
+            ]
+
+        async def get_favorite_items(self, user_id: str) -> list[dict]:
+            return []
+
+    class FakeSeer:
+        async def discover_candidates(self, *args, **kwargs) -> list[dict]:
+            return [
+                {
+                    "media_type": "tv",
+                    "media_id": 702,
+                    "title": "Orbit Kids",
+                    "overview": "Family sci-fi adventure.",
+                    "genres": ["Sci-Fi", "Adventure"],
+                    "rating": 8.1,
+                    "vote_count": 120,
+                    "popularity": 65,
+                    "release_date": "2026-03-10",
+                    "sources": ["recommended:Anchor Show"],
+                    "source_lanes": ["top_seed"],
+                    "media_info": {},
+                    "external_ids": {"tmdb": "702"},
+                },
+                {
+                    "media_type": "tv",
+                    "media_id": 703,
+                    "title": "Courtroom Zero",
+                    "overview": "Procedural legal drama.",
+                    "genres": ["Drama"],
+                    "rating": 7.2,
+                    "vote_count": 90,
+                    "popularity": 28,
+                    "release_date": "2025-10-12",
+                    "sources": ["trending"],
+                    "source_lanes": ["trending_lane"],
+                    "media_info": {},
+                    "external_ids": {"tmdb": "703"},
+                },
+            ]
+
+    service = VanguarrService(
+        settings=settings,
+        media_server=FakeMediaServer(),
+        seer=FakeSeer(),
+        tmdb=SimpleNamespace(enabled=False),
+        llm=SimpleNamespace(),
+        session_factory=session_factory,
+    )
+
+    report = asyncio.run(service.build_backtest_report(username="alice", days=60, shortlist_limit=5))
+
+    assert report["profiles_analyzed"] == 1
+    assert report["simulated_requests"] >= 1
+    assert report["watched_hits"] == 1
+    assert report["hit_rate"] > 0
+    assert report["users"][0]["username"] == "alice"
+    assert any(item["result"] == "watched_later" for item in report["users"][0]["simulated_requests"])
+    assert any(log.engine == "backtesting" for log in service.get_logs(limit=10))
+
+
 def test_shared_request_supporters_appear_in_history_and_share_request_level_outcomes(tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)

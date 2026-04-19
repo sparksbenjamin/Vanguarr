@@ -724,8 +724,8 @@
   <body class="min-h-screen" data-nav-open="false">
     {% set path = request.url.path %}
     {% set settings_group_active = path.startswith('/settings') or path.startswith('/manifest') %}
-    {% set current_area = "Dashboard" if path == "/" else "War Room" if path.startswith('/logs') else "Settings" if path.startswith('/settings') else "Profiles" if path.startswith('/manifest') else "Vanguarr" %}
-    {% set current_summary = "Monitor health, requests, profiles, and task activity from one place." if path == "/" else "Watch live request and suggestion activity without losing the thread." if path.startswith('/logs') else "Tune runtime behavior and integrations without leaving the app." if path.startswith('/settings') else "Inspect, rebuild, and tune per-user taste manifests and suggestion outputs." if path.startswith('/manifest') else "Operate Vanguarr from a single dark-mode control surface." %}
+    {% set current_area = "Dashboard" if path == "/" else "War Room" if path.startswith('/logs') else "Scorecard" if path.startswith('/backtesting') else "Settings" if path.startswith('/settings') else "Profiles" if path.startswith('/manifest') else "Vanguarr" %}
+    {% set current_summary = "Monitor health, requests, profiles, and task activity from one place." if path == "/" else "Watch live request and suggestion activity without losing the thread." if path.startswith('/logs') else "Replay the engine against real watch history and measure hit rate before you tune it." if path.startswith('/backtesting') else "Tune runtime behavior and integrations without leaving the app." if path.startswith('/settings') else "Inspect, rebuild, and tune per-user taste manifests and suggestion outputs." if path.startswith('/manifest') else "Operate Vanguarr from a single dark-mode control surface." %}
     <div class="nav-overlay lg:hidden" data-nav-overlay></div>
     <div class="app-shell">
       <aside class="app-sidebar" data-app-sidebar>
@@ -796,6 +796,24 @@
                   <span>War Room</span>
                 </span>
                 <span class="mono text-[11px] uppercase tracking-[0.18em]">Logs</span>
+              </a>
+              <a
+                href="/backtesting"
+                data-nav-link
+                class="nav-link {{ 'nav-link-active' if path.startswith('/backtesting') else 'nav-link-idle' }}"
+              >
+                <span class="flex items-center gap-3">
+                  <span class="nav-icon">
+                    <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+                      <path d="M4 15.5h12" />
+                      <path d="M6 13V9.5" />
+                      <path d="M10 13V6.5" />
+                      <path d="M14 13V8" />
+                    </svg>
+                  </span>
+                  <span>Scorecard</span>
+                </span>
+                <span class="mono text-[11px] uppercase tracking-[0.18em]">Replay</span>
               </a>
               <details
                 class="settings-nav-group space-y-2"
@@ -953,6 +971,10 @@
               <a href="/logs" class="topbar-link {{ 'topbar-link-active' if path.startswith('/logs') else '' }}">
                 <span class="topbar-link-dot"></span>
                 War Room
+              </a>
+              <a href="/backtesting" class="topbar-link {{ 'topbar-link-active' if path.startswith('/backtesting') else '' }}">
+                <span class="topbar-link-dot"></span>
+                Scorecard
               </a>
               <a href="/manifest" class="topbar-link {{ 'topbar-link-active' if path.startswith('/manifest') else '' }}">
                 <span class="topbar-link-dot"></span>
